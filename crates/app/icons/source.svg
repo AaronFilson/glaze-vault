@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#2f6f6a"/>
+  <!-- A glaze jar: cream clay body, a darker glaze dipped over the shoulder, a keyhole. -->
+  <path d="M392 236h240v52c0 18 10 34 26 44 88 54 142 150 142 256 0 166-128 236-288 236S224 754 224 588c0-106 54-202 142-256 16-10 26-26 26-44z" fill="#efe6d6"/>
+  <path d="M366 332c16-10 26-26 26-44v-52h240v52c0 18 10 34 26 44 58 36 100 92 120 156-26 24-40 6-58 26-14 16-10 56-34 56s-22-40-46-40-24 70-52 70-26-62-52-62-26 34-50 34-20-44-46-44-30 26-54 18c-24-8-26-36-48-40 20-74 64-136 128-178z" fill="#1d4f4b"/>
+  <rect x="372" y="208" width="280" height="56" rx="20" fill="#efe6d6"/>
+  <circle cx="512" cy="640" r="44" fill="#2f6f6a"/>
+  <path d="M492 668h40l18 92h-76z" fill="#2f6f6a"/>
+</svg>

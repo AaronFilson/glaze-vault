@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Aaron Filson"]
+repository = "https://github.com/AaronFilson/glaze-vault"
+
+# Key derivation and encryption are far too slow unoptimized, even in tests and `tauri dev`.
+[profile.dev.package.argon2]
+opt-level = 3

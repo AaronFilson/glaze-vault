@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Glaze Vault",
+  "identifier": "com.glazecalcapp.vault",
+  "build": {
+    "beforeDevCommand": { "script": "npm run dev:ui", "cwd": "../.." },
+    "beforeBuildCommand": { "script": "npm run build:ui", "cwd": "../.." },
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Glaze Vault",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 420,
+        "minHeight": 520
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost ws://localhost:1420"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "shortDescription": "Encrypted glaze and clay recipe vault",
+    "copyright": "Copyright (c) 2023-2026 Aaron Filson",
+    "license": "MIT",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
