@@ -1,0 +1,147 @@
+# Builds signed installers and the updater's latest.json for a version tag, into a draft GitHub
+# Release. Publishing the draft is what makes installed copies offer the update. See
+# docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    name: Check the version and updater key
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: The tag, package.json, Cargo.toml and the updater key agree
+        shell: bash
+        env:
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && 'yes' || '' }}
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          npm_version=$(node -p "require('./package.json').version")
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          pubkey=$(node -p "require('./crates/app/tauri.conf.json').plugins.updater.pubkey")
+          echo "tag $tag, package.json $npm_version, Cargo.toml $cargo_version"
+          [ "$tag" = "$npm_version" ] || { echo "::error::package.json is $npm_version, not $tag"; exit 1; }
+          [ "$tag" = "$cargo_version" ] || { echo "::error::Cargo.toml is $cargo_version, not $tag"; exit 1; }
+          [ -n "$pubkey" ] || { echo "::error::No updater public key in crates/app/tauri.conf.json (docs/releasing.md)"; exit 1; }
+          [ -n "$HAS_UPDATER_KEY" ] || { echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set (docs/releasing.md)"; exit 1; }
+
+  release:
+    name: Release (${{ matrix.name }})
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS universal
+            os: macos-latest
+            args: --target universal-apple-darwin
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: Windows
+            os: windows-latest
+            args: ''
+            targets: ''
+          - name: Linux
+            os: ubuntu-22.04
+            args: ''
+            targets: ''
+    runs-on: ${{ matrix.os }}
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Secrets cannot be tested in `if:`, so whether Windows signing is set up is kept here.
+      AZURE_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' && 'yes' || '' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev file
+
+      - run: npm ci
+
+      # Tauri treats a variable that is set but empty as a certificate to import, so the Apple
+      # variables are only set when the secrets exist. Without them the app is not signed.
+      - name: Apple signing and notarization, if set up
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::No Apple certificate: the macOS app will not be signed or notarized."
+            exit 0
+          fi
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            value="${!name}"
+            [ -n "$value" ] || { echo "::error::$name is missing (docs/releasing.md)"; exit 1; }
+            delimiter="EOF_$RANDOM$RANDOM"
+            { echo "$name<<$delimiter"; echo "$value"; echo "$delimiter"; } >> "$GITHUB_ENV"
+          done
+
+      # The release build also makes the updater's signed archives; Windows installers are signed
+      # through Azure Artifact Signing when it is set up.
+      - name: Release settings
+        shell: bash
+        env:
+          SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          sign_command=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            if [ "$AZURE_SIGNING" = yes ]; then
+              sign_command="artifact-signing-cli -e $SIGNING_ENDPOINT -a $SIGNING_ACCOUNT -c $SIGNING_PROFILE -d \"Glaze Vault\" %1"
+            else
+              echo "::warning::No Azure Artifact Signing: the Windows installers will not be signed."
+            fi
+          fi
+          SIGN_COMMAND="$sign_command" node -e '
+            const config = { bundle: { createUpdaterArtifacts: true } };
+            if (process.env.SIGN_COMMAND) config.bundle.windows = { signCommand: process.env.SIGN_COMMAND };
+            require("fs").writeFileSync("release-config.json", JSON.stringify(config, null, 2));
+          '
+          cat release-config.json
+
+      - name: Install the Windows signing tool
+        if: runner.os == 'Windows' && env.AZURE_SIGNING == 'yes'
+        run: cargo install artifact-signing-cli --locked
+
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Glaze Vault __VERSION__
+          releaseBody: |
+            Download the installer for your computer below. Copies of Glaze Vault that are already installed offer this update once the release is published.
+            See the user guide for installing: https://github.com/AaronFilson/glaze-vault/blob/main/docs/user/installing.md
+          releaseDraft: true
+          prerelease: false
+          # For copies that do not say how they were installed: the NSIS installer, which installs
+          # for the current user and so needs no administrator.
+          updaterJsonPreferNsis: true
+          args: --config ${{ github.workspace }}/release-config.json ${{ matrix.args }}

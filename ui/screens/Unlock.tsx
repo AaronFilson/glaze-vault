@@ -1,7 +1,17 @@
 import { useState } from 'react';
 import { api, errorText } from '../api';
 
-export function Unlock({ onUnlocked, onForgot }: { onUnlocked: () => void; onForgot: () => void }) {
+export function Unlock({
+  notice,
+  onUnlocked,
+  onForgot,
+  onRestore
+}: {
+  notice?: string;
+  onUnlocked: () => void;
+  onForgot: () => void;
+  onRestore: () => void;
+}) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -23,6 +33,7 @@ export function Unlock({ onUnlocked, onForgot }: { onUnlocked: () => void; onFor
     <main className="center">
       <form className="card" onSubmit={unlock}>
         <h1>Unlock your vault</h1>
+        {notice && <p role="status">{notice}</p>}
         <label htmlFor="password">Password</label>
         <input
           id="password"
@@ -38,6 +49,9 @@ export function Unlock({ onUnlocked, onForgot }: { onUnlocked: () => void; onFor
         </button>
         <button type="button" className="link" onClick={onForgot}>
           Forgot your password?
+        </button>
+        <button type="button" className="link" onClick={onRestore}>
+          Restore from a backup
         </button>
       </form>
     </main>

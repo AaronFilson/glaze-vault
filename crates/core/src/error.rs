@@ -16,6 +16,14 @@ pub enum Error {
     NotFound,
     #[error("That recipe is too large to save.")]
     TooLarge,
+    #[error("That file is not a Glaze Vault backup.")]
+    NotABackup,
+    #[error("The backup file is damaged or was changed, so it cannot be restored. Try another copy.")]
+    BackupDamaged,
+    #[error("That backup was made by a newer version of Glaze Vault. Update the app, then restore it.")]
+    NewerBackup,
+    #[error("{0}")]
+    InvalidSetting(&'static str),
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -36,6 +44,10 @@ impl Error {
             Error::NoVault => "no-vault",
             Error::NotFound => "not-found",
             Error::TooLarge => "too-large",
+            Error::NotABackup => "not-a-backup",
+            Error::BackupDamaged => "backup-damaged",
+            Error::NewerBackup => "newer-backup",
+            Error::InvalidSetting(_) => "invalid-setting",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",

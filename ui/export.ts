@@ -1,0 +1,70 @@
+// Exports: every recipe as CSV (for spreadsheets) or JSON (for other programs). Neither is
+// encrypted; the Settings screen says so before saving.
+import type { RecipeHead } from './api';
+import { usableLines } from './batch';
+
+export const EXPORT_FORMAT = 'glaze-vault-export';
+
+export function exportJson(recipes: RecipeHead[], exportedAt: Date, appVersion: string): string {
+  return (
+    JSON.stringify(
+      {
+        format: EXPORT_FORMAT,
+        version: 1,
+        exportedAt: exportedAt.toISOString(),
+        appVersion,
+        recipes: recipes.map((recipe) => ({
+          name: recipe.content.name,
+          lines: recipe.content.lines.filter((line) => line.material.trim() || line.amount.trim()),
+          notes: recipe.content.notes,
+          revision: recipe.number,
+          savedAt: new Date(recipe.savedAt).toISOString()
+        }))
+      },
+      null,
+      2
+    ) + '\n'
+  );
+}
+
+const CSV_COLUMNS = ['Recipe', 'Material', 'Amount', 'Percent', 'Notes', 'Revision', 'Saved'];
+
+/** One row per material. A recipe's notes, revision and date are on its first row. Starts with a
+ * byte order mark so Excel reads it as UTF-8. */
+export function exportCsv(recipes: RecipeHead[]): string {
+  const rows = [CSV_COLUMNS];
+  for (const recipe of recipes) {
+    const lines = usableLines(recipe.content.lines);
+    const sum = lines.reduce((total, line) => total + line.amount, 0);
+    const first = [recipe.content.notes, String(recipe.number), new Date(recipe.savedAt).toISOString()];
+    if (!lines.length) rows.push([recipe.content.name, '', '', '', ...first]);
+    lines.forEach((line, i) =>
+      rows.push([
+        recipe.content.name,
+        line.material,
+        String(line.amount),
+        ((line.amount / sum) * 100).toFixed(2),
+        ...(i === 0 ? first : ['', '', ''])
+      ])
+    );
+  }
+  return '﻿' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
+}
+
+/** Quotes a field when it needs it (RFC 4180). Text that a spreadsheet would run as a formula gets
+ * a leading apostrophe, so opening an export cannot run anything. */
+export function csvField(value: string): string {
+  let text = value;
+  if (/^[=+\-@\t\r]/.test(text) && !/^-?\d+(\.\d+)?$/.test(text)) text = "'" + text;
+  return /[",\r\n]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text;
+}
+
+/** "Glaze Vault recipes 2026-10-14.csv", in local time. */
+export function exportFileName(extension: 'csv' | 'json', now: Date): string {
+  return `Glaze Vault recipes ${localDate(now)}.${extension}`;
+}
+
+export function localDate(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}

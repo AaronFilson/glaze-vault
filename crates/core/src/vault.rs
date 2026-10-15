@@ -3,13 +3,15 @@
 //! For now a vault has one person and one collection (docs/adr/0006-one-person-first.md), but it is
 //! stored the way a team's vault will be, so growing one needs no change of format.
 
+use crate::backup::Backup;
 use crate::crypto::{self, Key, KeyPair, PasswordKdf};
 use crate::error::{Error, Result};
+use crate::files;
 use crate::keyring::{self, Keyring, KeyringUser};
 use crate::recovery::RecoveryKey;
 use crate::store;
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -136,47 +138,171 @@ impl Vault {
     /// Opens the vault with the password. A vault has one person for now, so no name is asked.
     pub fn unlock(dir: &Path, password: &str) -> Result<Vault> {
         let keyring = read_keyring(dir)?;
-        let user = only_user(&keyring)?;
-        let key = user.password_kdf.derive(password);
-        let secret = crypto::decrypt(
-            &key,
-            &user.private_key,
-            &keyring::private_key_aad(&keyring.vault_id, &user.id, "password"),
-        )
-        .ok_or(Error::WrongPassword)?;
-        Vault::open(dir, keyring, secret)
+        let keys = open_private_key(&keyring, &Credential::Password(password))?;
+        Vault::open(dir, keyring, keys)
     }
 
     /// Opens the vault with the recovery key and sets a new password. The recovery key stays the
     /// same, so the printed sheet still works.
     pub fn recover(dir: &Path, words: &str, new_password: &str) -> Result<Vault> {
-        check_password(new_password)?;
-        let recovery = RecoveryKey::parse(words)?;
+        let credential = Credential::RecoveryKey { words, new_password };
         let keyring = read_keyring(dir)?;
-        let user = only_user(&keyring)?;
-        let key = crypto::recovery_key(&recovery.entropy(), user.id.as_bytes());
-        let secret = crypto::decrypt(
-            &key,
-            &user.private_key_by_recovery,
-            &keyring::private_key_aad(&keyring.vault_id, &user.id, "recovery"),
-        )
-        .ok_or(Error::WrongRecoveryKey)?;
-        let mut vault = Vault::open(dir, keyring, secret)?;
+        let keys = open_private_key(&keyring, &credential)?;
+        let mut vault = Vault::open(dir, keyring, keys)?;
         vault.set_password(new_password)?;
         Ok(vault)
     }
 
     pub fn change_password(&mut self, current: &str, new_password: &str) -> Result<()> {
         check_password(new_password)?;
-        let user = self.user();
-        let key = user.password_kdf.derive(current);
-        crypto::decrypt(
-            &key,
-            &user.private_key,
-            &keyring::private_key_aad(&self.keyring.vault_id, &self.user_id, "password"),
-        )
-        .ok_or(Error::WrongPassword)?;
+        self.check_current_password(current)?;
         self.set_password(new_password)
+    }
+
+    /// Makes a new recovery key and returns it to show once. The old one stops opening the vault
+    /// straight away, though backups made before still open with it.
+    pub fn new_recovery_key(&mut self, password: &str) -> Result<RecoveryKey> {
+        self.check_current_password(password)?;
+        let recovery = RecoveryKey::generate();
+        let sealed = crypto::encrypt(
+            &crypto::recovery_key(&recovery.entropy(), self.user_id.as_bytes()),
+            &self.keys.secret,
+            &keyring::private_key_aad(&self.keyring.vault_id, &self.user_id, "recovery"),
+        );
+        let mut keyring = self.keyring.clone();
+        user_mut(&mut keyring, &self.user_id).private_key_by_recovery = sealed;
+        keyring.write(&self.dir.join(KEYRING_FILE))?;
+        self.keyring = keyring;
+        Ok(recovery)
+    }
+
+    /// This person's settings, or the defaults if they have not changed any.
+    pub fn settings(&self) -> Result<Settings> {
+        match self.meta(&format!("settings {}", self.user_id))? {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Ok(Settings::default()),
+        }
+    }
+
+    pub fn set_settings(&mut self, settings: &Settings) -> Result<()> {
+        settings.check()?;
+        self.set_meta(&format!("settings {}", self.user_id), &serde_json::to_string(settings)?)
+    }
+
+    /// Keeps edits that were not saved when the vault locked by itself, encrypted like a recipe,
+    /// until the next unlock. There is one draft per person; a new one replaces the old.
+    pub fn save_draft(&mut self, draft: &serde_json::Value) -> Result<()> {
+        let plaintext = Zeroizing::new(serde_json::to_vec(draft)?);
+        if plaintext.len() > MAX_RECORD_BYTES {
+            return Err(Error::TooLarge);
+        }
+        let sealed = crypto::encrypt(&self.collection_key, &plaintext, &self.draft_aad());
+        self.set_meta(&format!("draft {}", self.user_id), &serde_json::to_string(&sealed)?)
+    }
+
+    /// The saved draft, if there is one. Taking it deletes it.
+    pub fn take_draft(&mut self) -> Result<Option<serde_json::Value>> {
+        let name = format!("draft {}", self.user_id);
+        let Some(json) = self.meta(&name)? else {
+            return Ok(None);
+        };
+        self.conn.execute("DELETE FROM meta WHERE name = ?1", params![name])?;
+        let sealed: crypto::Sealed = serde_json::from_str(&json)?;
+        let plaintext = crypto::decrypt(&self.collection_key, &sealed, &self.draft_aad())
+            .ok_or_else(|| Error::Corrupt("the saved draft does not decrypt".into()))?;
+        Ok(Some(serde_json::from_slice(&plaintext)?))
+    }
+
+    /// When the last backup was made, and the name of its file.
+    pub fn last_backup(&self) -> Result<Option<LastBackup>> {
+        self.meta("last_backup")?
+            .map(|json| serde_json::from_str(&json).map_err(Error::from))
+            .transpose()
+    }
+
+    /// Writes a backup of the whole vault to `path` (docs/adr/0007-backups-locking-updates.md).
+    pub fn back_up(&mut self, path: &Path) -> Result<LastBackup> {
+        // Moves everything from the write-ahead log into the database file, so the file alone is
+        // the whole vault. The app holds the only connection, so nothing can be writing meanwhile.
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        if busy != 0 {
+            return Err(Error::Io(std::io::Error::other("the vault was busy; try again")));
+        }
+        let database = fs::read(self.dir.join(DATABASE_FILE))?;
+        let database_key = self.database_key()?;
+        let at = now_ms();
+        let file = Backup::seal(
+            self.keyring.vault_id,
+            at,
+            self.keyring.clone(),
+            &database_key,
+            &database,
+        )?;
+        files::write_atomically(path, &file)?;
+
+        let last = LastBackup {
+            at,
+            file_name: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
+        self.set_meta("last_backup", &serde_json::to_string(&last)?)?;
+        Ok(last)
+    }
+
+    /// What can be told about a backup before it is opened.
+    pub fn backup_info(path: &Path) -> Result<BackupInfo> {
+        let backup = Backup::parse(&fs::read(path)?)?;
+        Ok(BackupInfo {
+            created_at: backup.header.created_at,
+            app_version: backup.header.app_version,
+        })
+    }
+
+    /// Restores a backup into `dir` and opens it, with the password the backup was made with or
+    /// its recovery key. Nothing in `dir` changes until the backup has been opened and checked;
+    /// a vault already there is then moved into a `replaced-…` folder beside it, not deleted.
+    /// Returns that folder, if there was a vault to move.
+    pub fn restore(dir: &Path, path: &Path, credential: &Credential) -> Result<(Vault, Option<PathBuf>)> {
+        let backup = Backup::parse(&fs::read(path)?)?;
+        let keyring = backup.header.keyring.clone();
+        let keys = open_private_key(&keyring, credential)?;
+        let user = only_user(&keyring)?;
+        let database_key = crypto::open_key(
+            &keys,
+            &user.database_key,
+            &keyring::database_key_info(&keyring.vault_id, &user.id),
+        )
+        .ok_or(Error::BackupDamaged)?;
+        let database = backup.open(&database_key)?;
+
+        fs::create_dir_all(dir)?;
+        let restoring = dir.join(format!("{DATABASE_FILE}.restoring"));
+        files::write_atomically(&restoring, &database)?;
+        let checked = store::open(&restoring, &database_key).and_then(|conn| {
+            let stored_id: String =
+                conn.query_row("SELECT value FROM meta WHERE name = 'vault_id'", [], |row| row.get(0))?;
+            if parse_id(&stored_id)? != keyring.vault_id {
+                return Err(Error::BackupDamaged);
+            }
+            Ok(())
+        });
+        if let Err(error) = checked {
+            let _ = fs::remove_file(&restoring);
+            return Err(error);
+        }
+
+        let set_aside = set_aside_vault(dir)?;
+        fs::rename(&restoring, dir.join(DATABASE_FILE))?;
+        keyring.write(&dir.join(KEYRING_FILE))?;
+        let mut vault = Vault::open(dir, keyring, keys)?;
+        if let Credential::RecoveryKey { new_password, .. } = credential {
+            vault.set_password(new_password)?;
+        }
+        Ok((vault, set_aside))
     }
 
     /// Saves a recipe. With no parent it starts a new recipe; with one, it adds the next revision
@@ -292,10 +418,9 @@ impl Vault {
         Ok(heads)
     }
 
-    fn open(dir: &Path, keyring: Keyring, secret: Zeroizing<Vec<u8>>) -> Result<Vault> {
+    fn open(dir: &Path, keyring: Keyring, keys: KeyPair) -> Result<Vault> {
         let user = only_user(&keyring)?;
         let user_id = user.id;
-        let keys = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the private key is not valid".into()))?;
         let database_key = crypto::open_key(
             &keys,
             &user.database_key,
@@ -357,17 +482,147 @@ impl Vault {
             &keyring::private_key_aad(&self.keyring.vault_id, &self.user_id, "password"),
         );
         let mut keyring = self.keyring.clone();
-        let user = keyring
-            .users
-            .iter_mut()
-            .find(|user| user.id == self.user_id)
-            .expect("the unlocked user is in the keyring");
+        let user = user_mut(&mut keyring, &self.user_id);
         user.password_kdf = kdf;
         user.private_key = sealed;
         keyring.write(&self.dir.join(KEYRING_FILE))?;
         self.keyring = keyring;
         Ok(())
     }
+
+    fn check_current_password(&self, password: &str) -> Result<()> {
+        let user = self.user();
+        crypto::decrypt(
+            &user.password_kdf.derive(password),
+            &user.private_key,
+            &keyring::private_key_aad(&self.keyring.vault_id, &self.user_id, "password"),
+        )
+        .map(|_| ())
+        .ok_or(Error::WrongPassword)
+    }
+
+    /// Opened again from the key file when needed, rather than kept in memory.
+    fn database_key(&self) -> Result<Key> {
+        crypto::open_key(
+            &self.keys,
+            &self.user().database_key,
+            &keyring::database_key_info(&self.keyring.vault_id, &self.user_id),
+        )
+        .ok_or_else(|| Error::Corrupt("the database key is not sealed to this user".into()))
+    }
+
+    fn draft_aad(&self) -> Vec<u8> {
+        format!(
+            "glaze-vault v1 draft vault {} user {} collection {}",
+            self.keyring.vault_id, self.user_id, self.collection_id
+        )
+        .into_bytes()
+    }
+
+    fn meta(&self, name: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM meta WHERE name = ?1", params![name], |row| {
+                row.get(0)
+            })
+            .optional()?)
+    }
+
+    fn set_meta(&self, name: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+            params![name, value],
+        )?;
+        Ok(())
+    }
+}
+
+/// How a person proves who they are: their password, or their recovery key along with the new
+/// password it sets.
+pub enum Credential<'a> {
+    Password(&'a str),
+    RecoveryKey { words: &'a str, new_password: &'a str },
+}
+
+/// A person's choices, kept in the vault so they follow it onto another computer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    /// Lock the vault when nobody has used the app for `auto_lock_minutes`.
+    pub auto_lock: bool,
+    pub auto_lock_minutes: u32,
+    /// Remind about backups this many days after the last one; 0 means never.
+    pub backup_reminder_days: u32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            auto_lock: true,
+            auto_lock_minutes: 15,
+            backup_reminder_days: 30,
+        }
+    }
+}
+
+impl Settings {
+    fn check(&self) -> Result<()> {
+        if !(1..=480).contains(&self.auto_lock_minutes) {
+            return Err(Error::InvalidSetting(
+                "Choose between 1 and 480 minutes before the vault locks.",
+            ));
+        }
+        if self.backup_reminder_days > 365 {
+            return Err(Error::InvalidSetting("Choose a backup reminder of a year or less."));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastBackup {
+    pub at: i64,
+    pub file_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupInfo {
+    pub created_at: i64,
+    pub app_version: String,
+}
+
+/// Decrypts the person's private key with their password or recovery key.
+fn open_private_key(keyring: &Keyring, credential: &Credential) -> Result<KeyPair> {
+    let user = only_user(keyring)?;
+    let secret = match credential {
+        Credential::Password(password) => crypto::decrypt(
+            &user.password_kdf.derive(password),
+            &user.private_key,
+            &keyring::private_key_aad(&keyring.vault_id, &user.id, "password"),
+        )
+        .ok_or(Error::WrongPassword)?,
+        Credential::RecoveryKey { words, new_password } => {
+            check_password(new_password)?;
+            let recovery = RecoveryKey::parse(words)?;
+            crypto::decrypt(
+                &crypto::recovery_key(&recovery.entropy(), user.id.as_bytes()),
+                &user.private_key_by_recovery,
+                &keyring::private_key_aad(&keyring.vault_id, &user.id, "recovery"),
+            )
+            .ok_or(Error::WrongRecoveryKey)?
+        }
+    };
+    KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the private key is not valid".into()))
+}
+
+fn user_mut<'a>(keyring: &'a mut Keyring, id: &Uuid) -> &'a mut KeyringUser {
+    keyring
+        .users
+        .iter_mut()
+        .find(|user| user.id == *id)
+        .expect("the unlocked user is in the keyring")
 }
 
 fn check_password(password: &str) -> Result<()> {
@@ -401,6 +656,24 @@ fn set_aside_orphan_database(dir: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Moves a vault's files into a new `replaced-…` folder in `dir`, and returns the folder, or None
+/// if there was nothing to move.
+fn set_aside_vault(dir: &Path) -> Result<Option<PathBuf>> {
+    let names = [KEYRING_FILE, DATABASE_FILE, "vault.db-wal", "vault.db-shm"];
+    if !names.iter().any(|name| dir.join(name).exists()) {
+        return Ok(None);
+    }
+    let aside = dir.join(format!("replaced-{}", now_ms()));
+    fs::create_dir(&aside)?;
+    for name in names {
+        let path = dir.join(name);
+        if path.exists() {
+            fs::rename(&path, aside.join(name))?;
+        }
+    }
+    Ok(Some(aside))
 }
 
 fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid) -> Vec<u8> {
@@ -583,5 +856,165 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert!(names.iter().any(|n| n.starts_with("vault.db.unfinished-")));
+    }
+
+    fn names_in(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_backup_restores_on_another_computer() {
+        let (home, elsewhere, files) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let (mut vault, _) = Vault::create(home.path(), PASSWORD).unwrap();
+        vault.save_recipe(None, &json!({ "name": "Secret Celadon" })).unwrap();
+        let settings = Settings {
+            auto_lock: false,
+            auto_lock_minutes: 5,
+            backup_reminder_days: 7,
+        };
+        vault.set_settings(&settings).unwrap();
+        let path = files.path().join("vault.gvbackup");
+        let last = vault.back_up(&path).unwrap();
+        assert_eq!(last.file_name, "vault.gvbackup");
+        assert_eq!(vault.last_backup().unwrap().unwrap().at, last.at);
+
+        let bytes = fs::read(&path).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("Secret Celadon"));
+        assert_eq!(Vault::backup_info(&path).unwrap().created_at, last.at);
+
+        let target = elsewhere.path().join("vault");
+        assert!(matches!(
+            Vault::restore(&target, &path, &Credential::Password("wrong password")),
+            Err(Error::WrongPassword)
+        ));
+        assert!(!target.exists());
+        let (restored, set_aside) = Vault::restore(&target, &path, &Credential::Password(PASSWORD)).unwrap();
+        assert!(set_aside.is_none());
+        assert_eq!(restored.recipes().unwrap()[0].content["name"], "Secret Celadon");
+        assert_eq!(restored.settings().unwrap(), settings);
+        drop(restored);
+        Vault::unlock(&target, PASSWORD).unwrap();
+    }
+
+    #[test]
+    fn restoring_over_a_vault_keeps_the_old_one_aside() {
+        let (dir, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (mut vault, recovery) = Vault::create(dir.path(), PASSWORD).unwrap();
+        vault.save_recipe(None, &json!({ "name": "Before" })).unwrap();
+        let path = files.path().join("b.gvbackup");
+        vault.back_up(&path).unwrap();
+        vault.save_recipe(None, &json!({ "name": "After" })).unwrap();
+        vault.change_password(PASSWORD, "changed since").unwrap();
+        drop(vault);
+
+        // The backup opens with the recovery key, and sets a new password.
+        let words = recovery.words().join(" ");
+        let credential = Credential::RecoveryKey {
+            words: &words,
+            new_password: "restored password",
+        };
+        let (restored, set_aside) = Vault::restore(dir.path(), &path, &credential).unwrap();
+        let names: Vec<_> = restored
+            .recipes()
+            .unwrap()
+            .iter()
+            .map(|r| r.content["name"].clone())
+            .collect();
+        assert_eq!(names, vec![json!("Before")]);
+        drop(restored);
+        Vault::unlock(dir.path(), "restored password").unwrap();
+
+        let aside = set_aside.unwrap();
+        assert!(aside.file_name().unwrap().to_string_lossy().starts_with("replaced-"));
+        let old = Vault::unlock(&aside, "changed since").unwrap();
+        assert_eq!(old.recipes().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn damaged_backups_and_other_files_are_refused() {
+        let (dir, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        vault.save_recipe(None, &json!({ "name": "Shino" })).unwrap();
+        let path = files.path().join("b.gvbackup");
+        vault.back_up(&path).unwrap();
+        drop(vault);
+        let good = fs::read(&path).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let restore = |bytes: &[u8]| {
+            let path = files.path().join("try.gvbackup");
+            fs::write(&path, bytes).unwrap();
+            Vault::restore(elsewhere.path(), &path, &Credential::Password(PASSWORD)).map(|_| ())
+        };
+
+        let mut flipped = good.clone();
+        *flipped.last_mut().unwrap() ^= 1;
+        assert!(matches!(restore(&flipped), Err(Error::BackupDamaged)));
+        assert!(matches!(restore(&good[..good.len() - 100]), Err(Error::BackupDamaged)));
+        assert!(matches!(restore(&good[..20]), Err(Error::BackupDamaged)));
+        assert!(matches!(restore(b"name,material,amount\n"), Err(Error::NotABackup)));
+        assert!(
+            names_in(elsewhere.path()).is_empty(),
+            "a backup that fails writes nothing"
+        );
+        restore(&good).unwrap();
+    }
+
+    #[test]
+    fn a_new_recovery_key_replaces_the_old_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, old) = Vault::create(dir.path(), PASSWORD).unwrap();
+        assert!(matches!(
+            vault.new_recovery_key("not the password"),
+            Err(Error::WrongPassword)
+        ));
+        let new = vault.new_recovery_key(PASSWORD).unwrap();
+        drop(vault);
+        assert!(matches!(
+            Vault::recover(dir.path(), &old.words().join(" "), "another password"),
+            Err(Error::WrongRecoveryKey)
+        ));
+        Vault::recover(dir.path(), &new.words().join(" "), "another password").unwrap();
+    }
+
+    #[test]
+    fn settings_have_defaults_and_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        assert_eq!(vault.settings().unwrap(), Settings::default());
+        assert!(vault.settings().unwrap().auto_lock);
+        let zero = Settings {
+            auto_lock_minutes: 0,
+            ..Settings::default()
+        };
+        assert!(matches!(vault.set_settings(&zero), Err(Error::InvalidSetting(_))));
+        let off = Settings {
+            auto_lock: false,
+            ..Settings::default()
+        };
+        vault.set_settings(&off).unwrap();
+        drop(vault);
+        assert_eq!(Vault::unlock(dir.path(), PASSWORD).unwrap().settings().unwrap(), off);
+    }
+
+    #[test]
+    fn a_draft_is_kept_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        assert!(vault.take_draft().unwrap().is_none());
+        vault
+            .save_draft(&json!({ "content": { "name": "Half done" } }))
+            .unwrap();
+        vault.save_draft(&json!({ "content": { "name": "Newer" } })).unwrap();
+        drop(vault);
+        let mut vault = Vault::unlock(dir.path(), PASSWORD).unwrap();
+        assert_eq!(vault.take_draft().unwrap().unwrap()["content"]["name"], "Newer");
+        assert!(vault.take_draft().unwrap().is_none());
     }
 }

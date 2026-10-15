@@ -62,6 +62,13 @@ folder:
 
 `cargo fmt` and `cargo clippy --workspace --all-targets` keep the Rust tidy.
 
+## CI and releases
+
+Every push runs the checks above on macOS, Windows and Linux, and builds unsigned installers for
+each, which are kept for two weeks as the run's artifacts. Pushing a `v*` tag builds a signed
+draft release with the updater's `latest.json`. [docs/releasing.md](docs/releasing.md) covers the
+updater key, Apple and Windows signing, and the release steps.
+
 ## License
 
 [MIT](LICENSE). Glazecalc's chemistry and data in `vendor/glazecalc` are MIT too, by the same author.

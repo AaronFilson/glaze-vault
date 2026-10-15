@@ -1,7 +1,15 @@
 import { useMemo, useState } from 'react';
 
 /** Shows the recovery key once, offers to print it, then checks three of the words. */
-export function RecoverySheet({ words, onDone }: { words: string[]; onDone: () => void }) {
+export function RecoverySheet({
+  words,
+  onDone,
+  doneLabel = 'Open my vault'
+}: {
+  words: string[];
+  onDone: () => void;
+  doneLabel?: string;
+}) {
   const [stored, setStored] = useState(false);
   const [checking, setChecking] = useState(false);
   const asked = useMemo(() => pickThree(words.length), [words]);
@@ -30,7 +38,7 @@ export function RecoverySheet({ words, onDone }: { words: string[]; onDone: () =
             </div>
           ))}
           <button type="submit" className="primary" disabled={!right}>
-            Open my vault
+            {doneLabel}
           </button>
           <button type="button" className="link" onClick={() => setChecking(false)}>
             Show the words again

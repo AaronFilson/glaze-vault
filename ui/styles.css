@@ -64,8 +64,9 @@ label.check {
   font-weight: 400;
 }
 
-input:not([type='checkbox']),
-textarea {
+input:not([type='checkbox']):not([type='radio']),
+textarea,
+select {
   width: 100%;
   font: inherit;
   color: inherit;
@@ -77,6 +78,7 @@ textarea {
 
 input:focus-visible,
 textarea:focus-visible,
+select:focus-visible,
 button:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 1px;
@@ -172,6 +174,17 @@ button.link {
   align-self: center;
 }
 
+.card > button.link.left {
+  align-self: flex-start;
+  margin-top: 0;
+  padding-left: 0;
+}
+
+code.path {
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+}
+
 .words {
   list-style: none;
   padding: 0;
@@ -202,19 +215,55 @@ button.link {
   display: grid;
   grid-template-columns: 14rem 1fr 18rem;
   grid-template-rows: auto auto 1fr;
-  grid-template-areas: 'bar bar bar' 'unsaved unsaved unsaved' 'side editor analysis';
+  grid-template-areas: 'bar bar bar' 'notices notices notices' 'side editor analysis';
 }
 
-.unsaved {
-  grid-area: unsaved;
+/* Questions and reminders above the recipes: unsaved changes, printing, updates, backups. */
+.notices {
+  grid-area: notices;
+}
+
+.notice {
   padding: 0.75rem 1rem;
   background: var(--surface);
-  border-bottom: 2px solid var(--warn);
+  border-bottom: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
 }
 
-.unsaved p,
-.unsaved .row {
+.notice.warning {
+  border-left-color: var(--warn);
+}
+
+.notice p,
+.notice .row {
   margin: 0.25rem 0;
+}
+
+.print-options {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.print-options legend {
+  font-weight: 600;
+  padding: 0;
+}
+
+.print-options label.check {
+  margin: 0.4rem 0;
+}
+
+.batch-size label {
+  margin: 0;
+}
+
+.batch-size input {
+  width: 8rem;
+}
+
+.batch-size select {
+  width: auto;
 }
 
 .bar {
@@ -229,6 +278,44 @@ button.link {
 
 .brand {
   font-weight: 700;
+}
+
+.bar-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.bar-actions button[aria-pressed='true'] {
+  outline: 2px solid var(--accent);
+}
+
+/* Settings take the place of the list, editor and analysis. */
+.settings {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  padding: 1rem 1.5rem 3rem;
+  max-width: 44rem;
+}
+
+.settings-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.setting {
+  border-top: 1px solid var(--line);
+  padding: 1rem 0 0.5rem;
+}
+
+.setting select {
+  width: auto;
+  min-width: 12rem;
+}
+
+.setting form > input {
+  max-width: 24rem;
 }
 
 .sidebar {
@@ -345,7 +432,7 @@ table.umf th {
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: 1fr;
-    grid-template-areas: 'bar' 'unsaved' 'side' 'editor' 'analysis';
+    grid-template-areas: 'bar' 'notices' 'side' 'editor' 'analysis';
   }
   .sidebar,
   .analysis {
@@ -381,5 +468,97 @@ table.umf th {
   .words {
     font-size: 14pt;
     gap: 0.6rem 1rem;
+  }
+  .shell {
+    display: block;
+    min-height: 0;
+  }
+}
+
+/* A printed recipe or batch sheet (ui/screens/PrintView.tsx). */
+@media print {
+  @page {
+    margin: 15mm;
+  }
+  .paper {
+    font-size: 11pt;
+  }
+  .paper h1 {
+    font-size: 18pt;
+    margin: 0.25rem 0;
+  }
+  .paper h2 {
+    font-size: 12pt;
+    margin: 1rem 0 0.25rem;
+  }
+  .paper .confidential,
+  .paper .meta {
+    color: var(--muted);
+    margin: 0.2rem 0;
+  }
+  .paper .confidential {
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 8pt;
+  }
+  .paper-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.75rem;
+  }
+  .paper-table th,
+  .paper-table td {
+    border-bottom: 1px solid #999;
+    padding: 0.35rem 0.4rem;
+    text-align: left;
+  }
+  .paper-table .num {
+    text-align: right;
+  }
+  .paper-table tfoot th,
+  .paper-table tfoot td {
+    border-bottom: none;
+    border-top: 2px solid #000;
+    font-weight: 600;
+  }
+  .paper-table.batch td {
+    padding: 0.55rem 0.4rem;
+  }
+  .paper-table .weight {
+    font-size: 13pt;
+    font-weight: 600;
+  }
+  .paper-table .blank {
+    width: 7rem;
+  }
+  .paper-table .box {
+    width: 3rem;
+    font-size: 14pt;
+  }
+  .paper .notes {
+    white-space: pre-wrap;
+  }
+  .paper-analysis {
+    margin-top: 1rem;
+    columns: 2;
+    break-inside: avoid;
+  }
+  .paper-analysis table.umf {
+    break-inside: avoid;
+  }
+  .signoff {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 1.2rem 0.75rem;
+    margin-top: 2rem;
+    max-width: 30rem;
+  }
+  .signoff dd {
+    margin: 0;
+    border-bottom: 1px solid #000;
+  }
+  tr,
+  .signoff {
+    break-inside: avoid;
   }
 }

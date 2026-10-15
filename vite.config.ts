@@ -18,7 +18,9 @@ export default defineConfig({
   build: {
     // macOS 12's WebKit is Safari 15's.
     target: ['es2022', 'safari15'],
-    outDir: 'dist'
+    outDir: 'dist',
+    // The app loads its page from disk, not the network, and the materials library is most of it.
+    chunkSizeWarningLimit: 2000
   },
   test: {
     include: ['ui/**/*.test.ts', 'ui/**/*.test.tsx']
