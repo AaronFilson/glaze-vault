@@ -1,0 +1,385 @@
+:root {
+  --bg: #f7f5f2;
+  --surface: #ffffff;
+  --text: #24211e;
+  --muted: #6b645c;
+  --line: #ddd6cd;
+  --accent: #2f6f6a;
+  --accent-text: #ffffff;
+  --danger: #a3341f;
+  --warn: #8a5a00;
+  --focus: #2f6f6a66;
+  color-scheme: light;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1a18;
+    --surface: #252321;
+    --text: #ece8e3;
+    --muted: #a69e94;
+    --line: #3c3934;
+    --accent: #6fb8b1;
+    --accent-text: #10201f;
+    --danger: #f08a73;
+    --warn: #e6b450;
+    --focus: #6fb8b166;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 0.75rem;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin: 0 0 0.5rem;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin: 0.9rem 0 0.25rem;
+}
+
+label.check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-weight: 400;
+}
+
+input:not([type='checkbox']),
+textarea {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0.25rem;
+  text-decoration: underline;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.25rem 0;
+}
+
+.warn {
+  color: var(--warn);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 1rem 0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* Setup, unlock and recovery: one card in the middle. */
+.center {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem 1rem;
+}
+
+.card {
+  width: min(28rem, 100%);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.card.wide {
+  width: min(40rem, 100%);
+}
+
+.card > button {
+  margin-top: 1.25rem;
+}
+
+.card > button.link {
+  margin-top: 0.5rem;
+  align-self: center;
+}
+
+.words {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.4rem 1rem;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 1rem;
+}
+
+.words .n {
+  display: inline-block;
+  min-width: 1.6em;
+  color: var(--muted);
+  text-align: right;
+}
+
+@media (max-width: 520px) {
+  .words {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* The open vault: recipes, editor, analysis. */
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 14rem 1fr 18rem;
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas: 'bar bar bar' 'unsaved unsaved unsaved' 'side editor analysis';
+}
+
+.unsaved {
+  grid-area: unsaved;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border-bottom: 2px solid var(--warn);
+}
+
+.unsaved p,
+.unsaved .row {
+  margin: 0.25rem 0;
+}
+
+.bar {
+  grid-area: bar;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.brand {
+  font-weight: 700;
+}
+
+.sidebar {
+  grid-area: side;
+  padding: 1rem;
+  border-right: 1px solid var(--line);
+}
+
+.sidebar > button {
+  width: 100%;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+}
+
+.list button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0.35rem 0.5rem;
+}
+
+.list button[aria-current='true'] {
+  background: var(--surface);
+  outline: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.editor {
+  grid-area: editor;
+  padding: 1rem 1.5rem;
+  max-width: 44rem;
+}
+
+.editor input.title {
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+table.lines {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0 0.5rem;
+}
+
+table.lines th {
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+table.lines td {
+  padding: 0.15rem 0.25rem 0.15rem 0;
+}
+
+table.lines td.num {
+  width: 7rem;
+}
+
+.num,
+.num input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis {
+  grid-area: analysis;
+  padding: 1rem;
+  border-left: 1px solid var(--line);
+}
+
+table.umf {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.75rem;
+}
+
+table.umf caption {
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+table.umf th {
+  text-align: left;
+  font-weight: 400;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.2rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.facts dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.warnings {
+  color: var(--warn);
+  font-size: 0.9rem;
+  padding-left: 1.1rem;
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'bar' 'unsaved' 'side' 'editor' 'analysis';
+  }
+  .sidebar,
+  .analysis {
+    border: none;
+  }
+}
+
+/* Printing: only what is meant for paper. */
+.print-only {
+  display: none;
+}
+
+@media print {
+  :root {
+    --bg: #fff;
+    --surface: #fff;
+    --text: #000;
+    --muted: #444;
+    color-scheme: light;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block;
+    width: 100%;
+  }
+  .center {
+    display: block;
+    min-height: 0;
+    padding: 0;
+  }
+  .words {
+    font-size: 14pt;
+    gap: 0.6rem 1rem;
+  }
+}
