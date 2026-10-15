@@ -3,8 +3,14 @@
   "productName": "Glaze Vault",
   "identifier": "com.glazecalcapp.vault",
   "build": {
-    "beforeDevCommand": { "script": "npm run dev:ui", "cwd": "../.." },
-    "beforeBuildCommand": { "script": "npm run build:ui", "cwd": "../.." },
+    "beforeDevCommand": {
+      "script": "npm run dev:ui",
+      "cwd": "../.."
+    },
+    "beforeBuildCommand": {
+      "script": "npm run build:ui",
+      "cwd": "../.."
+    },
     "devUrl": "http://localhost:1420",
     "frontendDist": "../../dist"
   },
@@ -37,5 +43,17 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/AaronFilson/glaze-vault/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

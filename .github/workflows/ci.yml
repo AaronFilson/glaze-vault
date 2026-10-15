@@ -55,3 +55,82 @@ jobs:
 
       - name: Rust tests
         run: cargo test --workspace --locked
+
+  # Unsigned installers for every push, to try on each system. Releases are built by release.yml.
+  bundle:
+    name: Installers (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS universal
+            os: macos-latest
+            args: --target universal-apple-darwin
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: Windows
+            os: windows-latest
+            args: ''
+            targets: ''
+          - name: Linux
+            os: ubuntu-22.04
+            args: ''
+            targets: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bundle
+
+      # 22.04, the oldest supported Ubuntu, so the AppImage runs on older systems too.
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev file
+
+      - run: npm ci
+
+      # Bash on Windows finds Git's Perl first, which lacks modules OpenSSL's build needs.
+      - name: Use Strawberry Perl for OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append'
+
+      # On failure, the end of the output also goes into an annotation, which can be read without
+      # signing in to GitHub (logs cannot).
+      - name: Build installers
+        shell: bash
+        run: |
+          set -o pipefail
+          npx tauri build --ci ${{ matrix.args }} 2>&1 | tee build.log || {
+            node -e '
+              const log = require("fs").readFileSync("build.log", "utf8").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+              const end = log.slice(-6000).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+              console.log("::error title=tauri build failed::" + end);
+            '
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Glaze Vault ${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            target/**/release/bundle/dmg/*.dmg
+            target/**/release/bundle/msi/*.msi
+            target/**/release/bundle/nsis/*.exe
+            target/**/release/bundle/deb/*.deb
+            target/**/release/bundle/rpm/*.rpm
+            target/**/release/bundle/appimage/*.AppImage

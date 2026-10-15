@@ -107,6 +107,16 @@ pub fn recovery_key(entropy: &[u8], salt: &[u8]) -> Key {
     key
 }
 
+/// The key a backup's contents are encrypted under, from the database key and a salt of the
+/// backup's own, so each backup has a different key.
+pub fn backup_key(database_key: &Key, salt: &[u8], info: &[u8]) -> Key {
+    let mut key = Zeroizing::new([0u8; 32]);
+    Hkdf::<Sha256>::new(Some(salt), database_key.as_ref())
+        .expand(info, key.as_mut())
+        .expect("32 bytes is a valid HKDF length");
+    key
+}
+
 /// A user's X25519 key pair. Keys are sealed to the public key; the private key never leaves
 /// memory unencrypted.
 pub struct KeyPair {
@@ -164,7 +174,7 @@ pub fn open_key(pair: &KeyPair, sealed: &SealedBox, info: &[u8]) -> Option<Key> 
 }
 
 /// Base64 for byte fields in JSON.
-mod b64 {
+pub(crate) mod b64 {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use serde::{Deserialize, Deserializer, Serializer, de::Error};
 

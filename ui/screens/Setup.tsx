@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api, errorText } from '../api';
 import { NewPassword } from './NewPassword';
 
-export function Setup({ onCreated }: { onCreated: (words: string[]) => void }) {
+export function Setup({ onCreated, onRestore }: { onCreated: (words: string[]) => void; onRestore: () => void }) {
   const [password, setPassword] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -32,6 +32,9 @@ export function Setup({ onCreated }: { onCreated: (words: string[]) => void }) {
         {error && <p role="alert" className="error">{error}</p>}
         <button type="submit" className="primary" disabled={!password || busy}>
           {busy ? 'Creating your vault…' : 'Create vault'}
+        </button>
+        <button type="button" className="link" onClick={onRestore}>
+          Restore from a backup
         </button>
       </form>
     </main>

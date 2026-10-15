@@ -9,13 +9,16 @@ repository.workspace = true
 
 [lib]
 name = "glaze_vault_app"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop only. Mobile builds (phase 3) will need "staticlib" and "cdylib" back.
+crate-type = ["rlib"]
 
 [dependencies]
 glaze-vault-core = { path = "../core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 uuid = { version = "1.28.0", features = ["serde"] }
 zeroize = "1.9.1"
 

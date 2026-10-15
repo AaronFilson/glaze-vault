@@ -5,7 +5,6 @@ use crate::crypto::{PasswordKdf, Sealed, SealedBox};
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -40,14 +39,9 @@ impl Keyring {
         Ok(keyring)
     }
 
-    /// Writes a temporary file and renames it over the old one, so a crash leaves either the old
-    /// keys or the new ones, never half of each.
+    /// Replaces the key file in one step, so a crash leaves the old keys or the new ones.
     pub fn write(&self, path: &Path) -> Result<()> {
-        let temp = path.with_extension("keys.tmp");
-        let mut file = fs::File::create(&temp)?;
-        file.write_all(&serde_json::to_vec_pretty(self)?)?;
-        file.sync_all()?;
-        fs::rename(&temp, path)?;
+        crate::files::write_atomically(path, &serde_json::to_vec_pretty(self)?)?;
         Ok(())
     }
 }

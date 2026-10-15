@@ -11,3 +11,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0004](0004-roles-and-collections.md)    | Access: roles granted on collections, enforced in the core       | 2026-10-14 |
 | [0005](0005-lan-host-and-replicas.md)    | Networking: a LAN host, and replicas that work offline           | 2026-10-14 |
 | [0006](0006-one-person-first.md)         | One person first: a plain vault that can grow a team and shrink  | 2026-10-14 |
+| [0007](0007-backups-locking-updates.md)  | Backups, export, locking by itself, and updates                  | 2026-10-14 |

@@ -49,5 +49,10 @@ ever overwritten. Below the Save button you see when the recipe was saved and it
 number. If you switch to another recipe or lock the vault with unsaved changes, Glaze Vault asks
 first: **Save**, **Discard changes**, or **Keep editing**.
 
-> Coming later: looking through a recipe's earlier revisions, comparing two recipes, and
-> printing a recipe or a batch sheet.
+If the vault [locks by itself](settings.md#locking-by-itself) while you have unsaved changes, they
+are kept, encrypted, and are back in the editor when you unlock, with a note: save them, or
+choose **Discard changes**.
+
+To print a recipe or a batch sheet, see [Printing](printing.md).
+
+> Coming later: looking through a recipe's earlier revisions, and comparing two recipes.

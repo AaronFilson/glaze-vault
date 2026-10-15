@@ -19,17 +19,30 @@ keeping the method secret.
 
 ## What it does not protect against
 
-- **Someone using your computer while the vault is open.** Lock it or quit it when you step away.
+- **Someone using your computer while the vault is open.** Lock it or quit it when you step away;
+  locking by itself is a backstop, not a replacement.
 - **A weak password,** or one you also use elsewhere.
 - **Malicious software on your computer,** which could read what is on your screen or what you
   type.
-- **Printouts.** A printed recipe is no longer encrypted.
+- **Printouts and exports.** A printed or exported recipe is no longer encrypted.
 
-## Backups
+## Backups, exports and printouts
 
-> Coming later: encrypted backups from inside the app.
+- **Backups** are encrypted twice over: the encrypted database, encrypted again as a whole, so a
+  backup that has been changed or cut short is refused. A backup opens with the password or
+  recovery key the vault had when it was made. See [Backups and export](backups.md).
+- **Exports** (CSV and JSON) are **not encrypted**. Anyone with the file can read your recipes.
+- **Printouts** are marked Confidential, but they are paper.
 
-Until then, you can copy the whole `vault` folder (see
-[where your vault is kept](installing.md#where-your-vault-is-kept)) while Glaze Vault is
-**closed**. The copy is as well protected as the original, and opens with the same password
-and recovery key.
+## Locking
+
+The vault [locks by itself](settings.md#locking-by-itself) after 15 minutes without use, unless
+you change that. Locking wipes the keys from memory. Unsaved changes are kept encrypted, like
+saved recipes.
+
+## The network
+
+Glaze Vault's only network connection is the check for updates, which asks GitHub for the
+newest version number: nothing from your vault is sent. You can turn it off in
+[Settings](settings.md#updates). Updates are checked against Glaze Vault's own signing key
+before they install, so a changed or older download is refused.

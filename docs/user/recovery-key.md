@@ -23,5 +23,13 @@ word is a checksum of the others. Check each word against your sheet.
 
 Your recovery key does not change when you use it, so keep the same sheet.
 
-> Coming later: making a new recovery key (for example if the sheet may have been seen), from
-> the vault's settings.
+## Making a new recovery key
+
+If your sheet is lost, or someone else may have seen it, make a new one: open **Settings**, type
+your password under **Recovery key**, and choose **Make a new recovery key**. Glaze Vault shows
+the new words, offers to print them, and checks three of them, as when you set up.
+
+The old sheet stops opening this vault straight away. It still opens
+[backups](backups.md) made before, because a backup opens with what opened the vault the day it
+was made. So after making a new recovery key, make a new backup, and destroy older backups you
+no longer need.

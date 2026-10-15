@@ -9,6 +9,13 @@ license = "MIT"
 authors = ["Aaron Filson"]
 repository = "https://github.com/AaronFilson/glaze-vault"
 
+# Keep debug builds small: line numbers for our own code, no debug info for dependencies.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # Key derivation and encryption are far too slow unoptimized, even in tests and `tauri dev`.
 [profile.dev.package.argon2]
 opt-level = 3
