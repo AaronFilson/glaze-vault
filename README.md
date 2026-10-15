@@ -51,6 +51,16 @@ folder:
 
     GLAZE_VAULT_DIR=/tmp/test-vault npm run dev
 
+To follow what the app shows without looking at it, such as from a script or a coding agent, name
+a file for a text picture of the screen. It is rewritten whenever the screen changes, with the
+page's errors at the end:
+
+    GLAZE_VAULT_DIR=/tmp/test-vault GLAZE_VAULT_SCREEN=/tmp/screen.txt npm run dev
+    cat /tmp/screen.txt
+
+It is only in development builds, and holds what is on screen in plain text, so use it with a
+throwaway vault. Passwords and recovery words are left out.
+
 ## Scripts
 
     npm run dev          the app in development, with the Vite dev server on port 1420

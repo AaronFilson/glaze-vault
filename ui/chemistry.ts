@@ -2,12 +2,16 @@
 import {
   calculateUMF,
   FORMULA_MATERIALS,
+  materialWeights,
+  MOLAR_MASS,
+  molesPerGram,
   OXIDE_GROUPS,
   type ChemistryError,
   type MaterialInput,
   type OxideGroup,
   type UmfResult
 } from '@glazecalc/chemistry';
+import additivesNdjson from '../vendor/glazecalc/data/additives.ndjson?raw';
 import materialsNdjson from '../vendor/glazecalc/data/materials.ndjson?raw';
 
 export interface StandardMaterial extends MaterialInput {
@@ -28,59 +32,251 @@ export interface RecipeContent {
   notes: string;
 }
 
-export type Analysis = { result: UmfResult; problem?: undefined } | { problem: string; result?: undefined } | null;
+export type MaterialCategory = 'material' | 'frit' | 'colorant' | 'additive';
 
-const normalize = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
+export const MATERIAL_CATEGORIES: { category: MaterialCategory; label: string }[] = [
+  { category: 'material', label: 'Raw material' },
+  { category: 'frit', label: 'Frit' },
+  { category: 'colorant', label: 'Colorant or stain' },
+  { category: 'additive', label: 'Opacifier, suspender or other additive' }
+];
 
-export const STANDARD_MATERIALS: StandardMaterial[] = materialsNdjson
-  .split(/\r?\n/)
-  .filter((line) => line.trim())
-  .map((line) => JSON.parse(line) as StandardMaterial);
+export interface OxideLine {
+  oxide: string;
+  /** Weight percent of the raw material, as on a supplier's data sheet. */
+  percent: string;
+}
 
-// A name finds a standard material's own name first, then a formula material (Glazecalc's
-// theoretical ones, such as Potash Feldspar), and only then another material's alias, so a
-// theoretical material is never quietly swapped for a commercial one that lists it as an alias.
-const byName = new Map(STANDARD_MATERIALS.map((m) => [normalize(m.name), m]));
+/** What the core stores, encrypted, for each revision of a person's own material. */
+export interface MaterialContent {
+  name: string;
+  category: MaterialCategory;
+  oxides: OxideLine[];
+  /** Loss on ignition, percent. */
+  loi: string;
+  notes: string;
+}
+
+/** Every oxide the chemistry knows, in the order of its columns. */
+export const OXIDES: string[] = Object.keys(OXIDE_GROUPS);
+
+export type Analysis =
+  | { result: UmfResult; problem?: undefined; noOxides: string[] }
+  | { problem: string; result?: undefined }
+  | null;
+
+/**
+ * Names compare ignoring case, spaces, punctuation and accents, as Glazecalc's library does,
+ * except that letters in other scripts are kept: Glazecalc keeps only a to z and digits, so
+ * every name in Cyrillic or Japanese would be the same, empty, name.
+ */
+export const normalize = (name: string) =>
+  name
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
+
+export const sameName = (a: string, b: string) => normalize(a) === normalize(b);
+
+const parse = (ndjson: string) =>
+  ndjson
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as StandardMaterial);
+
+export const STANDARD_MATERIALS: StandardMaterial[] = parse(materialsNdjson);
+/** Colorants, opacifiers, suspenders and other additions. A few, such as CMC gum, add no oxides. */
+export const STANDARD_ADDITIVES: StandardMaterial[] = parse(additivesNdjson);
+
+const materialsByName = new Map(STANDARD_MATERIALS.map((m) => [normalize(m.name), m]));
 const formulaNames = new Set(FORMULA_MATERIALS.map((m) => normalize(m.name)));
+/** Formula materials by their names and the others they are known by, such as Flint. */
+const formulasByName = new Map<string, (typeof FORMULA_MATERIALS)[number]>();
+for (const material of FORMULA_MATERIALS) {
+  for (const name of [material.name, ...(material.aliases ?? [])]) {
+    if (!formulasByName.has(normalize(name))) formulasByName.set(normalize(name), material);
+  }
+}
+const additivesByName = new Map<string, StandardMaterial>();
+for (const additive of STANDARD_ADDITIVES) {
+  const key = normalize(additive.name);
+  if (!materialsByName.has(key) && !formulaNames.has(key)) additivesByName.set(key, additive);
+}
 const byAlias = new Map<string, StandardMaterial>();
-for (const material of STANDARD_MATERIALS) {
+for (const material of [...STANDARD_MATERIALS, ...STANDARD_ADDITIVES]) {
   for (const alias of material.aliases ?? []) {
-    if (!byAlias.has(normalize(alias))) byAlias.set(normalize(alias), material);
+    if (normalize(alias) && !byAlias.has(normalize(alias))) byAlias.set(normalize(alias), material);
   }
 }
 
-function resolve(name: string): StandardMaterial | string {
-  const key = normalize(name);
-  if (byName.has(key)) return byName.get(key)!;
-  if (formulaNames.has(key)) return name.trim();
-  return byAlias.get(key) ?? name.trim();
+const STANDARD_NAMES = [
+  ...STANDARD_MATERIALS.map((m) => m.name),
+  ...FORMULA_MATERIALS.map((m) => m.name).filter((name) => !materialsByName.has(normalize(name))),
+  ...[...additivesByName.values()].map((m) => m.name)
+];
+
+/**
+ * A line's material: one the chemistry can use, one that adds nothing once fired, or one of the
+ * person's own whose analysis cannot be used.
+ */
+type Resolved = MaterialInput | string | { noOxides: string } | { problem: string };
+
+/** The materials a recipe can use: the person's own, then the standard ones. */
+export interface MaterialLibrary {
+  /** For the material list: every name, and whether it is the person's own. */
+  names: { name: string; yours: boolean }[];
+  resolve: (name: string) => Resolved;
 }
 
-/** Every name a recipe line can use: the standard library and the formula materials. */
-export const MATERIAL_NAMES: string[] = [
-  ...STANDARD_MATERIALS.map((m) => m.name),
-  ...FORMULA_MATERIALS.map((m) => m.name).filter((name) => !byName.has(normalize(name)))
-].sort((a, b) => a.localeCompare(b));
+const hasOxides = (material: StandardMaterial) =>
+  (material.fields ?? []).some((field) => Number(field.amount) > 0);
+
+/** A person's material as the chemistry takes it, null when it has no oxides, or what is wrong. */
+function customInput(material: MaterialContent): MaterialInput | null | { problem: string } {
+  const used = material.oxides.filter((line) => line.oxide && line.percent.trim());
+  if (!used.length) return null;
+  // Glazecalc reads a loss on ignition that is not a number as none, so it is checked here.
+  const loi = material.loi.trim() ? amountOf(material.loi) : 0;
+  if (!Number.isFinite(loi)) return { problem: `The loss on ignition of ${material.name.trim()} is not a number.` };
+  return {
+    name: material.name.trim(),
+    analysis: Object.fromEntries(used.map((line) => [line.oxide, amountOf(line.percent)])),
+    loi
+  };
+}
+
+/**
+ * A name finds the person's own material first, so their supplier's analysis replaces the
+ * standard one. Then a standard material's own name, then a formula material (Glazecalc's
+ * theoretical ones, such as Potash Feldspar), then a standard additive, and only then another
+ * material's alias, so a theoretical material is never quietly swapped for a commercial one that
+ * lists it as an alias.
+ */
+export function materialLibrary(custom: MaterialContent[]): MaterialLibrary {
+  const yours = new Map<string, MaterialContent>();
+  for (const material of custom) {
+    if (normalize(material.name) && !yours.has(normalize(material.name))) yours.set(normalize(material.name), material);
+  }
+  const resolve = (name: string): Resolved => {
+    const key = normalize(name);
+    if (!key) return name.trim();
+    const own = yours.get(key);
+    if (own) return customInput(own) ?? { noOxides: own.name.trim() };
+    if (materialsByName.has(key)) return materialsByName.get(key)!;
+    if (formulaNames.has(key)) return name.trim();
+    const standard = additivesByName.get(key) ?? byAlias.get(key);
+    if (!standard) return name.trim();
+    return hasOxides(standard) ? standard : { noOxides: standard.name };
+  };
+  const names = [
+    ...[...yours.values()].map((material) => ({ name: material.name.trim(), yours: true })),
+    ...STANDARD_NAMES.filter((name) => !yours.has(normalize(name))).map((name) => ({ name, yours: false }))
+  ].sort((a, b) => a.name.localeCompare(b.name));
+  return { names, resolve };
+}
+
+export const STANDARD_LIBRARY = materialLibrary([]);
+
+/** Every standard name a recipe line can use. */
+export const MATERIAL_NAMES: string[] = STANDARD_LIBRARY.names.map((entry) => entry.name);
+
+/**
+ * The standard material a name finds, by its own name or another it is known by, such as Flint
+ * for Silica. Null when the name is not a standard material's.
+ */
+export function standardNamed(name: string): string | null {
+  const found = STANDARD_LIBRARY.resolve(name);
+  if (typeof found === 'string') return formulasByName.get(normalize(found))?.name ?? null;
+  if ('problem' in found) return null;
+  return 'noOxides' in found ? found.noOxides : found.name;
+}
 
 /** Accepts 12.5 or 12,5. */
 export function amountOf(text: string): number {
   return Number(text.trim().replace(',', '.'));
 }
 
-export function analyse(lines: RecipeLine[]): Analysis {
+export function analyse(lines: RecipeLine[], library: MaterialLibrary = STANDARD_LIBRARY): Analysis {
   const used = lines.filter((line) => line.material.trim() && line.amount.trim());
   if (!used.length) return null;
+  const noOxides: string[] = [];
+  const counted: { material: MaterialInput | string; amount: number }[] = [];
+  for (const line of used) {
+    const material = library.resolve(line.material);
+    if (typeof material === 'object' && 'problem' in material) return { problem: material.problem };
+    if (typeof material === 'object' && 'noOxides' in material) {
+      if (!noOxides.includes(material.noOxides)) noOxides.push(material.noOxides);
+    } else {
+      counted.push({ material, amount: amountOf(line.amount) });
+    }
+  }
+  if (!counted.length) return null;
   try {
-    const result = calculateUMF(
-      used.map((line) => ({
-        material: resolve(line.material),
-        amount: amountOf(line.amount)
-      }))
-    );
-    return { result };
+    return { result: calculateUMF(counted), noOxides };
   } catch (e) {
     return { problem: (e as ChemistryError).message };
   }
+}
+
+/** A person's material checked: what its analysis adds up to, and its own unity formula. */
+export type MaterialCheck =
+  | { noOxides: true; total: number }
+  | { noOxides: false; total: number; unity: Record<string, number>; warnings: string[] }
+  | { noOxides: false; total: number; problem: string };
+
+export function checkMaterial(material: MaterialContent): MaterialCheck {
+  const input = customInput({ ...material, name: material.name.trim() || 'This material' });
+  const total = [...material.oxides.map((line) => line.percent), material.loi]
+    .filter((text) => text.trim())
+    .reduce((sum, text) => sum + amountOf(text), 0);
+  if (!input) return { noOxides: true, total };
+  if ('problem' in input) return { noOxides: false, total, problem: input.problem };
+  try {
+    const { unity, warnings } = materialWeights(input);
+    return { noOxides: false, total, unity, warnings };
+  } catch (e) {
+    return { noOxides: false, total, problem: (e as ChemistryError).message };
+  }
+}
+
+/** The kind of a standard material, from Glazecalc's finer categories. */
+function categoryOf(material: StandardMaterial | undefined): MaterialCategory {
+  switch (material?.category) {
+    case 'frit':
+      return 'frit';
+    case 'colorant':
+      return 'colorant';
+    case 'opacifier':
+    case 'suspender':
+    case 'other':
+      return 'additive';
+    default:
+      return 'material';
+  }
+}
+
+/** A standard material's analysis as a data sheet gives it, and its kind, to start a person's own from. */
+export function standardAnalysis(
+  name: string
+): { oxides: OxideLine[]; loi: string; category: MaterialCategory } | null {
+  const found = STANDARD_LIBRARY.resolve(name);
+  if (typeof found === 'object' && ('noOxides' in found || 'problem' in found)) return null;
+  const input = typeof found === 'string' ? formulasByName.get(normalize(found)) : found;
+  if (!input) return null;
+  const percents = Object.entries(molesPerGram(input)).map(
+    ([oxide, moles]) => [oxide, moles * MOLAR_MASS[oxide] * 100] as const
+  );
+  const fired = percents.reduce((sum, [, percent]) => sum + percent, 0);
+  const round = (n: number) => String(Number(n.toFixed(2)));
+  return {
+    oxides: percents
+      .filter(([, percent]) => percent >= 0.005)
+      .sort((a, b) => OXIDES.indexOf(a[0]) - OXIDES.indexOf(b[0]))
+      .map(([oxide, percent]) => ({ oxide, percent: round(percent) })),
+    loi: round(Math.max(0, 100 - fired)),
+    category: categoryOf(typeof found === 'string' ? undefined : found)
+  };
 }
 
 export const GROUP_TITLES: Record<OxideGroup, string> = {

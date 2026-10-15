@@ -14,10 +14,11 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 2. [Setting up your vault](setting-up.md): your password and your recovery key
 3. [Your recovery key](recovery-key.md): what it is, where to keep it, and how to use it
 4. [Recipes and their chemistry](recipes.md)
-5. [Printing](printing.md): a recipe, or a batch sheet for weighing out
-6. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
-7. [Settings](settings.md): locking by itself, your password, updates
-8. [How your recipes are protected](security.md)
+5. [Your own materials](materials.md): your supplier's analyses, stains and additives
+6. [Printing](printing.md): a recipe, or a batch sheet for weighing out
+7. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
+8. [Settings](settings.md): locking by itself, your password, updates
+9. [How your recipes are protected](security.md)
 
 ## Coming later
 
@@ -26,4 +27,3 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
   can become a team's vault, and go back to one person, at any time.
 - **Other computers on your network,** and laptops that take a copy of their part of the vault
   where there is no network, then bring their changes back.
-- **Your own materials,** and a recipe's earlier revisions.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { RecipeHead } from './api';
-import { csvField, exportCsv, exportFileName, exportJson } from './export';
+import type { MaterialHead, RecipeHead } from './api';
+import { csvField, exportCsv, exportFileName, exportJson, exportMaterialsCsv } from './export';
 
 const recipe = (name: string, lines: [string, string][], notes = ''): RecipeHead => ({
   recordId: 'r-' + name,
@@ -9,6 +9,24 @@ const recipe = (name: string, lines: [string, string][], notes = ''): RecipeHead
   savedAt: Date.UTC(2026, 9, 14, 12),
   content: { name, notes, lines: lines.map(([material, amount]) => ({ material, amount })) }
 });
+
+const spar: MaterialHead = {
+  recordId: 'm-1',
+  revisionId: 'mv-1',
+  number: 2,
+  savedAt: Date.UTC(2026, 9, 14, 12),
+  content: {
+    name: 'Custer, lot 7',
+    category: 'material',
+    oxides: [
+      { oxide: 'SiO2', percent: '68.5' },
+      { oxide: 'K2O', percent: '10' },
+      { oxide: 'Na2O', percent: '' }
+    ],
+    loi: '0.3',
+    notes: 'Data sheet, March'
+  }
+};
 
 describe('exportCsv', () => {
   it('writes a row per material with percentages, notes on the first row', () => {
@@ -45,14 +63,41 @@ describe('csvField', () => {
 describe('exportJson', () => {
   it('names its format and leaves out empty lines', () => {
     const json = JSON.parse(
-      exportJson([recipe('Shino', [['Nepheline Syenite', '50'], ['', '']])], new Date(Date.UTC(2026, 9, 14)), '0.2.0')
+      exportJson(
+        [recipe('Shino', [['Nepheline Syenite', '50'], ['', '']])],
+        [spar],
+        new Date(Date.UTC(2026, 9, 14)),
+        '0.2.0'
+      )
     );
     expect(json.format).toBe('glaze-vault-export');
     expect(json.recipes[0].lines).toEqual([{ material: 'Nepheline Syenite', amount: '50' }]);
     expect(json.recipes[0].savedAt).toBe('2026-10-14T12:00:00.000Z');
+    expect(json.materials[0]).toMatchObject({
+      name: 'Custer, lot 7',
+      oxides: [
+        { oxide: 'SiO2', percent: '68.5' },
+        { oxide: 'K2O', percent: '10' }
+      ],
+      loi: '0.3',
+      revision: 2
+    });
+  });
+});
+
+describe('exportMaterialsCsv', () => {
+  it('writes a row per oxide, then the loss on ignition', () => {
+    expect(exportMaterialsCsv([spar]).slice(1).split('\r\n')).toEqual([
+      'Material,Kind,Oxide,Percent,Notes,Revision,Saved',
+      '"Custer, lot 7",Raw material,SiO2,68.5,"Data sheet, March",2,2026-10-14T12:00:00.000Z',
+      '"Custer, lot 7",,K2O,10,,,',
+      '"Custer, lot 7",,LOI,0.3,,,',
+      ''
+    ]);
   });
 });
 
 it('names files by the local date', () => {
   expect(exportFileName('csv', new Date(2026, 0, 5, 23, 30))).toBe('Glaze Vault recipes 2026-01-05.csv');
+  expect(exportFileName('csv', new Date(2026, 0, 5), 'materials')).toBe('Glaze Vault materials 2026-01-05.csv');
 });

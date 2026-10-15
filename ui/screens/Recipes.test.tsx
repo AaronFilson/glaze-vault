@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Draft, LastBackup, RecipeHead, Settings } from '../api';
-import { Recipes } from './Recipes';
+import type { Draft, LastBackup, MaterialHead, RecipeHead, Settings } from '../api';
+import { DRAFT_DELAY_MS, Recipes } from './Recipes';
 
 // The whole screen renders in jsdom, with the materials list, so give it time on slow machines.
 vi.setConfig({ testTimeout: 30_000 });
@@ -19,23 +19,73 @@ const shino: RecipeHead = {
   content: { name: 'Shino', lines: [{ material: 'Nepheline Syenite', amount: '50' }], notes: '' }
 };
 
+const spar: MaterialHead = {
+  recordId: 'material-1',
+  revisionId: 'material-revision-1',
+  number: 1,
+  savedAt: Date.UTC(2026, 9, 1),
+  content: {
+    name: 'Spar, lot 7',
+    category: 'material',
+    oxides: [
+      { oxide: 'K2O', percent: '12' },
+      { oxide: 'Al2O3', percent: '18' },
+      { oxide: 'SiO2', percent: '70' }
+    ],
+    loi: '0',
+    notes: ''
+  }
+};
+
 /** Pretends to be the Rust commands, and records what was called. */
 function fakeCore({
   settings = { autoLock: true, autoLockMinutes: 15, backupReminderDays: 30 },
   lastBackup = { at: Date.now(), fileName: 'b.gvbackup' },
-  draft = null
-}: { settings?: Settings; lastBackup?: LastBackup | null; draft?: Draft | null } = {}) {
+  draft = null,
+  recipes = [shino],
+  materials = [],
+  history = []
+}: {
+  settings?: Settings;
+  lastBackup?: LastBackup | null;
+  draft?: Draft | null;
+  recipes?: RecipeHead[];
+  materials?: MaterialHead[];
+  history?: (RecipeHead | MaterialHead)[];
+} = {}) {
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
+  const revisions = new Map<string, { recordId: string; number: number }>(
+    [...recipes, ...materials, ...history].map((r) => [r.revisionId, r])
+  );
+  let saved = 0;
   mockIPC((cmd, args) => {
-    calls.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
+    const a = (args ?? {}) as Record<string, unknown>;
+    calls.push({ cmd, args: a });
     switch (cmd) {
-      case 'list_recipes':
-        return [shino];
+      case 'list_records':
+        return a.kind === 'recipe' ? recipes : materials;
+      case 'save_record': {
+        saved += 1;
+        const parent = revisions.get(a.parent as string);
+        const revision = {
+          recordId: parent?.recordId ?? `saved-${saved}`,
+          revisionId: `saved-revision-${saved}`,
+          number: (parent?.number ?? 0) + 1,
+          savedAt: Date.now(),
+          content: a.content
+        };
+        revisions.set(revision.revisionId, revision);
+        return revision;
+      }
+      case 'record_history':
+        return history.filter((r) => r.recordId === a.recordId);
+      case 'back_up':
+        throw { code: 'io', message: 'A file could not be read or written: the disk is full' };
       case 'get_settings':
         return settings;
       case 'last_backup':
         return lastBackup;
-      case 'take_draft':
+      case 'get_draft':
         return draft;
       default:
         return null;
@@ -97,8 +147,26 @@ describe('locking by itself', () => {
     act(() => void window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(onLocked).toHaveBeenCalledWith('idle-with-draft'));
     expect(core.called('lock_with_draft')[0].args.draft).toEqual({
-      revisionId: 'revision-1',
-      content: { ...shino.content, name: 'Shino, more iron' }
+      recipe: { recordId: 'record-1', revisionId: 'revision-1', content: { ...shino.content, name: 'Shino, more iron' } }
+    });
+  });
+
+  it('keeps unsaved changes to a material too', async () => {
+    const core = fakeCore({ materials: [spar], settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0 } });
+    const onLocked = show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Materials' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
+    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Lot 7, March' } });
+
+    vi.setSystemTime(Date.UTC(2026, 9, 14, 9, 10));
+    act(() => void window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(onLocked).toHaveBeenCalledWith('idle-with-draft'));
+    expect(core.called('lock_with_draft')[0].args.draft).toEqual({
+      material: {
+        recordId: 'material-1',
+        revisionId: 'material-revision-1',
+        content: { ...spar.content, notes: 'Lot 7, March' }
+      }
     });
   });
 
@@ -123,13 +191,248 @@ describe('locking by itself', () => {
   });
 });
 
-it('brings a kept draft back after unlocking', async () => {
-  fakeCore({ draft: { revisionId: 'revision-1', content: { ...shino.content, name: 'Shino, kept' } } });
+describe('drafts', () => {
+  it('brings kept changes back after unlocking', async () => {
+    const core = fakeCore({
+      draft: { recipe: { recordId: 'record-1', revisionId: 'revision-1', content: { ...shino.content, name: 'Shino, kept' } } }
+    });
+    show();
+    expect(await screen.findByDisplayValue('Shino, kept')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('unsaved changes to Shino, kept from last time');
+    fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(screen.getByDisplayValue('Shino')).toBeTruthy();
+    await waitFor(() => expect(core.called('clear_draft')).toHaveLength(1));
+  });
+
+  it('says kept changes to a material are there, from the recipes', async () => {
+    fakeCore({
+      materials: [spar],
+      draft: {
+        recipe: { recordId: 'record-1', revisionId: 'revision-1', content: { ...shino.content, name: 'Shino, kept' } },
+        material: { recordId: 'material-1', revisionId: 'material-revision-1', content: { ...spar.content, loi: '1' } }
+      }
+    });
+    show();
+    expect(await screen.findByDisplayValue('Shino, kept')).toBeTruthy();
+    const notice = screen.getByText('Spar, lot 7').closest('.notice') as HTMLElement;
+    expect(notice.textContent).toContain('unsaved changes to Spar, lot 7 from last time');
+    fireEvent.click(within(notice).getByRole('button', { name: 'Show them' }));
+    expect((screen.getByLabelText('Loss on ignition') as HTMLInputElement).value).toBe('1');
+  });
+
+  it('leaves out changes that were saved after they were kept', async () => {
+    const core = fakeCore({
+      draft: { recipe: { recordId: 'record-1', revisionId: 'revision-0', content: shino.content } }
+    });
+    show();
+    await screen.findByRole('button', { name: 'Shino' });
+    expect(screen.queryByText(/from last time/)).toBeNull();
+    expect((screen.getByLabelText('Recipe name') as HTMLInputElement).value).toBe('');
+    await waitFor(() => expect(core.called('clear_draft')).toHaveLength(1));
+  });
+
+  it('keeps unsaved changes a moment after typing, and forgets them once saved', async () => {
+    const core = fakeCore({ recipes: [] });
+    show();
+    await screen.findByText('No recipes yet.');
+    fireEvent.change(screen.getByLabelText('Recipe name'), { target: { value: 'Tenmoku' } });
+    fireEvent.change(screen.getByLabelText('Material 1'), { target: { value: 'Silica' } });
+    expect(core.called('save_draft')).toHaveLength(0);
+    await waitFor(() => expect(core.called('save_draft')).toHaveLength(1), { timeout: DRAFT_DELAY_MS * 3 });
+    expect(core.called('save_draft')[0].args.draft).toEqual({
+      recipe: {
+        recordId: null,
+        revisionId: null,
+        content: { name: 'Tenmoku', lines: [{ material: 'Silica', amount: '' }], notes: '' }
+      }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('clear_draft')).toHaveLength(1));
+    expect(core.called('save_record')[0].args.kind).toBe('recipe');
+  });
+});
+
+describe('your materials', () => {
+  it('are made from a standard material’s analysis and saved', async () => {
+    const core = fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    expect(screen.getByText(/No materials of your own yet/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Start from a standard material'), { target: { value: 'Whiting' } });
+    await user.click(screen.getByRole('button', { name: 'Copy its analysis' }));
+    expect((screen.getByLabelText('Material name') as HTMLInputElement).value).toBe('Whiting');
+    expect((screen.getByLabelText('Percent 1') as HTMLInputElement).value).toBe('56.03');
+    expect(screen.getByTestId('material-total').textContent).toBe('100.00');
+    expect(screen.getByText(/instead of the standard Whiting/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'Whiting, lot 12' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args).toEqual({
+      kind: 'material',
+      parent: null,
+      content: {
+        name: 'Whiting, lot 12',
+        category: 'material',
+        oxides: [{ oxide: 'CaO', percent: '56.03' }],
+        loi: '43.97',
+        notes: ''
+      }
+    });
+    expect(await screen.findByRole('button', { name: 'Whiting, lot 12' })).toBeTruthy();
+  });
+
+  it('are used by recipes', async () => {
+    fakeCore({
+      recipes: [{ ...shino, content: { name: 'Shino', lines: [{ material: 'spar lot 7', amount: '50' }, { material: 'Whiting', amount: '20' }], notes: '' } }],
+      materials: [spar]
+    });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    expect(screen.getByRole('complementary', { name: 'Unity formula' }).textContent).toContain('K₂O');
+    expect(document.querySelector('#materials option[value="Spar, lot 7"]')!.getAttribute('label')).toBe('Your material');
+
+    await user.click(screen.getByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
+    expect(screen.getByRole('complementary', { name: 'Material check' }).textContent).toContain('Used inShino');
+  });
+
+  it('take the kind of the standard material they start from', async () => {
+    fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    fireEvent.change(screen.getByLabelText('Start from a standard material'), { target: { value: 'Chromium Oxide' } });
+    await user.click(screen.getByRole('button', { name: 'Copy its analysis' }));
+    expect((screen.getByLabelText('Kind') as HTMLSelectElement).value).toBe('colorant');
+  });
+
+  it('say when they replace a standard material by another of its names', async () => {
+    fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'Quartz' } });
+    expect(screen.getByRole('complementary', { name: 'Material check' }).textContent).toContain(
+      'instead of the standard Silica, wherever they call it Quartz.'
+    );
+  });
+
+  it('report a loss on ignition that is not a number', async () => {
+    fakeCore({ materials: [spar] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
+    fireEvent.change(screen.getByLabelText('Loss on ignition'), { target: { value: '4.5%' } });
+    expect(screen.getByRole('complementary', { name: 'Material check' }).textContent).toContain(
+      'The loss on ignition of Spar, lot 7 is not a number.'
+    );
+  });
+
+  it('show an earlier revision and make it the newest', async () => {
+    const second = { ...spar, revisionId: 'material-revision-2', number: 2, content: { ...spar.content, loi: '2' } };
+    const core = fakeCore({ materials: [second], history: [second, spar] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
+    await user.click(screen.getByText('Earlier revisions (1)'));
+    await user.click(await screen.findByRole('button', { name: /^Revision 1 ·/ }));
+    expect(core.called('record_history')[0].args).toEqual({ kind: 'material', recordId: 'material-1' });
+    expect((screen.getByLabelText('Loss on ignition') as HTMLInputElement).value).toBe('0');
+
+    await user.click(screen.getByRole('button', { name: 'Use this revision' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args).toMatchObject({
+      kind: 'material',
+      parent: 'material-revision-2',
+      content: { loi: '0' }
+    });
+  });
+
+  it('cannot share a name with another of yours', async () => {
+    const core = fakeCore({ materials: [spar] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'SPAR lot 7' } });
+    fireEvent.change(screen.getByLabelText('Percent 1'), { target: { value: '100' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.getByRole('alert').textContent).toBe('You already have a material called Spar, lot 7.');
+    expect(core.called('save_record')).toHaveLength(0);
+  });
+});
+
+it('shows an earlier revision and makes it the newest', async () => {
+  const third = { ...shino, revisionId: 'revision-3', number: 3, content: { ...shino.content, name: 'Shino 3' } };
+  const first = { ...shino, revisionId: 'revision-1', number: 1, content: { ...shino.content, name: 'Shino 1' } };
+  const second = { ...shino, revisionId: 'revision-2', number: 2, content: { ...shino.content, name: 'Shino 2' } };
+  const core = fakeCore({ recipes: [third], history: [third, second, first] });
   show();
-  expect(await screen.findByDisplayValue('Shino, kept')).toBeTruthy();
-  expect(screen.getByRole('status').textContent).toContain('were not saved when the vault locked');
-  fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
-  expect(screen.getByDisplayValue('Shino')).toBeTruthy();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Shino 3' }));
+  await user.click(screen.getByText('Earlier revisions (2)'));
+  await user.click(await screen.findByRole('button', { name: /^Revision 1 ·/ }));
+  expect(core.called('record_history')[0].args).toEqual({ kind: 'recipe', recordId: 'record-1' });
+  expect(screen.queryByRole('button', { name: /^Revision 3 ·/ })).toBeNull();
+
+  const name = screen.getByLabelText('Recipe name') as HTMLInputElement;
+  expect(name.value).toBe('Shino 1');
+  expect(name.matches(':disabled')).toBe(true);
+  expect(screen.getByText(/This is revision 1 of 3/)).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Use this revision' }));
+  expect(name.value).toBe('Shino 1');
+  expect(name.matches(':disabled')).toBe(false);
+  await user.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+  expect(core.called('save_record')[0].args).toMatchObject({ parent: 'revision-3', content: { name: 'Shino 1' } });
+});
+
+describe('saving on the way', () => {
+  it('reopens the recipe being saved at the revision just saved', async () => {
+    const core = fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    fireEvent.change(screen.getByLabelText('Recipe name'), { target: { value: 'Shino 2' } });
+    await user.click(screen.getByRole('button', { name: 'Shino' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect((screen.getByLabelText('Recipe name') as HTMLInputElement).value).toBe('Shino 2');
+    expect(screen.getByText(/revision 2$/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Recipe name'), { target: { value: 'Shino 3' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(2));
+    expect(core.called('save_record')[1].args.parent).toBe('saved-revision-1');
+  });
+
+  it('uses an earlier revision on top of the edits just saved', async () => {
+    const second = { ...shino, revisionId: 'revision-2', number: 2, content: { ...shino.content, name: 'Shino 2' } };
+    const core = fakeCore({ recipes: [second], history: [second, shino] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino 2' }));
+    fireEvent.change(screen.getByLabelText('Recipe name'), { target: { value: 'Shino, edited' } });
+    await user.click(screen.getByText('Earlier revisions (1)'));
+    await user.click(await screen.findByRole('button', { name: /^Revision 1 ·/ }));
+    await user.click(screen.getByRole('button', { name: 'Use this revision' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args).toMatchObject({ parent: 'revision-2', content: { name: 'Shino, edited' } });
+
+    const name = screen.getByLabelText('Recipe name') as HTMLInputElement;
+    expect(name.value).toBe('Shino');
+    expect(name.matches(':disabled')).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(2));
+    expect(core.called('save_record')[1].args).toMatchObject({ parent: 'saved-revision-1', content: { name: 'Shino' } });
+  });
 });
 
 describe('backup reminder', () => {
@@ -149,6 +452,14 @@ describe('backup reminder', () => {
     show();
     await screen.findByRole('button', { name: 'Shino' });
     expect(screen.queryByText(/last backup was/)).toBeNull();
+  });
+
+  it('says why a backup failed, in the reminder', async () => {
+    fakeCore({ lastBackup: null });
+    show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Back up now…' }));
+    const notice = screen.getByText(/have not been backed up yet/).closest('.notice') as HTMLElement;
+    expect((await within(notice).findByRole('alert')).textContent).toContain('the disk is full');
   });
 
   it('stays quiet when switched off', async () => {
@@ -192,4 +503,21 @@ it('prints a batch sheet scaled to the batch size', async () => {
   const paper = document.querySelector('.paper')!;
   expect(paper.textContent).toContain('Batch sheet: Shino');
   expect(paper.querySelector('.weight')!.textContent).toBe((2.5).toLocaleString(undefined, { minimumFractionDigits: 3 }));
+});
+
+it('offers each export only when there is something to export', async () => {
+  fakeCore({ recipes: [], materials: [spar] });
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  const enabled = (name: string) => !(screen.getByRole('button', { name }) as HTMLButtonElement).disabled;
+  expect(enabled('Export as CSV…')).toBe(false);
+  expect(enabled('Export as JSON…')).toBe(true);
+  expect(enabled('Export materials as CSV…')).toBe(true);
+  cleanup();
+  fakeCore({ materials: [] });
+  show();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  expect(enabled('Export as CSV…')).toBe(true);
+  expect(enabled('Export materials as CSV…')).toBe(false);
 });

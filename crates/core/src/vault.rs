@@ -33,11 +33,29 @@ pub struct Vault {
     collection_key: Key,
 }
 
-/// The newest revision of a recipe. `content` is whatever the UI saved; the core keeps it
-/// encrypted and does not look inside.
+/// What a record is. Each kind keeps its own list; the core does not look inside the content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Recipe,
+    /// A person's own material, colorant or additive.
+    Material,
+}
+
+impl Kind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Kind::Recipe => "recipe",
+            Kind::Material => "material",
+        }
+    }
+}
+
+/// One revision of a record. `content` is whatever the UI saved; the core keeps it encrypted and
+/// does not look inside.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RecipeHead {
+pub struct Revision {
     pub record_id: Uuid,
     pub revision_id: Uuid,
     pub number: i64,
@@ -189,28 +207,33 @@ impl Vault {
         self.set_meta(&format!("settings {}", self.user_id), &serde_json::to_string(settings)?)
     }
 
-    /// Keeps edits that were not saved when the vault locked by itself, encrypted like a recipe,
-    /// until the next unlock. There is one draft per person; a new one replaces the old.
+    /// Keeps edits that are not saved yet, encrypted like a recipe, so they outlast locking,
+    /// closing the app or a crash. There is one draft per person; a new one replaces the old.
     pub fn save_draft(&mut self, draft: &serde_json::Value) -> Result<()> {
         let plaintext = Zeroizing::new(serde_json::to_vec(draft)?);
         if plaintext.len() > MAX_RECORD_BYTES {
             return Err(Error::TooLarge);
         }
         let sealed = crypto::encrypt(&self.collection_key, &plaintext, &self.draft_aad());
-        self.set_meta(&format!("draft {}", self.user_id), &serde_json::to_string(&sealed)?)
+        self.set_meta(&self.draft_name(), &serde_json::to_string(&sealed)?)
     }
 
-    /// The saved draft, if there is one. Taking it deletes it.
-    pub fn take_draft(&mut self) -> Result<Option<serde_json::Value>> {
-        let name = format!("draft {}", self.user_id);
-        let Some(json) = self.meta(&name)? else {
+    /// The kept draft, if there is one.
+    pub fn draft(&self) -> Result<Option<serde_json::Value>> {
+        let Some(json) = self.meta(&self.draft_name())? else {
             return Ok(None);
         };
-        self.conn.execute("DELETE FROM meta WHERE name = ?1", params![name])?;
         let sealed: crypto::Sealed = serde_json::from_str(&json)?;
         let plaintext = crypto::decrypt(&self.collection_key, &sealed, &self.draft_aad())
             .ok_or_else(|| Error::Corrupt("the saved draft does not decrypt".into()))?;
         Ok(Some(serde_json::from_slice(&plaintext)?))
+    }
+
+    /// Forgets the draft, once its edits are saved or discarded.
+    pub fn clear_draft(&mut self) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM meta WHERE name = ?1", params![self.draft_name()])?;
+        Ok(())
     }
 
     /// When the last backup was made, and the name of its file.
@@ -305,9 +328,9 @@ impl Vault {
         Ok((vault, set_aside))
     }
 
-    /// Saves a recipe. With no parent it starts a new recipe; with one, it adds the next revision
+    /// Saves a record. With no parent it starts a new one; with one, it adds the next revision
     /// after it. Revisions are never changed, only added (docs/adr/0005-lan-host-and-replicas.md).
-    pub fn save_recipe(&mut self, parent: Option<Uuid>, content: &serde_json::Value) -> Result<RecipeHead> {
+    pub fn save(&mut self, kind: Kind, parent: Option<Uuid>, content: &serde_json::Value) -> Result<Revision> {
         let plaintext = Zeroizing::new(serde_json::to_vec(content)?);
         if plaintext.len() > MAX_RECORD_BYTES {
             return Err(Error::TooLarge);
@@ -318,8 +341,8 @@ impl Vault {
                 let (record_id, number): (String, i64) = self
                     .conn
                     .query_row(
-                        "SELECT record_id, number FROM revisions WHERE id = ?1 AND kind = 'recipe'",
-                        params![parent_id.to_string()],
+                        "SELECT record_id, number FROM revisions WHERE id = ?1 AND kind = ?2",
+                        params![parent_id.to_string(), kind.as_str()],
                         |row| Ok((row.get(0)?, row.get(1)?)),
                     )
                     .optional()?
@@ -332,7 +355,7 @@ impl Vault {
         let aad = revision_aad(
             &revision_id,
             &record_id,
-            "recipe",
+            kind.as_str(),
             &self.collection_id,
             number,
             parent.as_ref(),
@@ -340,10 +363,11 @@ impl Vault {
         let sealed = crypto::encrypt(&self.collection_key, &plaintext, &aad);
         self.conn.execute(
             "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext)
-             VALUES (?1, ?2, 'recipe', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 revision_id.to_string(),
                 record_id.to_string(),
+                kind.as_str(),
                 parent.map(|id| id.to_string()),
                 number,
                 self.collection_id.to_string(),
@@ -353,7 +377,7 @@ impl Vault {
                 sealed.ciphertext,
             ],
         )?;
-        Ok(RecipeHead {
+        Ok(Revision {
             record_id,
             revision_id,
             number,
@@ -362,16 +386,51 @@ impl Vault {
         })
     }
 
-    /// The newest revision of every recipe, newest first.
-    pub fn recipes(&self) -> Result<Vec<RecipeHead>> {
-        let mut statement = self.conn.prepare(
-            "SELECT r.id, r.record_id, r.parent_id, r.number, r.collection_id, r.created_at, r.nonce, r.ciphertext
-             FROM revisions r
-             WHERE r.kind = 'recipe'
-               AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)
+    /// The newest revision of every record of a kind, newest first.
+    pub fn heads(&self, kind: Kind) -> Result<Vec<Revision>> {
+        let revisions = self.read_revisions(
+            "WHERE r.kind = ?1 AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)
              ORDER BY r.created_at DESC",
+            params![kind.as_str()],
+            kind,
         )?;
-        let rows = statement.query_map([], |row| {
+        // Two heads for one record means a fork from offline editing (ADR 5): show the newest
+        // until forks can be resolved.
+        let mut heads: Vec<Revision> = Vec::new();
+        for revision in revisions {
+            if !heads.iter().any(|head| head.record_id == revision.record_id) {
+                heads.push(revision);
+            }
+        }
+        Ok(heads)
+    }
+
+    /// Every revision of one record, newest first.
+    pub fn history(&self, kind: Kind, record_id: Uuid) -> Result<Vec<Revision>> {
+        let revisions = self.read_revisions(
+            "WHERE r.kind = ?1 AND r.record_id = ?2 ORDER BY r.number DESC, r.created_at DESC",
+            params![kind.as_str(), record_id.to_string()],
+            kind,
+        )?;
+        if revisions.is_empty() {
+            return Err(Error::NotFound);
+        }
+        Ok(revisions)
+    }
+
+    /// Reads and decrypts the revisions that `where_clause` picks, in this vault's collection. The
+    /// clause is fixed SQL, never built from input: values go in `values`.
+    fn read_revisions(
+        &self,
+        where_clause: &'static str,
+        values: impl rusqlite::Params,
+        kind: Kind,
+    ) -> Result<Vec<Revision>> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT r.id, r.record_id, r.parent_id, r.number, r.collection_id, r.created_at, r.nonce, r.ciphertext
+             FROM revisions r {where_clause}"
+        ))?;
+        let rows = statement.query_map(values, |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -383,31 +442,26 @@ impl Vault {
                 row.get::<_, Vec<u8>>(7)?,
             ))
         })?;
-        let mut heads: Vec<RecipeHead> = Vec::new();
+        let mut revisions = Vec::new();
         for row in rows {
             let (id, record_id, parent_id, number, collection_id, saved_at, nonce, ciphertext) = row?;
             let (revision_id, record_id, collection_id) =
                 (parse_id(&id)?, parse_id(&record_id)?, parse_id(&collection_id)?);
             let parent = parent_id.as_deref().map(parse_id).transpose()?;
-            // Two heads for one recipe means a fork from offline editing (ADR 5): show the newest
-            // until forks can be resolved.
-            if heads.iter().any(|head| head.record_id == record_id) {
-                continue;
-            }
             if collection_id != self.collection_id {
                 continue;
             }
             let aad = revision_aad(
                 &revision_id,
                 &record_id,
-                "recipe",
+                kind.as_str(),
                 &collection_id,
                 number,
                 parent.as_ref(),
             );
             let plaintext = crypto::decrypt(&self.collection_key, &crypto::Sealed { nonce, ciphertext }, &aad)
                 .ok_or_else(|| Error::Corrupt(format!("revision {revision_id} does not decrypt")))?;
-            heads.push(RecipeHead {
+            revisions.push(Revision {
                 record_id,
                 revision_id,
                 number,
@@ -415,7 +469,7 @@ impl Vault {
                 content: serde_json::from_slice(&plaintext)?,
             });
         }
-        Ok(heads)
+        Ok(revisions)
     }
 
     fn open(dir: &Path, keyring: Keyring, keys: KeyPair) -> Result<Vault> {
@@ -509,6 +563,10 @@ impl Vault {
             &keyring::database_key_info(&self.keyring.vault_id, &self.user_id),
         )
         .ok_or_else(|| Error::Corrupt("the database key is not sealed to this user".into()))
+    }
+
+    fn draft_name(&self) -> String {
+        format!("draft {}", self.user_id)
     }
 
     fn draft_aad(&self) -> Vec<u8> {
@@ -719,7 +777,9 @@ mod tests {
         assert!(!Vault::exists(dir.path()));
         let (mut vault, recovery) = Vault::create(dir.path(), PASSWORD).unwrap();
         assert_eq!(recovery.words().len(), 24);
-        let saved = vault.save_recipe(None, &json!({ "name": "Leach 4321" })).unwrap();
+        let saved = vault
+            .save(Kind::Recipe, None, &json!({ "name": "Leach 4321" }))
+            .unwrap();
         drop(vault);
 
         assert!(Vault::exists(dir.path()));
@@ -729,7 +789,7 @@ mod tests {
             Err(Error::WrongPassword)
         ));
         let vault = Vault::unlock(dir.path(), PASSWORD).unwrap();
-        let recipes = vault.recipes().unwrap();
+        let recipes = vault.heads(Kind::Recipe).unwrap();
         assert_eq!(recipes.len(), 1);
         assert_eq!(recipes[0].revision_id, saved.revision_id);
         assert_eq!(recipes[0].content["name"], "Leach 4321");
@@ -750,7 +810,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
         vault
-            .save_recipe(
+            .save(
+                Kind::Recipe,
                 None,
                 &json!({ "name": "Secret Celadon", "lines": [{ "material": "Whiting", "amount": 20 }] }),
             )
@@ -769,7 +830,7 @@ mod tests {
     fn recovery_key_resets_the_password() {
         let dir = tempfile::tempdir().unwrap();
         let (mut vault, recovery) = Vault::create(dir.path(), PASSWORD).unwrap();
-        vault.save_recipe(None, &json!({ "name": "Tenmoku" })).unwrap();
+        vault.save(Kind::Recipe, None, &json!({ "name": "Tenmoku" })).unwrap();
         drop(vault);
 
         let words = recovery.words().join(" ");
@@ -784,7 +845,7 @@ mod tests {
         ));
 
         let vault = Vault::recover(dir.path(), &words, "a new password").unwrap();
-        assert_eq!(vault.recipes().unwrap()[0].content["name"], "Tenmoku");
+        assert_eq!(vault.heads(Kind::Recipe).unwrap()[0].content["name"], "Tenmoku");
         drop(vault);
         assert!(matches!(Vault::unlock(dir.path(), PASSWORD), Err(Error::WrongPassword)));
         Vault::unlock(dir.path(), "a new password").unwrap();
@@ -810,20 +871,26 @@ mod tests {
     fn revisions_chain_and_the_newest_is_listed() {
         let dir = tempfile::tempdir().unwrap();
         let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
-        let first = vault.save_recipe(None, &json!({ "name": "Shino", "v": 1 })).unwrap();
+        let first = vault
+            .save(Kind::Recipe, None, &json!({ "name": "Shino", "v": 1 }))
+            .unwrap();
         let second = vault
-            .save_recipe(Some(first.revision_id), &json!({ "name": "Shino", "v": 2 }))
+            .save(
+                Kind::Recipe,
+                Some(first.revision_id),
+                &json!({ "name": "Shino", "v": 2 }),
+            )
             .unwrap();
         assert_eq!(second.record_id, first.record_id);
         assert_eq!(second.number, 2);
-        vault.save_recipe(None, &json!({ "name": "Ash" })).unwrap();
+        vault.save(Kind::Recipe, None, &json!({ "name": "Ash" })).unwrap();
 
-        let recipes = vault.recipes().unwrap();
+        let recipes = vault.heads(Kind::Recipe).unwrap();
         assert_eq!(recipes.len(), 2);
         let shino = recipes.iter().find(|r| r.record_id == first.record_id).unwrap();
         assert_eq!(shino.content["v"], 2);
         assert!(matches!(
-            vault.save_recipe(Some(Uuid::new_v4()), &json!({})),
+            vault.save(Kind::Recipe, Some(Uuid::new_v4()), &json!({})),
             Err(Error::NotFound)
         ));
     }
@@ -832,8 +899,8 @@ mod tests {
     fn moved_ciphertext_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
-        let a = vault.save_recipe(None, &json!({ "name": "A" })).unwrap();
-        let b = vault.save_recipe(None, &json!({ "name": "B" })).unwrap();
+        let a = vault.save(Kind::Recipe, None, &json!({ "name": "A" })).unwrap();
+        let b = vault.save(Kind::Recipe, None, &json!({ "name": "B" })).unwrap();
         // Copy A's ciphertext onto B, as someone editing the database file directly might.
         vault
             .conn
@@ -843,7 +910,7 @@ mod tests {
                 params![a.revision_id.to_string(), b.revision_id.to_string()],
             )
             .unwrap();
-        assert!(matches!(vault.recipes(), Err(Error::Corrupt(_))));
+        assert!(matches!(vault.heads(Kind::Recipe), Err(Error::Corrupt(_))));
     }
 
     #[test]
@@ -873,7 +940,9 @@ mod tests {
             tempfile::tempdir().unwrap(),
         );
         let (mut vault, _) = Vault::create(home.path(), PASSWORD).unwrap();
-        vault.save_recipe(None, &json!({ "name": "Secret Celadon" })).unwrap();
+        vault
+            .save(Kind::Recipe, None, &json!({ "name": "Secret Celadon" }))
+            .unwrap();
         let settings = Settings {
             auto_lock: false,
             auto_lock_minutes: 5,
@@ -897,7 +966,10 @@ mod tests {
         assert!(!target.exists());
         let (restored, set_aside) = Vault::restore(&target, &path, &Credential::Password(PASSWORD)).unwrap();
         assert!(set_aside.is_none());
-        assert_eq!(restored.recipes().unwrap()[0].content["name"], "Secret Celadon");
+        assert_eq!(
+            restored.heads(Kind::Recipe).unwrap()[0].content["name"],
+            "Secret Celadon"
+        );
         assert_eq!(restored.settings().unwrap(), settings);
         drop(restored);
         Vault::unlock(&target, PASSWORD).unwrap();
@@ -907,10 +979,10 @@ mod tests {
     fn restoring_over_a_vault_keeps_the_old_one_aside() {
         let (dir, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (mut vault, recovery) = Vault::create(dir.path(), PASSWORD).unwrap();
-        vault.save_recipe(None, &json!({ "name": "Before" })).unwrap();
+        vault.save(Kind::Recipe, None, &json!({ "name": "Before" })).unwrap();
         let path = files.path().join("b.gvbackup");
         vault.back_up(&path).unwrap();
-        vault.save_recipe(None, &json!({ "name": "After" })).unwrap();
+        vault.save(Kind::Recipe, None, &json!({ "name": "After" })).unwrap();
         vault.change_password(PASSWORD, "changed since").unwrap();
         drop(vault);
 
@@ -922,7 +994,7 @@ mod tests {
         };
         let (restored, set_aside) = Vault::restore(dir.path(), &path, &credential).unwrap();
         let names: Vec<_> = restored
-            .recipes()
+            .heads(Kind::Recipe)
             .unwrap()
             .iter()
             .map(|r| r.content["name"].clone())
@@ -934,14 +1006,14 @@ mod tests {
         let aside = set_aside.unwrap();
         assert!(aside.file_name().unwrap().to_string_lossy().starts_with("replaced-"));
         let old = Vault::unlock(&aside, "changed since").unwrap();
-        assert_eq!(old.recipes().unwrap().len(), 2);
+        assert_eq!(old.heads(Kind::Recipe).unwrap().len(), 2);
     }
 
     #[test]
     fn damaged_backups_and_other_files_are_refused() {
         let (dir, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
-        vault.save_recipe(None, &json!({ "name": "Shino" })).unwrap();
+        vault.save(Kind::Recipe, None, &json!({ "name": "Shino" })).unwrap();
         let path = files.path().join("b.gvbackup");
         vault.back_up(&path).unwrap();
         drop(vault);
@@ -1004,17 +1076,81 @@ mod tests {
     }
 
     #[test]
-    fn a_draft_is_kept_once() {
+    fn a_draft_is_kept_until_cleared() {
         let dir = tempfile::tempdir().unwrap();
         let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
-        assert!(vault.take_draft().unwrap().is_none());
+        assert!(vault.draft().unwrap().is_none());
         vault
             .save_draft(&json!({ "content": { "name": "Half done" } }))
             .unwrap();
         vault.save_draft(&json!({ "content": { "name": "Newer" } })).unwrap();
         drop(vault);
         let mut vault = Vault::unlock(dir.path(), PASSWORD).unwrap();
-        assert_eq!(vault.take_draft().unwrap().unwrap()["content"]["name"], "Newer");
-        assert!(vault.take_draft().unwrap().is_none());
+        assert_eq!(vault.draft().unwrap().unwrap()["content"]["name"], "Newer");
+        assert_eq!(vault.draft().unwrap().unwrap()["content"]["name"], "Newer");
+        vault.clear_draft().unwrap();
+        assert!(vault.draft().unwrap().is_none());
+    }
+
+    #[test]
+    fn kinds_keep_their_own_lists_and_histories() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let recipe = vault.save(Kind::Recipe, None, &json!({ "name": "Shino" })).unwrap();
+        let spar = vault
+            .save(Kind::Material, None, &json!({ "name": "Custer, lot 7" }))
+            .unwrap();
+        let spar2 = vault
+            .save(
+                Kind::Material,
+                Some(spar.revision_id),
+                &json!({ "name": "Custer, lot 8" }),
+            )
+            .unwrap();
+        let spar3 = vault
+            .save(
+                Kind::Material,
+                Some(spar2.revision_id),
+                &json!({ "name": "Custer, lot 9" }),
+            )
+            .unwrap();
+
+        let recipes = vault.heads(Kind::Recipe).unwrap();
+        assert_eq!(recipes.len(), 1);
+        assert_eq!(recipes[0].content["name"], "Shino");
+        let materials = vault.heads(Kind::Material).unwrap();
+        assert_eq!(materials.len(), 1);
+        assert_eq!(materials[0].revision_id, spar3.revision_id);
+
+        let history = vault.history(Kind::Material, spar.record_id).unwrap();
+        let names: Vec<_> = history.iter().map(|r| (r.number, r.content["name"].clone())).collect();
+        assert_eq!(
+            names,
+            [
+                (3, json!("Custer, lot 9")),
+                (2, json!("Custer, lot 8")),
+                (1, json!("Custer, lot 7"))
+            ]
+        );
+        assert_eq!(vault.history(Kind::Recipe, recipe.record_id).unwrap().len(), 1);
+
+        // A record is only found as its own kind, so a recipe cannot continue a material.
+        assert!(matches!(
+            vault.history(Kind::Recipe, spar.record_id),
+            Err(Error::NotFound)
+        ));
+        assert!(matches!(
+            vault.save(Kind::Recipe, Some(spar3.revision_id), &json!({})),
+            Err(Error::NotFound)
+        ));
+    }
+
+    #[test]
+    fn a_revision_cannot_pass_as_another_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        vault.save(Kind::Material, None, &json!({ "name": "Spar" })).unwrap();
+        vault.conn.execute("UPDATE revisions SET kind = 'recipe'", []).unwrap();
+        assert!(matches!(vault.heads(Kind::Recipe), Err(Error::Corrupt(_))));
     }
 }

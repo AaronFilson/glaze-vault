@@ -22,12 +22,15 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Next for one person ([ADR 6](adr/0006-one-person-first.md))
 
-- Custom materials, colorants and additives; a recipe's earlier revisions.
-- Keep unsaved edits as a draft when the window is closed, not only when the vault locks by
-  itself ([ADR 7](adr/0007-backups-locking-updates.md)).
+- Deleting a recipe or material ([ADR 8](adr/0008-materials-history-drafts.md)). Needs a
+  decision first: a tombstone revision hides a record but keeps it (and syncs to replicas), while
+  erasing it removes its history too and must reach every replica and leaves old backups.
+- Comparing two recipes, or two revisions of one.
+- Materials from a chemical formula, not only an analysis.
+- Renaming a material in the recipes that use it, rather than listing them.
 - Bring back a vault set aside by a restore from inside the app; today the user guide explains
   moving its files.
-- Export and import of materials once there are custom ones; importing a JSON export.
+- Importing materials and recipes from a JSON export, or a supplier's CSV.
 
 ## Engineering
 
