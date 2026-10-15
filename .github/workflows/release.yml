@@ -128,6 +128,12 @@ jobs:
         if: runner.os == 'Windows' && env.AZURE_SIGNING == 'yes'
         run: cargo install artifact-signing-cli --locked
 
+      # Bash on Windows finds Git's Perl first, which lacks modules OpenSSL's build needs.
+      - name: Use Strawberry Perl for OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append'
+
       - uses: tauri-apps/tauri-action@v1
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}

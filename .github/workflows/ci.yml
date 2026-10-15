@@ -101,6 +101,12 @@ jobs:
 
       - run: npm ci
 
+      # Bash on Windows finds Git's Perl first, which lacks modules OpenSSL's build needs.
+      - name: Use Strawberry Perl for OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append'
+
       # On failure, the end of the output also goes into an annotation, which can be read without
       # signing in to GitHub (logs cannot).
       - name: Build installers
