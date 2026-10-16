@@ -26,7 +26,7 @@ another file (`ui/devTools.ts`), for working on the app without seeing it.
   dialog chooses, so backups, restores, imports and exports run with no dialog shown.
 - **One vault, in order:** the scenarios go from setting up a vault to recovering it, each
   starting where the one before left off, as a person's first weeks would. The run stops at the
-  first failure. Starting a vault once keeps the whole run to about 20 seconds after the build.
+  first failure. Starting a vault once keeps the whole run to about 30 seconds after the build.
 - **CI runs them on macOS, Windows and Linux** (Linux under Xvfb), after the other checks.
 
 ## Consequences

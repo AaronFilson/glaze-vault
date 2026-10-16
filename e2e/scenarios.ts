@@ -16,6 +16,7 @@ export interface Vault {
 }
 
 const PASSWORD = 'kiln shelf wadding';
+const CHANGED_PASSWORD = 'glaze kiln wedge';
 const NEW_PASSWORD = 'bisque cone nine';
 
 const quote = (text: string) => JSON.stringify(text);
@@ -30,6 +31,23 @@ function recipeLines(lines: [string, string][]): string[] {
   ]);
 }
 
+/** Reads the recovery words off the sheet on screen, and types back the ones the check asks for. */
+async function newRecoveryKey(app: App, sheet: string): Promise<string[]> {
+  const words = [...sheet.matchAll(/^ *- (\d+) ([a-z]+)$/gm)].map((match) => match[2]);
+  if (words.length !== 24) throw new Error(`Expected 24 recovery words:\n\n${sheet}`);
+  const check = await app.run(
+    'check /^I have printed or written down/',
+    'click "Continue"',
+    'expect "Check your recovery key"'
+  );
+  const asked = [...check.matchAll(/\[textbox "Word (\d+)"/g)].map((match) => Number(match[1]));
+  if (asked.length !== 3) throw new Error(`Expected three words to check:\n\n${check}`);
+  // "Open my vault" when setting up, "Done" for a new key from Settings.
+  const finish = /\[button "(Open my vault|Done)"/.exec(check)?.[1] ?? 'Open my vault';
+  await app.run(...asked.map((n) => `type "Word ${n}" ${quote(words[n - 1])}`), `click ${quote(finish)}`);
+  return words;
+}
+
 const unlock = (password: string) => [
   'expect "Unlock your vault" 5000',
   `type "Password" ${quote(password)}`,
@@ -41,7 +59,7 @@ export const scenarios: Scenario[] = [
   {
     name: 'Set up a vault and check the recovery key',
     async run(app, vault) {
-      let screen = await app.run(
+      const screen = await app.run(
         'expect "Set up your vault" 30000',
         `type "Password" ${quote(PASSWORD)}`,
         `type "Type it again" ${quote(PASSWORD)}`,
@@ -49,21 +67,8 @@ export const scenarios: Scenario[] = [
         'expect "Your recovery key" 30000'
       );
       vault.password = PASSWORD;
-      vault.recoveryWords = [...screen.matchAll(/^ *- (\d+) ([a-z]+)$/gm)].map((match) => match[2]);
-      if (vault.recoveryWords.length !== 24) throw new Error(`Expected 24 recovery words:\n\n${screen}`);
-
-      screen = await app.run(
-        'check /^I have printed or written down/',
-        'click "Continue"',
-        'expect "Check your recovery key"'
-      );
-      const asked = [...screen.matchAll(/\[textbox "Word (\d+)"/g)].map((match) => Number(match[1]));
-      if (asked.length !== 3) throw new Error(`Expected three words to check:\n\n${screen}`);
-      await app.run(
-        ...asked.map((n) => `type "Word ${n}" ${quote(vault.recoveryWords[n - 1])}`),
-        'click "Open my vault"',
-        'expect "No recipes yet." 10000'
-      );
+      vault.recoveryWords = await newRecoveryKey(app, screen);
+      await app.run('expect "No recipes yet." 10000');
     }
   },
   {
@@ -321,6 +326,54 @@ export const scenarios: Scenario[] = [
         'click "Switch vaults" in "Switch vaults"',
         ...unlock(vault.password),
         'expect "After the backup" 5000'
+      );
+    }
+  },
+  {
+    name: 'Change the password in Settings',
+    async run(app, vault) {
+      await app.run(
+        'click "Settings"',
+        'type "Current password" "not the password"',
+        `type "New password" ${quote(CHANGED_PASSWORD)}`,
+        `type "Type it again" ${quote(CHANGED_PASSWORD)}`,
+        'click "Change password"',
+        'expect "That password is not right." 30000',
+        `type "Current password" ${quote(vault.password)}`,
+        `type "New password" ${quote(CHANGED_PASSWORD)}`,
+        `type "Type it again" ${quote(CHANGED_PASSWORD)}`,
+        'click "Change password"',
+        'expect "Password changed. Your recovery key has not changed." 30000',
+        'click "Lock"',
+        ...unlock(CHANGED_PASSWORD)
+      );
+      vault.password = CHANGED_PASSWORD;
+    }
+  },
+  {
+    name: 'Make a new recovery key, and the old one stops working',
+    async run(app, vault) {
+      const oldWords = vault.recoveryWords;
+      vault.recoveryWords = await newRecoveryKey(
+        app,
+        await app.run(
+          'click "Settings"',
+          `type "Password" ${quote(vault.password)}`,
+          'click "Make a new recovery key"',
+          'expect "Your recovery key" 30000'
+        )
+      );
+      if (vault.recoveryWords.join() === oldWords.join()) throw new Error('The recovery key did not change');
+      await app.run(
+        'click "Lock"',
+        'click "Forgot your password?"',
+        `type "Recovery words" ${quote(oldWords.join(' '))}`,
+        `type "New password" ${quote(NEW_PASSWORD)}`,
+        `type "Type it again" ${quote(NEW_PASSWORD)}`,
+        'click "Set password and unlock"',
+        'expect "That recovery key is not right." 30000',
+        'click "Back"',
+        ...unlock(vault.password)
       );
     }
   },

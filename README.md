@@ -67,8 +67,9 @@ text, so use them with a throwaway vault. Passwords and recovery words are left 
 
 The end-to-end tests work the same way: `npm run e2e` opens the development app with a new vault
 in a temporary folder and goes from setting it up to recovering it, through recipes, materials,
-comparing, deleting, importing, exporting, backups and restoring
-([ADR 11](docs/adr/0011-end-to-end-tests.md)). Scenarios are in `e2e/scenarios.ts`.
+comparing, deleting, importing, exporting, backups and restoring, and changing the password and
+the recovery key ([ADR 11](docs/adr/0011-end-to-end-tests.md)). Scenarios are in
+`e2e/scenarios.ts`. `E2E_VERBOSE=1` prints what each command did, and how long the slow ones took.
 
 ## Scripts
 

@@ -5,6 +5,10 @@ import { existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSyn
 import { join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..');
+/** How long each command waits for what it looks for. */
+const WAIT_MS = Number(process.env.E2E_WAIT_MS) || 10_000;
+/** E2E_VERBOSE=1 prints what each command did, and how long the slow ones took. */
+const VERBOSE = !!process.env.E2E_VERBOSE;
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** A script the app could not finish, with the screen as it was. */
@@ -82,7 +86,10 @@ export class App {
   async run(...lines: string[]): Promise<string> {
     const before = lastScript(this.screen())[0];
     const problemsBefore = problems(this.screen()).length;
-    writeFileSync(this.driveFile + '.tmp', lines.join('\n') + '\n');
+    // Saving and unlocking take longer in a development build on a busy machine than the driver
+    // waits by itself.
+    const script = [`timeout ${WAIT_MS}`, ...lines];
+    writeFileSync(this.driveFile + '.tmp', script.join('\n') + '\n');
     renameSync(this.driveFile + '.tmp', this.driveFile);
     let screen = '';
     await this.until(
@@ -94,6 +101,7 @@ export class App {
       120_000,
       'The script did not finish'
     );
+    if (VERBOSE) console.log(lastScript(screen).map((line) => '        ' + line).join('\n'));
     if (lastScript(screen).some((line) => line.startsWith('FAIL'))) throw new ScriptFailed(screen);
     const found = problems(screen);
     if (found.length > problemsBefore) throw new ScriptFailed(`The page reported a problem.\n\n${screen}`);

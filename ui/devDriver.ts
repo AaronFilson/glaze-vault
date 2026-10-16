@@ -8,7 +8,8 @@
 // One command a line; names are as the screen file shows them, in quotes:
 //
 //     click "Save"                       a button, link, checkbox, summary or list entry
-//     click "Save" in "alertdialog"      only inside a group: its kind or label in the screen file
+//     click "Save" in "alertdialog"      only inside a group: its kind or label in the screen file,
+//                                        or a fieldset's legend
 //     click "Save" #2                    the second of several with that name
 //     type "Recipe name" "Shino"         replaces a field's text
 //     select "Kind" "Frit"               chooses an option by its text
@@ -18,6 +19,7 @@
 //     expect "Saved"                     waits for text anywhere in the screen file, or fails
 //     expect not "Unsaved" 5000          waits for it to go; a number of milliseconds waits longer
 //     wait 500                           milliseconds
+//     timeout 10000                      how long the commands after it wait, in milliseconds
 //     # a comment
 //
 // A name in slashes, such as /^Revision 1/, is a regular expression. Each command waits up to
@@ -28,6 +30,8 @@ import { describeScreen, hidden, nameOf, squash } from './devScreen';
 
 const CONTROLS = 'button, a[href], input, select, textarea, summary';
 const FIND_FOR_MS = 2000;
+/** How long commands wait for their element or text: FIND_FOR_MS, unless a script says. */
+let waitFor = FIND_FOR_MS;
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -62,12 +66,14 @@ function visible(element: Element): boolean {
   return true;
 }
 
-/** Groups as the screen file titles them: [alertdialog], [nav "Recipes"]. */
+/** Groups as the screen file titles them: [alertdialog], [nav "Recipes"]; and a fieldset by its
+ * legend, the line under [fieldset]. */
 function groupMatches(element: Element, test: (text: string) => boolean): boolean {
   const label = element.getAttribute('aria-label');
   const role = element.getAttribute('role');
   const kind = role ?? element.tagName.toLowerCase();
-  return test(kind) || (!!label && test(label));
+  const legend = element.tagName === 'FIELDSET' ? element.querySelector(':scope > legend')?.textContent : null;
+  return test(kind) || (!!label && test(label)) || (!!legend && test(squash(legend)));
 }
 
 function candidates(name: string, scope: string | undefined): HTMLElement[] {
@@ -91,7 +97,7 @@ async function find(args: string[]): Promise<HTMLElement> {
   const scopeAt = args.indexOf('in');
   const scope = scopeAt > 0 ? args[scopeAt + 1] : undefined;
   const nth = args.find((arg) => /^#\d+$/.test(arg));
-  const deadline = Date.now() + FIND_FOR_MS;
+  const deadline = Date.now() + waitFor;
   for (;;) {
     const found = candidates(name, scope);
     if (nth) {
@@ -136,7 +142,7 @@ async function expectText(args: string[]) {
   const regex = /^\/(.+)\/([a-z]*)$/.exec(what);
   const pattern = regex ? new RegExp(regex[1], regex[2]) : null;
   const wanted = unquote(what);
-  const deadline = Date.now() + (Number(ms) || FIND_FOR_MS);
+  const deadline = Date.now() + (Number(ms) || waitFor);
   for (;;) {
     const screen = describeScreen(document.body);
     const found = pattern ? pattern.test(screen) : screen.includes(wanted);
@@ -197,6 +203,12 @@ async function run(line: string): Promise<void> {
     }
     case 'expect':
       return expectText(args);
+    case 'timeout': {
+      const ms = Number(args[0]);
+      if (!(ms > 0)) throw new Error('Say how many milliseconds.');
+      waitFor = ms;
+      return;
+    }
     case 'wait':
       await pause(Number(args[0]) || 0);
       return;
@@ -208,12 +220,16 @@ async function run(line: string): Promise<void> {
 /** Runs a script line by line, stopping at the first failure. Returns what each line did. */
 export async function runScript(script: string): Promise<string[]> {
   const report: string[] = [];
+  waitFor = FIND_FOR_MS;
   const lines = script.split(/\r?\n/).map((line) => line.trim());
   for (const [index, line] of lines.entries()) {
     if (!line || line.startsWith('#')) continue;
     try {
+      const started = Date.now();
       await run(line);
-      report.push(`ok   ${line}`);
+      // Slow commands say how long they took, to find what makes a script slow.
+      const took = Date.now() - started;
+      report.push(`ok   ${line}${took > 1000 && !line.startsWith('wait') ? ` (${(took / 1000).toFixed(1)}s)` : ''}`);
       // Lets React render before the next command looks.
       await pause(50);
     } catch (e) {
