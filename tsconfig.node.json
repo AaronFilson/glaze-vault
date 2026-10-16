@@ -8,9 +8,12 @@
     "types": [
       "node"
     ],
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
   },
   "include": [
-    "vite.config.ts"
+    "vite.config.ts",
+    "e2e"
   ]
 }

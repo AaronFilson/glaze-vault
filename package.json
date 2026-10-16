@@ -13,6 +13,7 @@
     "build:ui": "npm run typecheck && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json",
     "test": "vitest run",
+    "e2e": "node e2e/run.ts",
     "test:core": "cargo test --workspace",
     "test:all": "npm test && npm run typecheck && npm run test:core",
     "tauri": "tauri"

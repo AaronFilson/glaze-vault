@@ -32,7 +32,8 @@ Work decided on but not done yet, with the reason it waits.
 - Nobody has run the app on Windows or Linux yet: try the installers from a CI run's
   artifacts. The first real release also tests the updater end to end.
 - Stream backups instead of holding the database in memory, before vaults hold attachments.
-- End-to-end tests. `tauri-driver` (WebDriver) runs on Windows and Linux but not macOS, so they
-  would run in CI on those two.
+- End-to-end tests of a release build ([ADR 11](adr/0011-end-to-end-tests.md) tests the
+  development app): before the first release, a check that each installer opens and unlocks a
+  vault.
 - Sign each revision with its author's key ([ADR 4](adr/0004-roles-and-collections.md)), before
   there is more than one author.

@@ -18,6 +18,8 @@ import { describeScreen, squash } from './devScreen';
 
 const problems: string[] = [];
 let driven: string[] = [];
+/** Scripts run since the page loaded, so one finishing can be told from the one before. */
+let scriptsRun = 0;
 /** Whether the core says to show passwords and recovery words too: GLAZE_VAULT_SHOW_SECRETS. */
 let secrets = false;
 
@@ -104,10 +106,10 @@ function takeScripts(onDone: () => void) {
       return; // No GLAZE_VAULT_DRIVE, or not in Tauri: stop asking.
     }
     if (script !== null) {
-      const started = new Date().toLocaleTimeString();
-      driven = [`started ${started}, running…`];
+      const started = `script ${++scriptsRun}, started ${new Date().toLocaleTimeString()}`;
+      driven = [`${started}, running…`];
       onDone();
-      driven = [`started ${started}, done ${new Date().toLocaleTimeString()}`, ...(await runScript(script))];
+      driven = [`${started}, done ${new Date().toLocaleTimeString()}`, ...(await runScript(script))];
       onDone();
     }
     setTimeout(poll, 300);

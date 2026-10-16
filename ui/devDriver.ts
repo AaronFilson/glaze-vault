@@ -15,13 +15,16 @@
 //     check "Show password" / uncheck "Show password"
 //     press "Enter"                      a key, to the focused element; Enter submits its form
 //     pick "/tmp/recipes.glz"            the file the next open or save dialog chooses, unasked
+//     expect "Saved"                     waits for text anywhere in the screen file, or fails
+//     expect not "Unsaved" 5000          waits for it to go; a number of milliseconds waits longer
 //     wait 500                           milliseconds
 //     # a comment
 //
 // A name in slashes, such as /^Revision 1/, is a regular expression. Each command waits up to
-// two seconds for its element, so one can follow a click that changes the screen.
+// two seconds for its element, so one can follow a click that changes the screen. Expect matches
+// part of the screen file's text (devScreen.ts), passwords and recovery words left out.
 import { invoke } from '@tauri-apps/api/core';
-import { hidden, nameOf, squash } from './devScreen';
+import { describeScreen, hidden, nameOf, squash } from './devScreen';
 
 const CONTROLS = 'button, a[href], input, select, textarea, summary';
 const FIND_FOR_MS = 2000;
@@ -125,6 +128,24 @@ function disabled(element: HTMLElement) {
   if (element.matches(':disabled')) throw new Error(`${nameOf(element)} is disabled.`);
 }
 
+/** Waits for text on screen, or for it to go. Quoted text matches any part of the screen. */
+async function expectText(args: string[]) {
+  const absent = args[0] === 'not';
+  const [what, ms] = absent ? args.slice(1) : args;
+  if (!what) throw new Error('Say what text, in quotes.');
+  const regex = /^\/(.+)\/([a-z]*)$/.exec(what);
+  const pattern = regex ? new RegExp(regex[1], regex[2]) : null;
+  const wanted = unquote(what);
+  const deadline = Date.now() + (Number(ms) || FIND_FOR_MS);
+  for (;;) {
+    const screen = describeScreen(document.body);
+    const found = pattern ? pattern.test(screen) : screen.includes(wanted);
+    if (found !== absent) return;
+    if (Date.now() > deadline) throw new Error(absent ? `${what} is still on screen.` : `${what} is not on screen.`);
+    await pause(100);
+  }
+}
+
 async function run(line: string): Promise<void> {
   const [command, ...args] = words(line);
   switch (command) {
@@ -174,6 +195,8 @@ async function run(line: string): Promise<void> {
       await invoke('dev_pick', { path: unquote(args[0]) });
       return;
     }
+    case 'expect':
+      return expectText(args);
     case 'wait':
       await pause(Number(args[0]) || 0);
       return;
