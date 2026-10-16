@@ -21,6 +21,8 @@ export interface Imported {
 }
 
 const COPY = ' (imported)';
+/** Records saved at once; the progress shows after each batch. */
+const BATCH = 50;
 
 /** A file's recipes and materials, to choose from and import. */
 export function Import({
@@ -83,22 +85,36 @@ export function Import({
       into: Revision<Content>[]
     ) => {
       const names = heads.map((h) => h.content.name);
+      const revisions: [string | null, Content][] = [];
       for (const [i, item] of items.entries()) {
         const choice = choices[i];
         if (choice === 'skip') continue;
         const clash = clashOf(heads, item.name);
-        try {
-          if (choice === 'revision' && clash) {
-            into.push(await api.saveRecord(kind, clash.revisionId, { ...item, name: clash.content.name }));
-          } else {
-            const name = choice === 'copy' ? freeName(item.name, names) : item.name;
-            names.push(name);
-            into.push(await api.saveRecord(kind, null, { ...item, name }));
-          }
-        } catch (e) {
-          failed.push(`${item.name || 'Untitled'}: ${errorText(e)}`);
+        if (choice === 'revision' && clash) {
+          revisions.push([clash.revisionId, { ...item, name: clash.content.name }]);
+        } else {
+          const name = choice === 'copy' ? freeName(item.name, names) : item.name;
+          names.push(name);
+          revisions.push([null, { ...item, name }]);
         }
-        setProgress({ done: ++done, of: total });
+      }
+      // A batch at a time, each written to disk once. A batch that fails is tried one by one, to
+      // save the rest and say which could not be saved.
+      for (let at = 0; at < revisions.length; at += BATCH) {
+        const batch = revisions.slice(at, at + BATCH);
+        try {
+          into.push(...(await api.saveRecords(kind, batch)));
+        } catch {
+          for (const [parent, content] of batch) {
+            try {
+              into.push(await api.saveRecord(kind, parent, content));
+            } catch (e) {
+              failed.push(`${content.name || 'Untitled'}: ${errorText(e)}`);
+            }
+          }
+        }
+        done += batch.length;
+        setProgress({ done, of: total });
       }
     };
     await save('material', plan.materials, materialChoices, materials, saved.materials);

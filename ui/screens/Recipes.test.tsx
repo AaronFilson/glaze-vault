@@ -37,6 +37,10 @@ const spar: MaterialHead = {
   }
 };
 
+/** A record the fake core refuses to save. */
+const TOO_LARGE = 'Too large';
+const TOO_LARGE_ERROR = { code: 'too-large', message: 'That is too large to save.' };
+
 /** Pretends to be the Rust commands, and records what was called. */
 function fakeCore({
   settings = { autoLock: true, autoLockMinutes: 15, backupReminderDays: 30 },
@@ -64,24 +68,32 @@ function fakeCore({
     [...recipes, ...materials, ...history].map((r) => [r.revisionId, r])
   );
   let saved = 0;
+  const save = (parentId: string | null, content: { name?: string }) => {
+    if (content.name === TOO_LARGE) throw TOO_LARGE_ERROR;
+    saved += 1;
+    const parent = revisions.get(parentId as string);
+    const revision = {
+      recordId: parent?.recordId ?? `saved-${saved}`,
+      revisionId: `saved-revision-${saved}`,
+      number: (parent?.number ?? 0) + 1,
+      savedAt: Date.now(),
+      content
+    };
+    revisions.set(revision.revisionId, revision);
+    return revision;
+  };
   mockIPC((cmd, args) => {
     const a = (args ?? {}) as Record<string, unknown>;
     calls.push({ cmd, args: a });
     switch (cmd) {
       case 'list_records':
         return a.kind === 'recipe' ? recipes : materials;
-      case 'save_record': {
-        saved += 1;
-        const parent = revisions.get(a.parent as string);
-        const revision = {
-          recordId: parent?.recordId ?? `saved-${saved}`,
-          revisionId: `saved-revision-${saved}`,
-          number: (parent?.number ?? 0) + 1,
-          savedAt: Date.now(),
-          content: a.content
-        };
-        revisions.set(revision.revisionId, revision);
-        return revision;
+      case 'save_record':
+        return save(a.parent as string | null, a.content as { name?: string });
+      case 'save_records': {
+        const batch = a.revisions as [string | null, { name?: string }][];
+        if (batch.some(([, content]) => content.name === TOO_LARGE)) throw TOO_LARGE_ERROR;
+        return batch.map(([parent, content]) => save(parent, content));
       }
       case 'deleted_records':
         return deleted.filter((r) => (a.kind === 'recipe') === 'lines' in r.content);
@@ -739,8 +751,8 @@ it('imports what was chosen from a file, skipping names already in use unless to
   const shinoChoice = screen.getByLabelText('What to do with Shino') as HTMLSelectElement;
   expect(shinoChoice.value).toBe('skip');
   await user.click(screen.getByRole('button', { name: 'Import 1 recipe and 0 materials' }));
-  await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
-  expect(core.called('save_record')[0].args).toMatchObject({ kind: 'recipe', parent: null, content: { name: 'Tenmoku' } });
+  await waitFor(() => expect(core.called('save_records')).toHaveLength(1));
+  expect(core.called('save_records')[0].args).toMatchObject({ kind: 'recipe', revisions: [[null, { name: 'Tenmoku' }]] });
   expect(await screen.findByText(/1 recipe and 0 materials imported from Highfire.glz/)).toBeTruthy();
   await user.click(screen.getByRole('button', { name: 'Done' }));
 
@@ -748,9 +760,31 @@ it('imports what was chosen from a file, skipping names already in use unless to
   await user.selectOptions(await screen.findByLabelText('What to do with Shino'), 'revision');
   await user.selectOptions(screen.getByLabelText('What to do with Tenmoku'), 'copy');
   await user.click(screen.getByRole('button', { name: 'Import 2 recipes and 0 materials' }));
-  await waitFor(() => expect(core.called('save_record')).toHaveLength(3));
-  expect(core.called('save_record')[1].args).toMatchObject({ parent: 'revision-1', content: { name: 'Shino' } });
-  expect(core.called('save_record')[2].args).toMatchObject({ parent: null, content: { name: 'Tenmoku (imported)' } });
+  await waitFor(() => expect(core.called('save_records')).toHaveLength(2));
+  expect(core.called('save_records')[1].args).toMatchObject({
+    revisions: [
+      ['revision-1', { name: 'Shino' }],
+      [null, { name: 'Tenmoku (imported)' }]
+    ]
+  });
+});
+
+it('saves the rest of a batch that fails, and says which could not be saved', async () => {
+  const contents = ['filetype = GlazeChem Glazes', 'name = Celadon', 'name = Too large', 'name = Ash'].join('\n');
+  const core = fakeCore({ recipes: [], importFile: { fileName: 'Big.glz', contents } });
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
+  await user.click(await screen.findByRole('button', { name: 'Import 3 recipes and 0 materials' }));
+  expect(await screen.findByText(/2 recipes and 0 materials imported from Big.glz/)).toBeTruthy();
+  expect(screen.getByText('Too large: That is too large to save.')).toBeTruthy();
+  expect(core.called('save_records')).toHaveLength(1);
+  expect(core.called('save_record').map((call) => (call.args.content as { name: string }).name)).toEqual([
+    'Celadon',
+    'Too large',
+    'Ash'
+  ]);
 });
 
 it('says why a file cannot be imported', async () => {

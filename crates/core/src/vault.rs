@@ -20,6 +20,8 @@ use zeroize::Zeroizing;
 
 pub const MIN_PASSWORD_CHARS: usize = 8;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
+/// The most revisions [`Vault::save_all`] takes at once.
+const MAX_BATCH: usize = 1000;
 const KEYRING_FILE: &str = "vault.keys";
 const DATABASE_FILE: &str = "vault.db";
 
@@ -382,6 +384,24 @@ impl Vault {
     /// Saving after a revision that deletes a record restores it.
     pub fn save(&mut self, kind: Kind, parent: Option<Uuid>, content: &serde_json::Value) -> Result<Revision> {
         self.add_revision(kind, parent, content, false)
+    }
+
+    /// Saves several revisions at once, all or none: an import's hundreds of records in one
+    /// write to disk rather than one each. Each is `(parent, content)` as for [`Vault::save`].
+    pub fn save_all(&mut self, kind: Kind, revisions: &[(Option<Uuid>, serde_json::Value)]) -> Result<Vec<Revision>> {
+        if revisions.len() > MAX_BATCH {
+            return Err(Error::TooLarge);
+        }
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let saved = revisions
+            .iter()
+            .map(|(parent, content)| self.add_revision(kind, *parent, content, false))
+            .collect::<Result<Vec<_>>>()
+            .and_then(|saved| Ok(self.conn.execute_batch("COMMIT").map(|()| saved)?));
+        if saved.is_err() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        saved
     }
 
     /// Deletes a record by adding a revision after its newest that says so, with the same content.
@@ -1325,6 +1345,52 @@ mod tests {
         vault.save(Kind::Material, None, &json!({ "name": "Spar" })).unwrap();
         vault.conn.execute("UPDATE revisions SET kind = 'recipe'", []).unwrap();
         assert!(matches!(vault.heads(Kind::Recipe), Err(Error::Corrupt(_))));
+    }
+
+    #[test]
+    fn saving_many_at_once_saves_all_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let first = vault.save(Kind::Material, None, &json!({ "name": "Spar" })).unwrap();
+        let saved = vault
+            .save_all(
+                Kind::Material,
+                &[
+                    (None, json!({ "name": "Frit" })),
+                    (Some(first.revision_id), json!({ "name": "Spar, lot 2" })),
+                ],
+            )
+            .unwrap();
+        assert_eq!(saved[1].record_id, first.record_id);
+        assert_eq!(saved[1].number, 2);
+        assert_eq!(vault.heads(Kind::Material).unwrap().len(), 2);
+
+        // One that cannot be saved, here a parent that is not there, leaves out the rest too.
+        let error = vault
+            .save_all(
+                Kind::Material,
+                &[(None, json!({ "name": "Whiting" })), (Some(Uuid::new_v4()), json!({}))],
+            )
+            .unwrap_err();
+        assert!(matches!(error, Error::NotFound));
+        let names: Vec<_> = vault
+            .heads(Kind::Material)
+            .unwrap()
+            .iter()
+            .map(|r| r.content["name"].clone())
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert!(!names.contains(&json!("Whiting")));
+        drop(vault);
+        // And what was saved is still there after reopening.
+        assert_eq!(
+            Vault::unlock(dir.path(), PASSWORD)
+                .unwrap()
+                .heads(Kind::Material)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

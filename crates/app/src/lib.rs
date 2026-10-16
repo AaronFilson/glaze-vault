@@ -146,6 +146,16 @@ fn save_record(
     with_vault(&state, |vault| vault.save(kind, parent, &content))
 }
 
+/// Saves several revisions at once, all or none: for imports.
+#[tauri::command(async)]
+fn save_records(
+    state: State<AppState>,
+    kind: Kind,
+    revisions: Vec<(Option<Uuid>, serde_json::Value)>,
+) -> CommandResult<Vec<Revision>> {
+    with_vault(&state, |vault| vault.save_all(kind, &revisions))
+}
+
 #[tauri::command(async)]
 fn record_history(state: State<AppState>, kind: Kind, record_id: Uuid) -> CommandResult<Vec<Revision>> {
     with_vault(&state, |vault| vault.history(kind, record_id))
@@ -628,6 +638,7 @@ pub fn run() {
             new_recovery_key,
             list_records,
             save_record,
+            save_records,
             record_history,
             delete_record,
             deleted_records,

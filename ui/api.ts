@@ -100,6 +100,9 @@ export const api = {
     invoke<MaterialHead>('save_record', { kind: 'material', parent, content }),
   saveRecord: <Content>(kind: Kind, parent: string | null, content: Content) =>
     invoke<Revision<Content>>('save_record', { kind, parent, content }),
+  /** Saves several revisions at once, all or none: `[parent, content]` each, as for saveRecord. */
+  saveRecords: <Content>(kind: Kind, revisions: [string | null, Content][]) =>
+    invoke<Revision<Content>[]>('save_records', { kind, revisions }),
   /** Every revision of a record, newest first. */
   history: <Content>(kind: Kind, recordId: string) =>
     invoke<Revision<Content>[]>('record_history', { kind, recordId }),
