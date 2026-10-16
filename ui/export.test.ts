@@ -88,11 +88,33 @@ describe('exportJson', () => {
 describe('exportMaterialsCsv', () => {
   it('writes a row per oxide, then the loss on ignition', () => {
     expect(exportMaterialsCsv([spar]).slice(1).split('\r\n')).toEqual([
-      'Material,Kind,Oxide,Percent,Notes,Revision,Saved',
-      '"Custer, lot 7",Raw material,SiO2,68.5,"Data sheet, March",2,2026-10-14T12:00:00.000Z',
-      '"Custer, lot 7",,K2O,10,,,',
-      '"Custer, lot 7",,LOI,0.3,,,',
+      'Material,Kind,Oxide,Percent,Moles,Notes,Revision,Saved',
+      '"Custer, lot 7",Raw material,SiO2,68.5,,"Data sheet, March",2,2026-10-14T12:00:00.000Z',
+      '"Custer, lot 7",,K2O,10,,,,',
+      '"Custer, lot 7",,LOI,0.3,,,,',
       ''
+    ]);
+  });
+
+  it('writes a formula as moles', () => {
+    const kaolin: MaterialHead = {
+      ...spar,
+      content: {
+        ...spar.content,
+        name: 'Kaolin, theory',
+        basis: 'formula',
+        formula: [
+          { oxide: 'Al2O3', moles: '1' },
+          { oxide: 'SiO2', moles: '2' },
+          { oxide: 'H2O', moles: '2' }
+        ],
+        notes: ''
+      }
+    };
+    expect(exportMaterialsCsv([kaolin]).slice(1).split('\r\n').slice(1, 4)).toEqual([
+      '"Kaolin, theory",Raw material,Al2O3,,1,,2,2026-10-14T12:00:00.000Z',
+      '"Kaolin, theory",,SiO2,,2,,,',
+      '"Kaolin, theory",,H2O,,2,,,'
     ]);
   });
 });

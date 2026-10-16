@@ -38,8 +38,22 @@ export function useEditor<Content>(empty: Content, same: (a: Content, b: Content
       return { current: newest, draft: newest?.content ?? empty, viewing: null };
     });
 
+  /** Shows a revision with nothing open to edit, such as a deleted record's. */
+  const look = (revision: Revision<Content>) => setState({ current: null, draft: empty, viewing: revision });
+
   /** Puts content in the editor as unsaved edits to the current revision, such as an earlier one's. */
   const edit = (content: Content) => setState((prev) => ({ ...prev, draft: content, viewing: null }));
+
+  /**
+   * Moves the editor on to a newer revision of its record saved elsewhere, such as a recipe that
+   * a material's new name was put in. Unsaved edits stay, with `update` applied to them too.
+   */
+  const rebase = (revision: Revision<Content>, update: (content: Content) => Content) =>
+    setState((prev) => {
+      if (prev.current?.recordId !== revision.recordId) return prev;
+      const edited = !same(prev.draft, prev.current.content);
+      return { ...prev, current: revision, draft: edited ? update(prev.draft) : revision.content };
+    });
 
   /** Drops the unsaved edits. */
   const discard = () => setState((prev) => ({ ...prev, draft: prev.current?.content ?? empty, viewing: null }));
@@ -52,7 +66,7 @@ export function useEditor<Content>(empty: Content, same: (a: Content, b: Content
     ? { recordId: current?.recordId ?? null, revisionId: current?.revisionId ?? null, content: draft }
     : undefined;
 
-  return { current, draft, setDraft, changed, viewing, setViewing, show, open, edit, discard, part };
+  return { current, draft, setDraft, changed, viewing, setViewing, show, open, look, edit, rebase, discard, part };
 }
 
 export type Editor<Content> = ReturnType<typeof useEditor<Content>>;

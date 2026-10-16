@@ -12,8 +12,10 @@ pub enum Error {
     VaultExists,
     #[error("There is no vault here yet.")]
     NoVault,
-    #[error("That recipe was not found.")]
+    #[error("That recipe or material was not found.")]
     NotFound,
+    #[error("Only a deleted recipe or material can be erased. Delete it first.")]
+    NotDeleted,
     #[error("That recipe is too large to save.")]
     TooLarge,
     #[error("That file is not a Glaze Vault backup.")]
@@ -43,6 +45,7 @@ impl Error {
             Error::VaultExists => "vault-exists",
             Error::NoVault => "no-vault",
             Error::NotFound => "not-found",
+            Error::NotDeleted => "not-deleted",
             Error::TooLarge => "too-large",
             Error::NotABackup => "not-a-backup",
             Error::BackupDamaged => "backup-damaged",

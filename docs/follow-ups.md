@@ -22,15 +22,10 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Next for one person ([ADR 6](adr/0006-one-person-first.md))
 
-- Deleting a recipe or material ([ADR 8](adr/0008-materials-history-drafts.md)). Needs a
-  decision first: a tombstone revision hides a record but keeps it (and syncs to replicas), while
-  erasing it removes its history too and must reach every replica and leaves old backups.
-- Comparing two recipes, or two revisions of one.
-- Materials from a chemical formula, not only an analysis.
-- Renaming a material in the recipes that use it, rather than listing them.
-- Bring back a vault set aside by a restore from inside the app; today the user guide explains
-  moving its files.
-- Importing materials and recipes from a JSON export, or a supplier's CSV.
+- More import formats ([ADR 10](adr/0010-importing.md)): Digitalfire's material XML (MDT) once a
+  real file is at hand to check against, Glazy's YAML dumps, and exporting Insight XML so recipes
+  can go back to Insight-live and Glazy.
+- A batch save for imports, if hundreds of records at once are too slow.
 
 ## Engineering
 

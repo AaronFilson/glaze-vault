@@ -2,7 +2,7 @@
 //! (docs/adr/0001-tauri-rust-react.md). File dialogs open from here, not from the page, so the
 //! page never chooses where files are written.
 
-use glaze_vault_core::{BACKUP_EXTENSION, Credential, Error, Kind, LastBackup, Revision, Settings, Vault};
+use glaze_vault_core::{BACKUP_EXTENSION, Credential, Error, Kind, LastBackup, Revision, SetAside, Settings, Vault};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -151,6 +151,23 @@ fn record_history(state: State<AppState>, kind: Kind, record_id: Uuid) -> Comman
     with_vault(&state, |vault| vault.history(kind, record_id))
 }
 
+/// Deletes a record: it moves to the deleted ones, to restore or erase (ADR 9).
+#[tauri::command(async)]
+fn delete_record(state: State<AppState>, kind: Kind, newest: Uuid) -> CommandResult<Revision> {
+    with_vault(&state, |vault| vault.delete(kind, newest))
+}
+
+#[tauri::command(async)]
+fn deleted_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revision>> {
+    with_vault(&state, |vault| vault.deleted(kind))
+}
+
+/// Removes every revision of a deleted record. Returns how many there were.
+#[tauri::command(async)]
+fn erase_record(state: State<AppState>, kind: Kind, record_id: Uuid) -> CommandResult<usize> {
+    with_vault(&state, |vault| vault.erase(kind, record_id))
+}
+
 #[tauri::command(async)]
 fn get_settings(state: State<AppState>) -> CommandResult<Settings> {
     with_vault(&state, |vault| vault.settings())
@@ -215,15 +232,15 @@ struct ChosenBackup {
 /// Asks for a backup file to restore, and says when it was made.
 #[tauri::command(async)]
 fn choose_backup(window: WebviewWindow) -> CommandResult<Option<ChosenBackup>> {
-    let picked = window
-        .dialog()
-        .file()
-        .set_parent(&window)
-        .set_title("Choose a backup to restore")
-        .add_filter("Glaze Vault backup", &[BACKUP_EXTENSION])
-        .blocking_pick_file();
-    let Some(picked) = picked else { return Ok(None) };
-    let path = picked.into_path().map_err(file_error)?;
+    let Some(path) = open_dialog(
+        &window,
+        "Choose a backup to restore",
+        "Glaze Vault backup",
+        &[BACKUP_EXTENSION],
+    )?
+    else {
+        return Ok(None);
+    };
     let info = Vault::backup_info(&path)?;
     Ok(Some(ChosenBackup {
         file_name: file_name(&path),
@@ -273,6 +290,66 @@ fn restore_backup(
     })
 }
 
+/// The largest file import reads: far more than any recipe list, and a stop for the wrong file.
+const MAX_IMPORT_BYTES: u64 = 50 * 1024 * 1024;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportFile {
+    file_name: String,
+    contents: String,
+}
+
+/// Asks for a file of recipes or materials to import, and reads it for the page to parse
+/// (ui/importFormats.ts). None if the person cancelled. Text that is not UTF-8, as older programs
+/// write, is read as Latin-1, which keeps their accented letters.
+#[tauri::command(async)]
+fn choose_import(window: WebviewWindow, state: State<AppState>) -> CommandResult<Option<ImportFile>> {
+    if state.vault.lock().unwrap().is_none() {
+        return Err(locked());
+    }
+    let Some(path) = open_dialog(
+        &window,
+        "Choose recipes or materials to import",
+        "Recipes and materials",
+        &["json", "xml", "csv", "txt", "glz", "mat", "rcx"],
+    )?
+    else {
+        return Ok(None);
+    };
+    if fs::metadata(&path).map_err(file_error)?.len() > MAX_IMPORT_BYTES {
+        return Err(CommandError::new(
+            "too-large",
+            "That file is too large to import: recipes and materials take far less.",
+        ));
+    }
+    let bytes = fs::read(&path).map_err(file_error)?;
+    let contents =
+        String::from_utf8(bytes).unwrap_or_else(|error| error.into_bytes().iter().map(|&byte| byte as char).collect());
+    Ok(Some(ImportFile {
+        file_name: file_name(&path),
+        contents,
+    }))
+}
+
+/// The vaults a restore set aside, to switch back to.
+#[tauri::command(async)]
+fn set_aside_vaults(state: State<AppState>) -> CommandResult<Vec<SetAside>> {
+    Ok(Vault::set_aside(&state.dir)?)
+}
+
+/// Locks the vault, and swaps it with one a restore set aside. The page then asks for that
+/// vault's password.
+#[tauri::command(async)]
+fn bring_back_vault(state: State<AppState>, name: String) -> CommandResult<Restored> {
+    let mut vault = state.vault.lock().unwrap();
+    vault.take();
+    let set_aside = Vault::bring_back(&state.dir, &name)?;
+    Ok(Restored {
+        set_aside: set_aside.map(|dir| dir.to_string_lossy().into_owned()),
+    })
+}
+
 /// Asks where to save an export the page has made (CSV or JSON), then writes it. Returns the file
 /// name, or None if the person cancelled.
 #[tauri::command(async)]
@@ -297,12 +374,48 @@ fn save_export(
     Ok(Some(file_name(&path)))
 }
 
+/// Asks for a file to open.
+fn open_dialog(window: &WebviewWindow, title: &str, kind: &str, extensions: &[&str]) -> CommandResult<Option<PathBuf>> {
+    if let Some(path) = dev_picked() {
+        return Ok(Some(path));
+    }
+    let picked = window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(title)
+        .add_filter(kind, extensions)
+        .blocking_pick_file();
+    picked.map(|p| p.into_path().map_err(file_error)).transpose()
+}
+
+/// Development builds only: the file a script chose for the next dialog, in place of asking
+/// (`pick` in ui/devDriver.ts), so imports, backups and restores can be driven.
+#[cfg(debug_assertions)]
+static DEV_PICK: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn dev_picked() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    return DEV_PICK.lock().unwrap().take();
+    #[cfg(not(debug_assertions))]
+    None
+}
+
+#[cfg(debug_assertions)]
+#[tauri::command(async)]
+fn dev_pick(path: String) {
+    *DEV_PICK.lock().unwrap() = Some(PathBuf::from(path));
+}
+
 fn save_dialog(
     window: &WebviewWindow,
     suggested_name: &str,
     kind: &str,
     extension: &str,
 ) -> CommandResult<Option<PathBuf>> {
+    if let Some(path) = dev_picked() {
+        return Ok(Some(path));
+    }
     let picked = window
         .dialog()
         .file()
@@ -414,21 +527,57 @@ async fn install_update(app: AppHandle, state: State<'_, AppState>) -> CommandRe
     app.restart();
 }
 
-/// Development builds only: writes the page's text picture of the screen (ui/devScreen.ts) to the
-/// file GLAZE_VAULT_SCREEN names, so the app can be followed without screenshots. Returns false
-/// when no file is named, and the page stops sending. The file holds what is on screen in plain
-/// text, so it is for throwaway vaults.
+/// Development builds only: writes the page's text picture of the screen (ui/devTools.ts) to the
+/// file GLAZE_VAULT_SCREEN names, so the app can be followed without screenshots. Says when no
+/// file is named, and the page stops sending. The file holds what is on screen in plain text, so
+/// it is for throwaway vaults.
 #[cfg(debug_assertions)]
 #[tauri::command(async)]
-fn dev_screen(text: String) -> CommandResult<bool> {
+fn dev_screen(text: String) -> CommandResult<ScreenFile> {
+    let show_secrets = std::env::var("GLAZE_VAULT_SHOW_SECRETS").is_ok_and(|value| value == "1");
     let Some(path) = std::env::var_os("GLAZE_VAULT_SCREEN").map(PathBuf::from) else {
-        return Ok(false);
+        return Ok(ScreenFile {
+            written: false,
+            show_secrets,
+        });
     };
     // Written beside it and moved into place, so a reader never sees half a screen.
     let partial = path.with_extension("partial");
     fs::write(&partial, text).map_err(file_error)?;
     fs::rename(&partial, &path).map_err(file_error)?;
-    Ok(true)
+    Ok(ScreenFile {
+        written: true,
+        show_secrets,
+    })
+}
+
+#[cfg(debug_assertions)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenFile {
+    written: bool,
+    /// GLAZE_VAULT_SHOW_SECRETS=1: show passwords and recovery words too, for scripts that set up
+    /// a throwaway vault.
+    show_secrets: bool,
+}
+
+/// Development builds only: takes the script in the file GLAZE_VAULT_DRIVE names, if there is
+/// one, for the page to run (ui/devDriver.ts). Fails when no file is named, and the page stops
+/// asking.
+#[cfg(debug_assertions)]
+#[tauri::command(async)]
+fn dev_drive() -> CommandResult<Option<String>> {
+    let Some(path) = std::env::var_os("GLAZE_VAULT_DRIVE").map(PathBuf::from) else {
+        return Err(CommandError::new("off", "GLAZE_VAULT_DRIVE is not set."));
+    };
+    // Moved aside first, so a script written while this one is read is not lost or run twice.
+    let taken = path.with_extension("taken");
+    if fs::rename(&path, &taken).is_err() {
+        return Ok(None);
+    }
+    let script = fs::read_to_string(&taken).map_err(file_error)?;
+    fs::remove_file(&taken).map_err(file_error)?;
+    Ok(Some(script))
 }
 
 /// Whether this build has an updater public key. Builds without one (anyone's own build before
@@ -479,6 +628,9 @@ pub fn run() {
             list_records,
             save_record,
             record_history,
+            delete_record,
+            deleted_records,
+            erase_record,
             get_settings,
             set_settings,
             lock_with_draft,
@@ -489,13 +641,20 @@ pub fn run() {
             back_up,
             choose_backup,
             restore_backup,
+            choose_import,
+            set_aside_vaults,
+            bring_back_vault,
             save_export,
             get_preferences,
             set_preferences,
             check_for_update,
             install_update,
             #[cfg(debug_assertions)]
-            dev_screen
+            dev_screen,
+            #[cfg(debug_assertions)]
+            dev_drive,
+            #[cfg(debug_assertions)]
+            dev_pick
         ])
         .run(context)
         .expect("error while running Glaze Vault");

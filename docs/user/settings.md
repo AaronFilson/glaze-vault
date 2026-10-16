@@ -22,7 +22,12 @@ This setting is kept in your vault, so it comes with it when you
 
 ## Backups and export
 
-See [Backups and export](backups.md).
+See [Backups and export](backups.md). **Vaults set aside** appears only when restoring a backup
+has set a vault aside: see [the vault that was there before](backups.md#the-vault-that-was-there-before).
+
+## Import
+
+See [Importing](importing.md).
 
 ## Password
 

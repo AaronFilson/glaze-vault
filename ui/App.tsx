@@ -48,7 +48,9 @@ export function App() {
           ? 'The vault locked because nobody was using it. Your unsaved changes were kept and will come back when you unlock.'
           : reason === 'idle'
             ? 'The vault locked because nobody was using it.'
-            : undefined
+            : reason === 'switched'
+              ? 'This is the vault you switched to: unlock it with its own password. The one you had open is set aside, and you can switch back to it in Settings.'
+              : undefined
     });
 
   switch (screen.name) {

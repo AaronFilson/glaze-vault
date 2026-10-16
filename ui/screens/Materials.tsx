@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { MaterialHead, RecipeHead } from '../api';
 import {
   checkMaterial,
+  FORMULA_PARTS,
   MATERIAL_CATEGORIES,
   MATERIAL_NAMES,
   normalize,
@@ -10,10 +11,13 @@ import {
   sameName,
   standardAnalysis,
   standardNamed,
+  type FormulaLine,
+  type MaterialCheck,
   type MaterialContent,
   type OxideLine
 } from '../chemistry';
 import type { Editor } from '../useEditor';
+import { DeletedList, DeletedNotice } from './Deleted';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
 
 export const EMPTY_MATERIAL: MaterialContent = {
@@ -28,25 +32,36 @@ export function sameMaterial(a: MaterialContent, b: MaterialContent): boolean {
   return (
     a.name === b.name &&
     a.category === b.category &&
+    (a.basis ?? 'analysis') === (b.basis ?? 'analysis') &&
     a.loi === b.loi &&
     a.notes === b.notes &&
     a.oxides.length === b.oxides.length &&
-    a.oxides.every((line, i) => line.oxide === b.oxides[i].oxide && line.percent === b.oxides[i].percent)
+    a.oxides.every((line, i) => line.oxide === b.oxides[i].oxide && line.percent === b.oxides[i].percent) &&
+    (a.formula ?? []).length === (b.formula ?? []).length &&
+    (a.formula ?? []).every((line, i) => line.oxide === b.formula![i].oxide && line.moles === b.formula![i].moles)
   );
 }
 
 /** The person's own materials, colorants and additives: a list, and an editor for one. */
 export function Materials({
   materials,
+  deleted,
   recipes,
   editor,
   saving,
   error,
   onOpen,
   onSave,
-  onUseRevision
+  onUseRevision,
+  onOpenDeleted,
+  onDelete,
+  onRestore,
+  onErase,
+  renameInRecipes,
+  onRenameInRecipes
 }: {
   materials: MaterialHead[];
+  deleted: MaterialHead[];
   recipes: RecipeHead[];
   editor: Editor<MaterialContent>;
   saving: boolean;
@@ -54,6 +69,13 @@ export function Materials({
   onOpen: (material: MaterialHead | null) => void;
   onSave: () => void;
   onUseRevision: () => void;
+  onOpenDeleted: (material: MaterialHead) => void;
+  onDelete: () => void;
+  onRestore: () => void;
+  onErase: () => void;
+  /** Whether saving a new name changes it in the recipes that use the old one too. */
+  renameInRecipes: boolean;
+  onRenameInRecipes: (rename: boolean) => void;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -66,7 +88,8 @@ export function Materials({
       ? recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, name)))
       : [];
   const users = usedIn(shown.name);
-  const oldUsers = current && !sameName(current.content.name, draft.name) ? usedIn(current.content.name) : [];
+  const oldUsers =
+    current && draft.name.trim() && !sameName(current.content.name, draft.name) ? usedIn(current.content.name) : [];
   const replacesStandard = standardNamed(shown.name);
 
   const setOxide = (index: number, line: OxideLine) =>
@@ -109,10 +132,14 @@ export function Materials({
             )
           )
         )}
+        <DeletedList deleted={deleted} nameOf={(c) => c.name} viewing={viewing} onOpen={onOpenDeleted} />
       </nav>
 
       <main className="editor no-print">
-        {viewing && current && (
+        {viewing?.deleted && (
+          <DeletedNotice deleted={viewing} name={viewing.content.name} onRestore={onRestore} onErase={onErase} />
+        )}
+        {viewing && !viewing.deleted && current && (
           <ViewingNotice
             viewing={viewing}
             newest={current}
@@ -143,86 +170,106 @@ export function Materials({
             ))}
           </select>
 
-          <table className="lines">
-            <caption>Analysis, weight percent of the raw material</caption>
-            <thead>
-              <tr>
-                <th scope="col">Oxide</th>
-                <th scope="col" className="num">
-                  Percent
-                </th>
-                <th scope="col">
-                  <span className="visually-hidden">Remove</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.oxides.map((line, index) => (
-                <tr key={index}>
-                  <td>
-                    <select
-                      aria-label={`Oxide ${index + 1}`}
-                      value={line.oxide}
-                      onChange={(e) => setOxide(index, { ...line, oxide: e.target.value })}
-                    >
-                      {OXIDES.map((oxide) => (
-                        <option key={oxide} value={oxide}>
-                          {oxideLabel(oxide)}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="num">
-                    <input
-                      aria-label={`Percent ${index + 1}`}
-                      inputMode="decimal"
-                      value={line.percent}
-                      onChange={(e) => setOxide(index, { ...line, percent: e.target.value })}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="link"
-                      aria-label={`Remove oxide ${index + 1}`}
-                      onClick={() => setDraft({ ...draft, oxides: draft.oxides.filter((_, i) => i !== index) })}
-                    >
-                      ×
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <th scope="row">
-                  <label htmlFor="material-loi">Loss on ignition</label>
-                </th>
-                <td className="num">
-                  <input
-                    id="material-loi"
-                    inputMode="decimal"
-                    value={shown.loi}
-                    onChange={(e) => setDraft({ ...draft, loi: e.target.value })}
-                  />
-                </td>
-                <td />
-              </tr>
-              <tr>
-                <th scope="row">Total</th>
-                <td className="num" data-testid="material-total">
-                  {Number.isFinite(check.total) ? check.total.toFixed(2) : '—'}
-                </td>
-                <td />
-              </tr>
-            </tfoot>
-          </table>
-          <button
-            type="button"
-            onClick={() => setDraft({ ...draft, oxides: [...draft.oxides, { oxide: unusedOxide, percent: '' }] })}
+          <label htmlFor="material-basis">Given as</label>
+          <select
+            id="material-basis"
+            value={shown.basis ?? 'analysis'}
+            onChange={(e) => setDraft({ ...draft, basis: e.target.value as MaterialContent['basis'] })}
           >
-            Add oxide
-          </button>
+            <option value="analysis">An analysis: weight percent, as on a data sheet</option>
+            <option value="formula">A formula: moles of each oxide</option>
+          </select>
+
+          {(shown.basis ?? 'analysis') === 'analysis' ? (
+            <>
+              <table className="lines">
+                <caption>Analysis, weight percent of the raw material</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Oxide</th>
+                    <th scope="col" className="num">
+                      Percent
+                    </th>
+                    <th scope="col">
+                      <span className="visually-hidden">Remove</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.oxides.map((line, index) => (
+                    <tr key={index}>
+                      <td>
+                        <select
+                          aria-label={`Oxide ${index + 1}`}
+                          value={line.oxide}
+                          onChange={(e) => setOxide(index, { ...line, oxide: e.target.value })}
+                        >
+                          {OXIDES.map((oxide) => (
+                            <option key={oxide} value={oxide}>
+                              {oxideLabel(oxide)}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="num">
+                        <input
+                          aria-label={`Percent ${index + 1}`}
+                          inputMode="decimal"
+                          value={line.percent}
+                          onChange={(e) => setOxide(index, { ...line, percent: e.target.value })}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="link"
+                          aria-label={`Remove oxide ${index + 1}`}
+                          onClick={() => setDraft({ ...draft, oxides: draft.oxides.filter((_, i) => i !== index) })}
+                        >
+                          ×
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <th scope="row">
+                      <label htmlFor="material-loi">Loss on ignition</label>
+                    </th>
+                    <td className="num">
+                      <input
+                        id="material-loi"
+                        inputMode="decimal"
+                        value={shown.loi}
+                        onChange={(e) => setDraft({ ...draft, loi: e.target.value })}
+                      />
+                    </td>
+                    <td />
+                  </tr>
+                  <tr>
+                    <th scope="row">Total</th>
+                    <td className="num" data-testid="material-total">
+                      {Number.isFinite(check.total) ? check.total.toFixed(2) : '—'}
+                    </td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, oxides: [...draft.oxides, { oxide: unusedOxide, percent: '' }] })}
+              >
+                Add oxide
+              </button>
+            </>
+          ) : (
+            <FormulaTable
+              formula={shown.formula ?? []}
+              check={check}
+              onChange={(formula) => setDraft({ ...draft, formula })}
+            />
+          )}
 
           <div className="copy-from">
             <label htmlFor="copy-from">Start from a standard material</label>
@@ -239,7 +286,7 @@ export function Materials({
                 disabled={!copied}
                 onClick={() => {
                   if (!copied) return;
-                  setDraft({ ...draft, ...copied, name: draft.name || copyFrom.trim() });
+                  setDraft({ ...draft, ...copied, basis: 'analysis', name: draft.name || copyFrom.trim() });
                   setCopyFrom('');
                 }}
               >
@@ -271,6 +318,11 @@ export function Materials({
             <span className="hint">
               Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
             </span>
+          )}
+          {current && !viewing && (
+            <button type="button" className="link danger end" onClick={onDelete}>
+              Delete…
+            </button>
           )}
         </div>
         {error && <p role="alert" className="error">{error}</p>}
@@ -331,12 +383,109 @@ export function Materials({
           </>
         )}
         {oldUsers.length > 0 && (
-          <p className="warn">
-            {oldUsers.length === 1 ? '1 recipe uses' : `${oldUsers.length} recipes use`} the old name,{' '}
-            {current!.content.name}. After renaming, change {oldUsers.length === 1 ? 'it' : 'them'} to the new name.
-          </p>
+          <>
+            <p className="warn">
+              {oldUsers.length === 1 ? '1 recipe uses' : `${oldUsers.length} recipes use`} the old name,{' '}
+              {current!.content.name}:
+            </p>
+            <ul className="plain-list">
+              {oldUsers.map((recipe) => (
+                <li key={recipe.recordId}>{recipe.content.name || 'Untitled'}</li>
+              ))}
+            </ul>
+            <label className="check">
+              <input type="checkbox" checked={renameInRecipes} onChange={(e) => onRenameInRecipes(e.target.checked)} />
+              Also rename it in {oldUsers.length === 1 ? 'this recipe' : 'these recipes'} when saving
+            </label>
+          </>
         )}
       </aside>
+    </>
+  );
+}
+
+/** A material given as a molar formula: moles of each oxide, and of what burns off. */
+function FormulaTable({
+  formula,
+  check,
+  onChange
+}: {
+  formula: FormulaLine[];
+  check: MaterialCheck;
+  onChange: (formula: FormulaLine[]) => void;
+}) {
+  const setLine = (index: number, line: FormulaLine) => onChange(formula.map((l, i) => (i === index ? line : l)));
+  const unused = FORMULA_PARTS.find((part) => !formula.some((line) => line.oxide === part)) ?? 'SiO2';
+  return (
+    <>
+      <table className="lines">
+        <caption>Formula, moles of each oxide, with water, carbon dioxide or sulfur that burn off</caption>
+        <thead>
+          <tr>
+            <th scope="col">Oxide</th>
+            <th scope="col" className="num">
+              Moles
+            </th>
+            <th scope="col">
+              <span className="visually-hidden">Remove</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {formula.map((line, index) => (
+            <tr key={index}>
+              <td>
+                <select
+                  aria-label={`Formula oxide ${index + 1}`}
+                  value={line.oxide}
+                  onChange={(e) => setLine(index, { ...line, oxide: e.target.value })}
+                >
+                  {FORMULA_PARTS.map((part) => (
+                    <option key={part} value={part}>
+                      {oxideLabel(part)}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="num">
+                <input
+                  aria-label={`Moles ${index + 1}`}
+                  inputMode="decimal"
+                  value={line.moles}
+                  onChange={(e) => setLine(index, { ...line, moles: e.target.value })}
+                />
+              </td>
+              <td>
+                <button
+                  type="button"
+                  className="link"
+                  aria-label={`Remove formula oxide ${index + 1}`}
+                  onClick={() => onChange(formula.filter((_, i) => i !== index))}
+                >
+                  ×
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th scope="row">Formula weight</th>
+            <td className="num" data-testid="material-total">
+              {Number.isFinite(check.total) && check.total > 0 ? check.total.toFixed(2) : '—'}
+            </td>
+            <td />
+          </tr>
+          <tr>
+            <th scope="row">Loss on ignition</th>
+            <td className="num">{'loi' in check ? `${check.loi.toFixed(2)}%` : '—'}</td>
+            <td />
+          </tr>
+        </tfoot>
+      </table>
+      <button type="button" onClick={() => onChange([...formula, { oxide: unused, moles: '' }])}>
+        Add oxide
+      </button>
     </>
   );
 }

@@ -44,14 +44,20 @@ function fakeCore({
   draft = null,
   recipes = [shino],
   materials = [],
-  history = []
+  deleted = [],
+  history = [],
+  setAside = [],
+  importFile = null
 }: {
   settings?: Settings;
   lastBackup?: LastBackup | null;
   draft?: Draft | null;
   recipes?: RecipeHead[];
   materials?: MaterialHead[];
+  deleted?: (RecipeHead | MaterialHead)[];
   history?: (RecipeHead | MaterialHead)[];
+  setAside?: { name: string; setAsideAt: number }[];
+  importFile?: { fileName: string; contents: string } | null;
 } = {}) {
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
   const revisions = new Map<string, { recordId: string; number: number }>(
@@ -77,6 +83,23 @@ function fakeCore({
         revisions.set(revision.revisionId, revision);
         return revision;
       }
+      case 'deleted_records':
+        return deleted.filter((r) => (a.kind === 'recipe') === 'lines' in r.content);
+      case 'delete_record': {
+        saved += 1;
+        const newest = [...recipes, ...materials].find((r) => r.revisionId === a.newest)!;
+        const gone = { ...newest, revisionId: `deleted-revision-${saved}`, number: newest.number + 1, deleted: true };
+        revisions.set(gone.revisionId, gone);
+        return gone;
+      }
+      case 'erase_record':
+        return 2;
+      case 'choose_import':
+        return importFile;
+      case 'set_aside_vaults':
+        return setAside;
+      case 'bring_back_vault':
+        return { setAside: '/vault/replaced-2' };
       case 'record_history':
         return history.filter((r) => r.recordId === a.recordId);
       case 'back_up':
@@ -275,6 +298,7 @@ describe('your materials', () => {
       content: {
         name: 'Whiting, lot 12',
         category: 'material',
+        basis: 'analysis',
         oxides: [{ oxide: 'CaO', percent: '56.03' }],
         loi: '43.97',
         notes: ''
@@ -354,6 +378,59 @@ describe('your materials', () => {
     });
   });
 
+  it('can be given as a formula', async () => {
+    const core = fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'Whiting, theory' } });
+    await user.selectOptions(screen.getByLabelText('Given as'), 'formula');
+    await user.click(screen.getByRole('button', { name: 'Add oxide' }));
+    await user.click(screen.getByRole('button', { name: 'Add oxide' }));
+    await user.selectOptions(screen.getByLabelText('Formula oxide 1'), 'CaO');
+    await user.selectOptions(screen.getByLabelText('Formula oxide 2'), 'CO2');
+    fireEvent.change(screen.getByLabelText('Moles 1'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Moles 2'), { target: { value: '1' } });
+    expect(screen.getByTestId('material-total').textContent).toBe('100.09');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args.content).toMatchObject({
+      basis: 'formula',
+      formula: [
+        { oxide: 'CaO', moles: '1' },
+        { oxide: 'CO2', moles: '1' }
+      ]
+    });
+  });
+
+  it('take a new name into the recipes that use them', async () => {
+    const usesSpar = { ...shino, content: { ...shino.content, lines: [{ material: 'spar lot 7', amount: '50' }] } };
+    const core = fakeCore({ recipes: [usesSpar], materials: [spar] });
+    show();
+    const user = userEvent.setup();
+    // Shino is open with unsaved notes while the material is renamed.
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Thicker' } });
+    await user.click(screen.getByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'Spar, lot 8' } });
+    const check = screen.getByRole('complementary', { name: 'Material check' });
+    expect(check.textContent).toContain('1 recipe uses the old name, Spar, lot 7:');
+    expect((screen.getByLabelText(/Also rename it in this recipe/) as HTMLInputElement).checked).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(2));
+    expect(core.called('save_record')[1].args).toMatchObject({
+      kind: 'recipe',
+      parent: 'revision-1',
+      content: { lines: [{ material: 'Spar, lot 8', amount: '50' }], notes: '' }
+    });
+    await user.click(screen.getByRole('button', { name: 'Materials' }));
+    expect((screen.getByLabelText('Material 1') as HTMLInputElement).value).toBe('Spar, lot 8');
+    expect((screen.getByLabelText('Notes') as HTMLTextAreaElement).value).toBe('Thicker');
+    expect(screen.getByRole('button', { name: 'Save' }).matches(':disabled')).toBe(false);
+  });
+
   it('cannot share a name with another of yours', async () => {
     const core = fakeCore({ materials: [spar] });
     show();
@@ -391,6 +468,113 @@ it('shows an earlier revision and makes it the newest', async () => {
   await user.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
   expect(core.called('save_record')[0].args).toMatchObject({ parent: 'revision-3', content: { name: 'Shino 1' } });
+});
+
+describe('deleting', () => {
+  it('moves a recipe to Deleted, and restores it from there', async () => {
+    const core = fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    await user.click(screen.getByRole('button', { name: 'Delete…' }));
+    expect(screen.getByRole('alertdialog', { name: 'Delete' }).textContent).toContain('Delete Shino?');
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(core.called('delete_record')).toHaveLength(1));
+    expect(core.called('delete_record')[0].args).toEqual({ kind: 'recipe', newest: 'revision-1' });
+    expect(await screen.findByText('No recipes yet.')).toBeTruthy();
+
+    await user.click(screen.getByText('Deleted (1)'));
+    await user.click(screen.getByRole('button', { name: 'Shino' }));
+    expect(screen.getByText(/was deleted/)).toBeTruthy();
+    expect((screen.getByLabelText('Recipe name') as HTMLInputElement).matches(':disabled')).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args).toMatchObject({ kind: 'recipe', parent: 'deleted-revision-1' });
+    expect(screen.queryByText('Deleted (1)')).toBeNull();
+    expect((screen.getByLabelText('Recipe name') as HTMLInputElement).value).toBe('Shino');
+  });
+
+  it('erases a deleted recipe after asking', async () => {
+    const gone = { ...shino, revisionId: 'revision-2', number: 2, deleted: true };
+    const core = fakeCore({ recipes: [], deleted: [gone] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByText('Deleted (1)'));
+    await user.click(screen.getByRole('button', { name: 'Shino' }));
+    await user.click(screen.getByRole('button', { name: 'Erase permanently…' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain('cannot be brought back');
+    await user.click(screen.getByRole('button', { name: 'Erase permanently' }));
+    await waitFor(() => expect(core.called('erase_record')).toHaveLength(1));
+    expect(core.called('erase_record')[0].args).toEqual({ kind: 'recipe', recordId: 'record-1' });
+    expect(screen.queryByText(/Deleted \(/)).toBeNull();
+  });
+
+  it('says what deleting a material does to the recipes that use it', async () => {
+    fakeCore({
+      recipes: [{ ...shino, content: { ...shino.content, lines: [{ material: 'Spar, lot 7', amount: '10' }] } }],
+      materials: [spar, { ...spar, recordId: 'material-2', revisionId: 'r-silica', content: { ...spar.content, name: 'Silica' } }]
+    });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
+    await user.click(screen.getByRole('button', { name: 'Delete…' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain('1 recipe uses it, and will not find it until it is restored.');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Silica' }));
+    await user.click(screen.getByRole('button', { name: 'Delete…' }));
+    expect(screen.getByRole('alertdialog').textContent).not.toContain('recipe uses');
+  });
+
+  it('does not restore a material over another of the same name', async () => {
+    const gone = { ...spar, revisionId: 'material-revision-2', number: 2, deleted: true };
+    const core = fakeCore({ materials: [{ ...spar, recordId: 'material-9', revisionId: 'r-9' }], deleted: [gone] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByText('Deleted (1)'));
+    await user.click(within(screen.getByText('Deleted (1)').closest('details')!).getByRole('button', { name: 'Spar, lot 7' }));
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(screen.getByRole('alert').textContent).toContain('You have another material called Spar, lot 7.');
+    expect(core.called('save_record')).toHaveLength(0);
+  });
+});
+
+describe('comparing', () => {
+  it('compares unsaved changes with what they started from', async () => {
+    fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    fireEvent.change(screen.getByLabelText('Amount 1'), { target: { value: '25' } });
+    fireEvent.change(screen.getByLabelText('Material 1'), { target: { value: 'Nepheline Syenite' } });
+    await user.click(screen.getByRole('button', { name: 'Add material' }));
+    fireEvent.change(screen.getByLabelText('Material 2'), { target: { value: 'Whiting' } });
+    fireEvent.change(screen.getByLabelText('Amount 2'), { target: { value: '25' } });
+    await user.click(screen.getByRole('button', { name: 'Compare…' }));
+
+    const batch = screen.getByRole('table', { name: 'Batch, percent of each' });
+    const rows = [...batch.querySelectorAll('tbody tr')].map((row) => row.textContent);
+    expect(rows).toEqual(['Nepheline Syenite100.050.0−50.0', 'Whiting—50.0added']);
+    expect(screen.getByRole('table', { name: 'Unity formula' }).textContent).toContain('CaO');
+    expect((screen.getByLabelText('Recipe', { selector: '#second-recipe' }) as HTMLSelectElement).value).toBe('draft');
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect((screen.getByLabelText('Amount 2') as HTMLInputElement).value).toBe('25');
+  });
+
+  it('compares an earlier revision with the newest', async () => {
+    const second = { ...shino, revisionId: 'revision-2', number: 2, content: { ...shino.content, notes: 'Thinner' } };
+    fakeCore({ recipes: [second], history: [second, shino] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    await user.click(screen.getByText('Earlier revisions (1)'));
+    await user.click(await screen.findByRole('button', { name: /^Revision 1 ·/ }));
+    await user.click(screen.getByRole('button', { name: 'Compare with the newest' }));
+    expect(await screen.findByRole('heading', { name: 'Shino, revision 1' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Shino' })).toBeTruthy();
+    expect(screen.getByText('Thinner')).toBeTruthy();
+  });
 });
 
 describe('saving on the way', () => {
@@ -520,4 +704,60 @@ it('offers each export only when there is something to export', async () => {
   await user.click(await screen.findByRole('button', { name: 'Settings' }));
   expect(enabled('Export as CSV…')).toBe(true);
   expect(enabled('Export materials as CSV…')).toBe(false);
+});
+
+it('switches to a vault a restore set aside, after asking', async () => {
+  const core = fakeCore({ setAside: [{ name: 'replaced-1', setAsideAt: Date.UTC(2026, 9, 1) }] });
+  const onLocked = show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  await user.click(await screen.findByRole('button', { name: 'Switch to it…' }));
+  await user.click(screen.getByRole('button', { name: 'Switch vaults' }));
+  await waitFor(() => expect(onLocked).toHaveBeenCalledWith('switched'));
+  expect(core.called('bring_back_vault')[0].args).toEqual({ name: 'replaced-1' });
+});
+
+it('imports what was chosen from a file, skipping names already in use unless told', async () => {
+  const contents = [
+    'filetype = GlazeChem Glazes',
+    'name = Shino',
+    'component = Nepheline Syenite',
+    'amount = 60',
+    'name = Tenmoku',
+    'component = Custer Spar',
+    'amount = 40',
+    'component = Unobtainium',
+    'amount = 5'
+  ].join('\n');
+  const core = fakeCore({ importFile: { fileName: 'Highfire.glz', contents } });
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
+  expect(await screen.findByRole('heading', { name: 'Import from Highfire.glz' })).toBeTruthy();
+  expect(screen.getByText(/not found: Unobtainium/)).toBeTruthy();
+  const shinoChoice = screen.getByLabelText('What to do with Shino') as HTMLSelectElement;
+  expect(shinoChoice.value).toBe('skip');
+  await user.click(screen.getByRole('button', { name: 'Import 1 recipe and 0 materials' }));
+  await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+  expect(core.called('save_record')[0].args).toMatchObject({ kind: 'recipe', parent: null, content: { name: 'Tenmoku' } });
+  expect(await screen.findByText(/1 recipe and 0 materials imported from Highfire.glz/)).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+
+  await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
+  await user.selectOptions(await screen.findByLabelText('What to do with Shino'), 'revision');
+  await user.selectOptions(screen.getByLabelText('What to do with Tenmoku'), 'copy');
+  await user.click(screen.getByRole('button', { name: 'Import 2 recipes and 0 materials' }));
+  await waitFor(() => expect(core.called('save_record')).toHaveLength(3));
+  expect(core.called('save_record')[1].args).toMatchObject({ parent: 'revision-1', content: { name: 'Shino' } });
+  expect(core.called('save_record')[2].args).toMatchObject({ parent: null, content: { name: 'Tenmoku (imported)' } });
+});
+
+it('says why a file cannot be imported', async () => {
+  fakeCore({ importFile: { fileName: 'prices.csv', contents: 'Name,Price\nSilica,1\n' } });
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
+  expect((await screen.findByRole('alert')).textContent).toMatch(/a column for each oxide/);
 });

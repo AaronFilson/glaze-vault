@@ -2,6 +2,7 @@ import type { RecipeHead } from '../api';
 import type { Analysis, MaterialLibrary, RecipeContent, RecipeLine } from '../chemistry';
 import type { Editor } from '../useEditor';
 import { AnalysisPanel } from './AnalysisPanel';
+import { DeletedList, DeletedNotice } from './Deleted';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
 
 export const EMPTY_RECIPE: RecipeContent = { name: '', lines: [{ material: '', amount: '' }], notes: '' };
@@ -19,6 +20,7 @@ export function sameRecipe(a: RecipeContent, b: RecipeContent): boolean {
 /** The recipe list, an editor for one, and its unity formula. */
 export function RecipeEditor({
   recipes,
+  deleted,
   editor,
   library,
   analysis,
@@ -26,9 +28,15 @@ export function RecipeEditor({
   error,
   onOpen,
   onSave,
-  onUseRevision
+  onUseRevision,
+  onOpenDeleted,
+  onDelete,
+  onRestore,
+  onErase,
+  onCompare
 }: {
   recipes: RecipeHead[];
+  deleted: RecipeHead[];
   editor: Editor<RecipeContent>;
   library: MaterialLibrary;
   analysis: Analysis;
@@ -37,6 +45,13 @@ export function RecipeEditor({
   onOpen: (recipe: RecipeHead | null) => void;
   onSave: () => void;
   onUseRevision: () => void;
+  onOpenDeleted: (recipe: RecipeHead) => void;
+  onDelete: () => void;
+  onRestore: () => void;
+  onErase: () => void;
+  /** Opens Compare: from here when nothing is said, or with an earlier revision. Missing when
+   * there is nothing to compare with. */
+  onCompare?: (revisionNumber?: number) => void;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -63,15 +78,20 @@ export function RecipeEditor({
             ))}
           </ul>
         )}
+        <DeletedList deleted={deleted} nameOf={(c) => c.name} viewing={viewing} onOpen={onOpenDeleted} />
       </nav>
 
       <main className="editor no-print">
-        {viewing && current && (
+        {viewing?.deleted && (
+          <DeletedNotice deleted={viewing} name={viewing.content.name} onRestore={onRestore} onErase={onErase} />
+        )}
+        {viewing && !viewing.deleted && current && (
           <ViewingNotice
             viewing={viewing}
             newest={current}
             onUse={onUseRevision}
             onBack={() => editor.setViewing(null)}
+            onCompare={onCompare && (() => onCompare(viewing.number))}
           />
         )}
         <fieldset className="plain" disabled={!!viewing}>
@@ -158,6 +178,16 @@ export function RecipeEditor({
             <span className="hint">
               Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
             </span>
+          )}
+          {onCompare && !viewing && (
+            <button type="button" className="end" onClick={() => onCompare()}>
+              Compare…
+            </button>
+          )}
+          {current && !viewing && (
+            <button type="button" className={`link danger${onCompare ? '' : ' end'}`} onClick={onDelete}>
+              Delete…
+            </button>
           )}
         </div>
         {error && <p role="alert" className="error">{error}</p>}

@@ -35,6 +35,12 @@ export interface ChosenBackup {
   appVersion: string;
 }
 
+/** A vault that a restore moved aside, beside the vault's files. */
+export interface SetAside {
+  name: string;
+  setAsideAt: number;
+}
+
 export interface UpdateInfo {
   version: string;
   notes: string | null;
@@ -65,6 +71,8 @@ export interface Revision<Content> {
   number: number;
   savedAt: number;
   content: Content;
+  /** The revision that deleted its record, with the content it had, to restore (ADR 9). */
+  deleted?: boolean;
 }
 
 export type RecipeHead = Revision<RecipeContent>;
@@ -90,9 +98,17 @@ export const api = {
   materials: () => invoke<MaterialHead[]>('list_records', { kind: 'material' }),
   saveMaterial: (parent: string | null, content: MaterialContent) =>
     invoke<MaterialHead>('save_record', { kind: 'material', parent, content }),
+  saveRecord: <Content>(kind: Kind, parent: string | null, content: Content) =>
+    invoke<Revision<Content>>('save_record', { kind, parent, content }),
   /** Every revision of a record, newest first. */
   history: <Content>(kind: Kind, recordId: string) =>
     invoke<Revision<Content>[]>('record_history', { kind, recordId }),
+  /** Deletes a record by its newest revision; returns the revision that deleted it. */
+  deleteRecord: <Content>(kind: Kind, newest: string) => invoke<Revision<Content>>('delete_record', { kind, newest }),
+  /** The deleted records, newest first. */
+  deletedRecords: <Content>(kind: Kind) => invoke<Revision<Content>[]>('deleted_records', { kind }),
+  /** Removes every revision of a deleted record; returns how many there were. */
+  eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),
   newRecoveryKey: (password: string) => invoke<string[]>('new_recovery_key', { password }),
   settings: () => invoke<Settings>('get_settings'),
   setSettings: (settings: Settings) => invoke<void>('set_settings', { settings }),
@@ -107,6 +123,11 @@ export const api = {
   chooseBackup: () => invoke<ChosenBackup | null>('choose_backup'),
   restoreBackup: (path: string, using: RestoreWith) =>
     invoke<{ setAside: string | null }>('restore_backup', { path, ...using }),
+  /** Asks for a file to import and reads it. Null if cancelled. */
+  chooseImport: () => invoke<{ fileName: string; contents: string } | null>('choose_import'),
+  setAside: () => invoke<SetAside[]>('set_aside_vaults'),
+  /** Locks, and swaps the vault with one set aside; returns where the open one went. */
+  bringBack: (name: string) => invoke<{ setAside: string | null }>('bring_back_vault', { name }),
   /** Asks where to save, then writes. The file name, or null if cancelled. */
   saveExport: (suggestedName: string, contents: string) =>
     invoke<string | null>('save_export', { suggestedName, contents }),

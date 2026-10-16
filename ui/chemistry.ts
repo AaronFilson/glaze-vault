@@ -47,18 +47,33 @@ export interface OxideLine {
   percent: string;
 }
 
+export interface FormulaLine {
+  /** An oxide, or a volatile: H2O, CO2 or SO3. */
+  oxide: string;
+  moles: string;
+}
+
 /** What the core stores, encrypted, for each revision of a person's own material. */
 export interface MaterialContent {
   name: string;
   category: MaterialCategory;
+  /** How the chemistry is given: an analysis, as on a data sheet (the default), or a molar
+   * formula, such as kaolin's Al2O3·2SiO2·2H2O. Both are kept while switching between them. */
+  basis?: 'analysis' | 'formula';
   oxides: OxideLine[];
   /** Loss on ignition, percent. */
   loi: string;
+  formula?: FormulaLine[];
   notes: string;
 }
 
 /** Every oxide the chemistry knows, in the order of its columns. */
 export const OXIDES: string[] = Object.keys(OXIDE_GROUPS);
+/** What a formula can hold: the oxides, and what burns off. */
+export const FORMULA_PARTS: string[] = [
+  ...OXIDES,
+  ...Object.keys(MOLAR_MASS).filter((part) => !(part in OXIDE_GROUPS))
+];
 
 export type Analysis =
   | { result: UmfResult; problem?: undefined; noOxides: string[] }
@@ -134,13 +149,22 @@ const hasOxides = (material: StandardMaterial) =>
 
 /** A person's material as the chemistry takes it, null when it has no oxides, or what is wrong. */
 function customInput(material: MaterialContent): MaterialInput | null | { problem: string } {
+  const name = material.name.trim();
+  if (material.basis === 'formula') {
+    const parts = (material.formula ?? []).filter((line) => line.oxide && line.moles.trim());
+    const bad = parts.find((line) => !Number.isFinite(amountOf(line.moles)));
+    if (bad) return { problem: `The amount of ${bad.oxide} in ${name} is not a number.` };
+    // Water, carbon dioxide or sulphur alone fire away to nothing.
+    if (!parts.some((line) => line.oxide in OXIDE_GROUPS && amountOf(line.moles) > 0)) return null;
+    return { name, formula: Object.fromEntries(parts.map((line) => [line.oxide, amountOf(line.moles)])) };
+  }
   const used = material.oxides.filter((line) => line.oxide && line.percent.trim());
   if (!used.length) return null;
   // Glazecalc reads a loss on ignition that is not a number as none, so it is checked here.
   const loi = material.loi.trim() ? amountOf(material.loi) : 0;
-  if (!Number.isFinite(loi)) return { problem: `The loss on ignition of ${material.name.trim()} is not a number.` };
+  if (!Number.isFinite(loi)) return { problem: `The loss on ignition of ${name} is not a number.` };
   return {
-    name: material.name.trim(),
+    name,
     analysis: Object.fromEntries(used.map((line) => [line.oxide, amountOf(line.percent)])),
     loi
   };
@@ -192,6 +216,12 @@ export function standardNamed(name: string): string | null {
   return 'noOxides' in found ? found.noOxides : found.name;
 }
 
+/** Whether a recipe line's material is one the library has: the person's, or a standard one. */
+export function knownMaterial(library: MaterialLibrary, name: string): boolean {
+  const found = library.resolve(name);
+  return typeof found !== 'string' || formulasByName.has(normalize(found));
+}
+
 /** Accepts 12.5 or 12,5. */
 export function amountOf(text: string): number {
   return Number(text.trim().replace(',', '.'));
@@ -219,22 +249,30 @@ export function analyse(lines: RecipeLine[], library: MaterialLibrary = STANDARD
   }
 }
 
-/** A person's material checked: what its analysis adds up to, and its own unity formula. */
+/**
+ * A person's material checked: what its analysis adds up to, and its own unity formula. A
+ * formula's total is its formula weight, and its loss on ignition what burns off.
+ */
 export type MaterialCheck =
   | { noOxides: true; total: number }
-  | { noOxides: false; total: number; unity: Record<string, number>; warnings: string[] }
+  | { noOxides: false; total: number; unity: Record<string, number>; warnings: string[]; loi: number }
   | { noOxides: false; total: number; problem: string };
 
 export function checkMaterial(material: MaterialContent): MaterialCheck {
   const input = customInput({ ...material, name: material.name.trim() || 'This material' });
-  const total = [...material.oxides.map((line) => line.percent), material.loi]
-    .filter((text) => text.trim())
-    .reduce((sum, text) => sum + amountOf(text), 0);
+  const total =
+    material.basis === 'formula'
+      ? (material.formula ?? [])
+          .filter((line) => line.moles.trim())
+          .reduce((sum, line) => sum + amountOf(line.moles) * (MOLAR_MASS[line.oxide] ?? NaN), 0)
+      : [...material.oxides.map((line) => line.percent), material.loi]
+          .filter((text) => text.trim())
+          .reduce((sum, text) => sum + amountOf(text), 0);
   if (!input) return { noOxides: true, total };
   if ('problem' in input) return { noOxides: false, total, problem: input.problem };
   try {
-    const { unity, warnings } = materialWeights(input);
-    return { noOxides: false, total, unity, warnings };
+    const { unity, warnings, loi } = materialWeights(input);
+    return { noOxides: false, total, unity, warnings, loi };
   } catch (e) {
     return { noOxides: false, total, problem: (e as ChemistryError).message };
   }
