@@ -216,6 +216,12 @@ export function standardNamed(name: string): string | null {
   return 'noOxides' in found ? found.noOxides : found.name;
 }
 
+/** Whether a recipe line's material is one the library has: the person's, or a standard one. */
+export function knownMaterial(library: MaterialLibrary, name: string): boolean {
+  const found = library.resolve(name);
+  return typeof found !== 'string' || formulasByName.has(normalize(found));
+}
+
 /** Accepts 12.5 or 12,5. */
 export function amountOf(text: string): number {
   return Number(text.trim().replace(',', '.'));

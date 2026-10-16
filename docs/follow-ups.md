@@ -22,7 +22,10 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Next for one person ([ADR 6](adr/0006-one-person-first.md))
 
-- Importing materials and recipes from a JSON export, or a supplier's CSV.
+- More import formats ([ADR 10](adr/0010-importing.md)): Digitalfire's material XML (MDT) once a
+  real file is at hand to check against, Glazy's YAML dumps, and exporting Insight XML so recipes
+  can go back to Insight-live and Glazy.
+- A batch save for imports, if hundreds of records at once are too slow.
 
 ## Engineering
 

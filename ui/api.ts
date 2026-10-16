@@ -123,6 +123,8 @@ export const api = {
   chooseBackup: () => invoke<ChosenBackup | null>('choose_backup'),
   restoreBackup: (path: string, using: RestoreWith) =>
     invoke<{ setAside: string | null }>('restore_backup', { path, ...using }),
+  /** Asks for a file to import and reads it. Null if cancelled. */
+  chooseImport: () => invoke<{ fileName: string; contents: string } | null>('choose_import'),
   setAside: () => invoke<SetAside[]>('set_aside_vaults'),
   /** Locks, and swaps the vault with one set aside; returns where the open one went. */
   bringBack: (name: string) => invoke<{ setAside: string | null }>('bring_back_vault', { name }),

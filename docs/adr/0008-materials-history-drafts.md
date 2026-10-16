@@ -1,6 +1,7 @@
 # 8. Your own materials, earlier revisions, and drafts that outlast closing
 
-Proposed, 2026-10-15.
+Proposed, 2026-10-15. Renaming a material in its recipes is replaced by
+[ADR 10](0010-importing.md).
 
 ## Context
 

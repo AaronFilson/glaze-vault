@@ -46,7 +46,8 @@ function fakeCore({
   materials = [],
   deleted = [],
   history = [],
-  setAside = []
+  setAside = [],
+  importFile = null
 }: {
   settings?: Settings;
   lastBackup?: LastBackup | null;
@@ -56,6 +57,7 @@ function fakeCore({
   deleted?: (RecipeHead | MaterialHead)[];
   history?: (RecipeHead | MaterialHead)[];
   setAside?: { name: string; setAsideAt: number }[];
+  importFile?: { fileName: string; contents: string } | null;
 } = {}) {
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
   const revisions = new Map<string, { recordId: string; number: number }>(
@@ -92,6 +94,8 @@ function fakeCore({
       }
       case 'erase_record':
         return 2;
+      case 'choose_import':
+        return importFile;
       case 'set_aside_vaults':
         return setAside;
       case 'bring_back_vault':
@@ -711,4 +715,49 @@ it('switches to a vault a restore set aside, after asking', async () => {
   await user.click(screen.getByRole('button', { name: 'Switch vaults' }));
   await waitFor(() => expect(onLocked).toHaveBeenCalledWith('switched'));
   expect(core.called('bring_back_vault')[0].args).toEqual({ name: 'replaced-1' });
+});
+
+it('imports what was chosen from a file, skipping names already in use unless told', async () => {
+  const contents = [
+    'filetype = GlazeChem Glazes',
+    'name = Shino',
+    'component = Nepheline Syenite',
+    'amount = 60',
+    'name = Tenmoku',
+    'component = Custer Spar',
+    'amount = 40',
+    'component = Unobtainium',
+    'amount = 5'
+  ].join('\n');
+  const core = fakeCore({ importFile: { fileName: 'Highfire.glz', contents } });
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
+  expect(await screen.findByRole('heading', { name: 'Import from Highfire.glz' })).toBeTruthy();
+  expect(screen.getByText(/not found: Unobtainium/)).toBeTruthy();
+  const shinoChoice = screen.getByLabelText('What to do with Shino') as HTMLSelectElement;
+  expect(shinoChoice.value).toBe('skip');
+  await user.click(screen.getByRole('button', { name: 'Import 1 recipe and 0 materials' }));
+  await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+  expect(core.called('save_record')[0].args).toMatchObject({ kind: 'recipe', parent: null, content: { name: 'Tenmoku' } });
+  expect(await screen.findByText(/1 recipe and 0 materials imported from Highfire.glz/)).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+
+  await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
+  await user.selectOptions(await screen.findByLabelText('What to do with Shino'), 'revision');
+  await user.selectOptions(screen.getByLabelText('What to do with Tenmoku'), 'copy');
+  await user.click(screen.getByRole('button', { name: 'Import 2 recipes and 0 materials' }));
+  await waitFor(() => expect(core.called('save_record')).toHaveLength(3));
+  expect(core.called('save_record')[1].args).toMatchObject({ parent: 'revision-1', content: { name: 'Shino' } });
+  expect(core.called('save_record')[2].args).toMatchObject({ parent: null, content: { name: 'Tenmoku (imported)' } });
+});
+
+it('says why a file cannot be imported', async () => {
+  fakeCore({ importFile: { fileName: 'prices.csv', contents: 'Name,Price\nSilica,1\n' } });
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
+  expect((await screen.findByRole('alert')).textContent).toMatch(/a column for each oxide/);
 });

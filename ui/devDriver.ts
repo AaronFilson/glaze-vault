@@ -14,11 +14,13 @@
 //     select "Kind" "Frit"               chooses an option by its text
 //     check "Show password" / uncheck "Show password"
 //     press "Enter"                      a key, to the focused element; Enter submits its form
+//     pick "/tmp/recipes.glz"            the file the next open or save dialog chooses, unasked
 //     wait 500                           milliseconds
 //     # a comment
 //
 // A name in slashes, such as /^Revision 1/, is a regular expression. Each command waits up to
 // two seconds for its element, so one can follow a click that changes the screen.
+import { invoke } from '@tauri-apps/api/core';
 import { hidden, nameOf, squash } from './devScreen';
 
 const CONTROLS = 'button, a[href], input, select, textarea, summary';
@@ -165,6 +167,11 @@ async function run(line: string): Promise<void> {
       target.dispatchEvent(new KeyboardEvent('keyup', init));
       const form = (target as HTMLInputElement).form;
       if (go && key === 'Enter' && form && target.tagName === 'INPUT') submit(form);
+      return;
+    }
+    case 'pick': {
+      if (!args[0]) throw new Error('Say which file, in quotes.');
+      await invoke('dev_pick', { path: unquote(args[0]) });
       return;
     }
     case 'wait':

@@ -232,15 +232,15 @@ struct ChosenBackup {
 /// Asks for a backup file to restore, and says when it was made.
 #[tauri::command(async)]
 fn choose_backup(window: WebviewWindow) -> CommandResult<Option<ChosenBackup>> {
-    let picked = window
-        .dialog()
-        .file()
-        .set_parent(&window)
-        .set_title("Choose a backup to restore")
-        .add_filter("Glaze Vault backup", &[BACKUP_EXTENSION])
-        .blocking_pick_file();
-    let Some(picked) = picked else { return Ok(None) };
-    let path = picked.into_path().map_err(file_error)?;
+    let Some(path) = open_dialog(
+        &window,
+        "Choose a backup to restore",
+        "Glaze Vault backup",
+        &[BACKUP_EXTENSION],
+    )?
+    else {
+        return Ok(None);
+    };
     let info = Vault::backup_info(&path)?;
     Ok(Some(ChosenBackup {
         file_name: file_name(&path),
@@ -290,6 +290,48 @@ fn restore_backup(
     })
 }
 
+/// The largest file import reads: far more than any recipe list, and a stop for the wrong file.
+const MAX_IMPORT_BYTES: u64 = 50 * 1024 * 1024;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportFile {
+    file_name: String,
+    contents: String,
+}
+
+/// Asks for a file of recipes or materials to import, and reads it for the page to parse
+/// (ui/importFormats.ts). None if the person cancelled. Text that is not UTF-8, as older programs
+/// write, is read as Latin-1, which keeps their accented letters.
+#[tauri::command(async)]
+fn choose_import(window: WebviewWindow, state: State<AppState>) -> CommandResult<Option<ImportFile>> {
+    if state.vault.lock().unwrap().is_none() {
+        return Err(locked());
+    }
+    let Some(path) = open_dialog(
+        &window,
+        "Choose recipes or materials to import",
+        "Recipes and materials",
+        &["json", "xml", "csv", "txt", "glz", "mat", "rcx"],
+    )?
+    else {
+        return Ok(None);
+    };
+    if fs::metadata(&path).map_err(file_error)?.len() > MAX_IMPORT_BYTES {
+        return Err(CommandError::new(
+            "too-large",
+            "That file is too large to import: recipes and materials take far less.",
+        ));
+    }
+    let bytes = fs::read(&path).map_err(file_error)?;
+    let contents =
+        String::from_utf8(bytes).unwrap_or_else(|error| error.into_bytes().iter().map(|&byte| byte as char).collect());
+    Ok(Some(ImportFile {
+        file_name: file_name(&path),
+        contents,
+    }))
+}
+
 /// The vaults a restore set aside, to switch back to.
 #[tauri::command(async)]
 fn set_aside_vaults(state: State<AppState>) -> CommandResult<Vec<SetAside>> {
@@ -332,12 +374,48 @@ fn save_export(
     Ok(Some(file_name(&path)))
 }
 
+/// Asks for a file to open.
+fn open_dialog(window: &WebviewWindow, title: &str, kind: &str, extensions: &[&str]) -> CommandResult<Option<PathBuf>> {
+    if let Some(path) = dev_picked() {
+        return Ok(Some(path));
+    }
+    let picked = window
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(title)
+        .add_filter(kind, extensions)
+        .blocking_pick_file();
+    picked.map(|p| p.into_path().map_err(file_error)).transpose()
+}
+
+/// Development builds only: the file a script chose for the next dialog, in place of asking
+/// (`pick` in ui/devDriver.ts), so imports, backups and restores can be driven.
+#[cfg(debug_assertions)]
+static DEV_PICK: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+fn dev_picked() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    return DEV_PICK.lock().unwrap().take();
+    #[cfg(not(debug_assertions))]
+    None
+}
+
+#[cfg(debug_assertions)]
+#[tauri::command(async)]
+fn dev_pick(path: String) {
+    *DEV_PICK.lock().unwrap() = Some(PathBuf::from(path));
+}
+
 fn save_dialog(
     window: &WebviewWindow,
     suggested_name: &str,
     kind: &str,
     extension: &str,
 ) -> CommandResult<Option<PathBuf>> {
+    if let Some(path) = dev_picked() {
+        return Ok(Some(path));
+    }
     let picked = window
         .dialog()
         .file()
@@ -563,6 +641,7 @@ pub fn run() {
             back_up,
             choose_backup,
             restore_backup,
+            choose_import,
             set_aside_vaults,
             bring_back_vault,
             save_export,
@@ -573,7 +652,9 @@ pub fn run() {
             #[cfg(debug_assertions)]
             dev_screen,
             #[cfg(debug_assertions)]
-            dev_drive
+            dev_drive,
+            #[cfg(debug_assertions)]
+            dev_pick
         ])
         .run(context)
         .expect("error while running Glaze Vault");

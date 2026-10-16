@@ -68,4 +68,5 @@ Before deleting, Glaze Vault says how many recipes use it. They are not changed:
 standard material of the same name instead, if there is one, or show it as unknown, until you
 restore it.
 
-> Coming later: importing materials from a file.
+To add many materials at once, such as from a supplier's data sheets in a spreadsheet, see
+[Importing](importing.md).

@@ -29,8 +29,12 @@ export function exportJson(
         materials: materials.map((material) => ({
           name: material.content.name,
           category: material.content.category,
+          ...(material.content.basis === 'formula' ? { basis: 'formula' } : {}),
           oxides: material.content.oxides.filter((line) => line.percent.trim()),
           loi: material.content.loi,
+          ...(material.content.formula?.length
+            ? { formula: material.content.formula.filter((line) => line.moles.trim()) }
+            : {}),
           notes: material.content.notes,
           revision: material.number,
           savedAt: new Date(material.savedAt).toISOString()

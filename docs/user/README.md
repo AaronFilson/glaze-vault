@@ -17,8 +17,9 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 5. [Your own materials](materials.md): your supplier's analyses, stains and additives
 6. [Printing](printing.md): a recipe, or a batch sheet for weighing out
 7. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
-8. [Settings](settings.md): locking by itself, your password, updates
-9. [How your recipes are protected](security.md)
+8. [Importing](importing.md): recipes and materials from other programs and spreadsheets
+9. [Settings](settings.md): locking by itself, your password, updates
+10. [How your recipes are protected](security.md)
 
 ## Coming later
 

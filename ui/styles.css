@@ -721,3 +721,11 @@ button.link.danger {
     width: 100%;
   }
 }
+
+.import-section .row h2 {
+  margin: 0;
+}
+
+.import-warnings summary {
+  cursor: pointer;
+}

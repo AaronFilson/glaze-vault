@@ -26,6 +26,8 @@ import { restorePart, useEditor, type Editor } from '../useEditor';
 import { useIdleLock } from '../useIdleLock';
 import { Compare, type Side } from './Compare';
 import { ConfirmNotice } from './Deleted';
+import { Import } from './Import';
+import type { ImportPlan } from '../importFormats';
 import { EMPTY_MATERIAL, Materials, sameMaterial } from './Materials';
 import { PrintView, type PrintJob } from './PrintView';
 import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
@@ -79,7 +81,8 @@ export function Recipes({
   // window.confirm(), so the question is asked in the page.
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
   const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
-  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare'>('recipes');
+  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare' | 'import'>('recipes');
+  const [importing, setImporting] = useState<{ fileName: string; plan: ImportPlan } | null>(null);
   const [comparing, setComparing] = useState<[Side, Side] | null>(null);
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
@@ -611,7 +614,33 @@ export function Recipes({
             })
           }
           switchError={switchError}
+          onImport={(fileName, plan) => {
+            setImporting({ fileName, plan });
+            setView('import');
+          }}
           onClose={() => setView('recipes')}
+        />
+      ) : view === 'import' && importing ? (
+        <Import
+          fileName={importing.fileName}
+          plan={importing.plan}
+          recipes={recipes}
+          materials={materials}
+          onImported={({ recipes: newRecipes, materials: newMaterials }) => {
+            const merge = <Content,>(list: Revision<Content>[], added: Revision<Content>[]) => [
+              ...added,
+              ...list.filter((head) => !added.some((a) => a.recordId === head.recordId))
+            ];
+            setRecipes((list) => merge(list, newRecipes));
+            setMaterials((list) => merge(list, newMaterials));
+            // A record open in an editor that got a new revision moves on to it, keeping any edits.
+            newRecipes.forEach((saved) => recipe.rebase(saved, (draft) => draft));
+            newMaterials.forEach((saved) => material.rebase(saved, (draft) => draft));
+          }}
+          onClose={() => {
+            setImporting(null);
+            setView('settings');
+          }}
         />
       ) : view === 'compare' && comparing ? (
         <Compare
