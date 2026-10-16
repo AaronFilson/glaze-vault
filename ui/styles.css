@@ -655,3 +655,69 @@ button.link.danger {
   cursor: pointer;
   color: var(--muted);
 }
+
+/* Compare takes the place of the list, editor and analysis, like Settings. */
+.settings.compare {
+  max-width: 60rem;
+}
+
+.compare-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.compare-side {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+}
+
+.compare-table caption {
+  text-align: left;
+  font-weight: 600;
+  padding-bottom: 0.25rem;
+}
+
+.compare-table th,
+.compare-table td {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.compare-table .num {
+  text-align: right;
+}
+
+.compare-table .change {
+  color: var(--muted);
+}
+
+.compare-notes > div {
+  display: inline-block;
+  vertical-align: top;
+  width: 48%;
+  margin-right: 2%;
+}
+
+.pre {
+  white-space: pre-wrap;
+}
+
+@media (max-width: 640px) {
+  .compare-sides {
+    grid-template-columns: 1fr;
+  }
+
+  .compare-notes > div {
+    width: 100%;
+  }
+}

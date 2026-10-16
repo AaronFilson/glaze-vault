@@ -476,6 +476,43 @@ describe('deleting', () => {
   });
 });
 
+describe('comparing', () => {
+  it('compares unsaved changes with what they started from', async () => {
+    fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    fireEvent.change(screen.getByLabelText('Amount 1'), { target: { value: '25' } });
+    fireEvent.change(screen.getByLabelText('Material 1'), { target: { value: 'Nepheline Syenite' } });
+    await user.click(screen.getByRole('button', { name: 'Add material' }));
+    fireEvent.change(screen.getByLabelText('Material 2'), { target: { value: 'Whiting' } });
+    fireEvent.change(screen.getByLabelText('Amount 2'), { target: { value: '25' } });
+    await user.click(screen.getByRole('button', { name: 'Compare…' }));
+
+    const batch = screen.getByRole('table', { name: 'Batch, percent of each' });
+    const rows = [...batch.querySelectorAll('tbody tr')].map((row) => row.textContent);
+    expect(rows).toEqual(['Nepheline Syenite100.050.0−50.0', 'Whiting—50.0added']);
+    expect(screen.getByRole('table', { name: 'Unity formula' }).textContent).toContain('CaO');
+    expect((screen.getByLabelText('Recipe', { selector: '#second-recipe' }) as HTMLSelectElement).value).toBe('draft');
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect((screen.getByLabelText('Amount 2') as HTMLInputElement).value).toBe('25');
+  });
+
+  it('compares an earlier revision with the newest', async () => {
+    const second = { ...shino, revisionId: 'revision-2', number: 2, content: { ...shino.content, notes: 'Thinner' } };
+    fakeCore({ recipes: [second], history: [second, shino] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    await user.click(screen.getByText('Earlier revisions (1)'));
+    await user.click(await screen.findByRole('button', { name: /^Revision 1 ·/ }));
+    await user.click(screen.getByRole('button', { name: 'Compare with the newest' }));
+    expect(await screen.findByRole('heading', { name: 'Shino, revision 1' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Shino' })).toBeTruthy();
+    expect(screen.getByText('Thinner')).toBeTruthy();
+  });
+});
+
 describe('saving on the way', () => {
   it('reopens the recipe being saved at the revision just saved', async () => {
     const core = fakeCore();

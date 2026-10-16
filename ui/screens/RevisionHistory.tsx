@@ -61,12 +61,14 @@ export function ViewingNotice<Content>({
   viewing,
   newest,
   onUse,
-  onBack
+  onBack,
+  onCompare
 }: {
   viewing: Revision<Content>;
   newest: Revision<Content>;
   onUse: () => void;
   onBack: () => void;
+  onCompare?: () => void;
 }) {
   return (
     <div className="notice" role="status">
@@ -81,6 +83,11 @@ export function ViewingNotice<Content>({
         <button type="button" onClick={onBack}>
           Back to the newest
         </button>
+        {onCompare && (
+          <button type="button" onClick={onCompare}>
+            Compare with the newest
+          </button>
+        )}
       </div>
     </div>
   );

@@ -24,6 +24,7 @@ import {
 import { localDate } from '../export';
 import { restorePart, useEditor, type Editor } from '../useEditor';
 import { useIdleLock } from '../useIdleLock';
+import { Compare, type Side } from './Compare';
 import { ConfirmNotice } from './Deleted';
 import { EMPTY_MATERIAL, Materials, sameMaterial } from './Materials';
 import { PrintView, type PrintJob } from './PrintView';
@@ -76,7 +77,8 @@ export function Recipes({
   // window.confirm(), so the question is asked in the page.
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
   const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
-  const [view, setView] = useState<'recipes' | 'materials' | 'settings'>('recipes');
+  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare'>('recipes');
+  const [comparing, setComparing] = useState<[Side, Side] | null>(null);
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
   const [kept, setKept] = useState({ recipe: false, material: false });
@@ -383,6 +385,24 @@ export function Recipes({
         pending.scope !== 'recipe' && material.changed && (material.draft.name || 'This material')
       ].filter((name): name is string => !!name)
     : [];
+  // What Compare starts with: the unsaved changes and what they started from, an earlier revision
+  // and the newest, or this recipe and another.
+  const compareFrom = (number?: number): [Side, Side] | null => {
+    const current = recipe.current;
+    const other = recipes.find((r) => r.recordId !== current?.recordId);
+    if (current && number) return [{ recordId: current.recordId, number }, { recordId: current.recordId, number: null }];
+    if (recipe.changed) {
+      const base = current ?? other;
+      return base ? [{ recordId: base.recordId, number: null }, { draft: true }] : null;
+    }
+    if (current && current.number > 1) {
+      return [{ recordId: current.recordId, number: current.number - 1 }, { recordId: current.recordId, number: null }];
+    }
+    if (current && other) return [{ recordId: current.recordId, number: null }, { recordId: other.recordId, number: null }];
+    return null;
+  };
+  const canCompare = !!compareFrom();
+
   const confirmText = () => {
     if (!confirming) return null;
     const editor = confirming.kind === 'recipe' ? recipe : material;
@@ -552,6 +572,14 @@ export function Recipes({
           onNewRecoveryKey={setNewWords}
           onClose={() => setView('recipes')}
         />
+      ) : view === 'compare' && comparing ? (
+        <Compare
+          recipes={recipes}
+          unsaved={recipe.changed ? { recordId: recipe.current?.recordId ?? null, content: recipe.draft } : null}
+          library={library}
+          initial={comparing}
+          onClose={() => setView('recipes')}
+        />
       ) : view === 'materials' ? (
         <Materials
           materials={materials}
@@ -588,6 +616,14 @@ export function Recipes({
           onDelete={() => setConfirming({ action: 'delete', kind: 'recipe' })}
           onRestore={() => void restoreRecord(records.recipe)}
           onErase={() => setConfirming({ action: 'erase', kind: 'recipe' })}
+          onCompare={
+            canCompare
+              ? (number) => {
+                  setComparing(compareFrom(number));
+                  setView('compare');
+                }
+              : undefined
+          }
         />
       )}
 

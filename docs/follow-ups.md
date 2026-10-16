@@ -22,7 +22,6 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Next for one person ([ADR 6](adr/0006-one-person-first.md))
 
-- Comparing two recipes, or two revisions of one.
 - Materials from a chemical formula, not only an analysis.
 - Renaming a material in the recipes that use it, rather than listing them.
 - Bring back a vault set aside by a restore from inside the app; today the user guide explains

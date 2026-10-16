@@ -32,7 +32,8 @@ export function RecipeEditor({
   onOpenDeleted,
   onDelete,
   onRestore,
-  onErase
+  onErase,
+  onCompare
 }: {
   recipes: RecipeHead[];
   deleted: RecipeHead[];
@@ -48,6 +49,9 @@ export function RecipeEditor({
   onDelete: () => void;
   onRestore: () => void;
   onErase: () => void;
+  /** Opens Compare: from here when nothing is said, or with an earlier revision. Missing when
+   * there is nothing to compare with. */
+  onCompare?: (revisionNumber?: number) => void;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -87,6 +91,7 @@ export function RecipeEditor({
             newest={current}
             onUse={onUseRevision}
             onBack={() => editor.setViewing(null)}
+            onCompare={onCompare && (() => onCompare(viewing.number))}
           />
         )}
         <fieldset className="plain" disabled={!!viewing}>
@@ -174,8 +179,13 @@ export function RecipeEditor({
               Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
             </span>
           )}
+          {onCompare && !viewing && (
+            <button type="button" className="end" onClick={() => onCompare()}>
+              Compare…
+            </button>
+          )}
           {current && !viewing && (
-            <button type="button" className="link danger end" onClick={onDelete}>
+            <button type="button" className={`link danger${onCompare ? '' : ' end'}`} onClick={onDelete}>
               Delete…
             </button>
           )}
