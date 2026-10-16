@@ -44,6 +44,7 @@ function fakeCore({
   draft = null,
   recipes = [shino],
   materials = [],
+  deleted = [],
   history = []
 }: {
   settings?: Settings;
@@ -51,6 +52,7 @@ function fakeCore({
   draft?: Draft | null;
   recipes?: RecipeHead[];
   materials?: MaterialHead[];
+  deleted?: (RecipeHead | MaterialHead)[];
   history?: (RecipeHead | MaterialHead)[];
 } = {}) {
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
@@ -77,6 +79,17 @@ function fakeCore({
         revisions.set(revision.revisionId, revision);
         return revision;
       }
+      case 'deleted_records':
+        return deleted.filter((r) => (a.kind === 'recipe') === 'lines' in r.content);
+      case 'delete_record': {
+        saved += 1;
+        const newest = [...recipes, ...materials].find((r) => r.revisionId === a.newest)!;
+        const gone = { ...newest, revisionId: `deleted-revision-${saved}`, number: newest.number + 1, deleted: true };
+        revisions.set(gone.revisionId, gone);
+        return gone;
+      }
+      case 'erase_record':
+        return 2;
       case 'record_history':
         return history.filter((r) => r.recordId === a.recordId);
       case 'back_up':
@@ -391,6 +404,76 @@ it('shows an earlier revision and makes it the newest', async () => {
   await user.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
   expect(core.called('save_record')[0].args).toMatchObject({ parent: 'revision-3', content: { name: 'Shino 1' } });
+});
+
+describe('deleting', () => {
+  it('moves a recipe to Deleted, and restores it from there', async () => {
+    const core = fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    await user.click(screen.getByRole('button', { name: 'Delete…' }));
+    expect(screen.getByRole('alertdialog', { name: 'Delete' }).textContent).toContain('Delete Shino?');
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(core.called('delete_record')).toHaveLength(1));
+    expect(core.called('delete_record')[0].args).toEqual({ kind: 'recipe', newest: 'revision-1' });
+    expect(await screen.findByText('No recipes yet.')).toBeTruthy();
+
+    await user.click(screen.getByText('Deleted (1)'));
+    await user.click(screen.getByRole('button', { name: 'Shino' }));
+    expect(screen.getByText(/was deleted/)).toBeTruthy();
+    expect((screen.getByLabelText('Recipe name') as HTMLInputElement).matches(':disabled')).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args).toMatchObject({ kind: 'recipe', parent: 'deleted-revision-1' });
+    expect(screen.queryByText('Deleted (1)')).toBeNull();
+    expect((screen.getByLabelText('Recipe name') as HTMLInputElement).value).toBe('Shino');
+  });
+
+  it('erases a deleted recipe after asking', async () => {
+    const gone = { ...shino, revisionId: 'revision-2', number: 2, deleted: true };
+    const core = fakeCore({ recipes: [], deleted: [gone] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByText('Deleted (1)'));
+    await user.click(screen.getByRole('button', { name: 'Shino' }));
+    await user.click(screen.getByRole('button', { name: 'Erase permanently…' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain('cannot be brought back');
+    await user.click(screen.getByRole('button', { name: 'Erase permanently' }));
+    await waitFor(() => expect(core.called('erase_record')).toHaveLength(1));
+    expect(core.called('erase_record')[0].args).toEqual({ kind: 'recipe', recordId: 'record-1' });
+    expect(screen.queryByText(/Deleted \(/)).toBeNull();
+  });
+
+  it('says what deleting a material does to the recipes that use it', async () => {
+    fakeCore({
+      recipes: [{ ...shino, content: { ...shino.content, lines: [{ material: 'Spar, lot 7', amount: '10' }] } }],
+      materials: [spar, { ...spar, recordId: 'material-2', revisionId: 'r-silica', content: { ...spar.content, name: 'Silica' } }]
+    });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
+    await user.click(screen.getByRole('button', { name: 'Delete…' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain('1 recipe uses it, and will not find it until it is restored.');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Silica' }));
+    await user.click(screen.getByRole('button', { name: 'Delete…' }));
+    expect(screen.getByRole('alertdialog').textContent).not.toContain('recipe uses');
+  });
+
+  it('does not restore a material over another of the same name', async () => {
+    const gone = { ...spar, revisionId: 'material-revision-2', number: 2, deleted: true };
+    const core = fakeCore({ materials: [{ ...spar, recordId: 'material-9', revisionId: 'r-9' }], deleted: [gone] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByText('Deleted (1)'));
+    await user.click(within(screen.getByText('Deleted (1)').closest('details')!).getByRole('button', { name: 'Spar, lot 7' }));
+    await user.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(screen.getByRole('alert').textContent).toContain('You have another material called Spar, lot 7.');
+    expect(core.called('save_record')).toHaveLength(0);
+  });
 });
 
 describe('saving on the way', () => {

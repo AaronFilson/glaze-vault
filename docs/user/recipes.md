@@ -76,3 +76,15 @@ An earlier revision is worked out with [your materials](materials.md) as they ar
 have changed a material since, its unity formula may differ from what it was.
 
 > Coming later: comparing two recipes or two revisions, and deleting a recipe.
+
+## Deleting a recipe
+
+Open it and choose **Delete…**, then **Delete**. It moves to **Deleted**, below the list of
+recipes, and is kept there until you restore or erase it. Unsaved changes to it are lost.
+
+Under **Deleted**, choose a recipe to see it as it was. Then:
+
+- **Restore** puts it back in the list, with all its revisions.
+- **Erase permanently…** removes it and every revision of it from this vault. It cannot be
+  brought back. [Backups](backups.md) made before still have it: to be rid of it everywhere,
+  make a new backup afterwards and delete the older ones.

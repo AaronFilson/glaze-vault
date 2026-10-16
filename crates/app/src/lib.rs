@@ -151,6 +151,23 @@ fn record_history(state: State<AppState>, kind: Kind, record_id: Uuid) -> Comman
     with_vault(&state, |vault| vault.history(kind, record_id))
 }
 
+/// Deletes a record: it moves to the deleted ones, to restore or erase (ADR 9).
+#[tauri::command(async)]
+fn delete_record(state: State<AppState>, kind: Kind, newest: Uuid) -> CommandResult<Revision> {
+    with_vault(&state, |vault| vault.delete(kind, newest))
+}
+
+#[tauri::command(async)]
+fn deleted_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revision>> {
+    with_vault(&state, |vault| vault.deleted(kind))
+}
+
+/// Removes every revision of a deleted record. Returns how many there were.
+#[tauri::command(async)]
+fn erase_record(state: State<AppState>, kind: Kind, record_id: Uuid) -> CommandResult<usize> {
+    with_vault(&state, |vault| vault.erase(kind, record_id))
+}
+
 #[tauri::command(async)]
 fn get_settings(state: State<AppState>) -> CommandResult<Settings> {
     with_vault(&state, |vault| vault.settings())
@@ -414,21 +431,57 @@ async fn install_update(app: AppHandle, state: State<'_, AppState>) -> CommandRe
     app.restart();
 }
 
-/// Development builds only: writes the page's text picture of the screen (ui/devScreen.ts) to the
-/// file GLAZE_VAULT_SCREEN names, so the app can be followed without screenshots. Returns false
-/// when no file is named, and the page stops sending. The file holds what is on screen in plain
-/// text, so it is for throwaway vaults.
+/// Development builds only: writes the page's text picture of the screen (ui/devTools.ts) to the
+/// file GLAZE_VAULT_SCREEN names, so the app can be followed without screenshots. Says when no
+/// file is named, and the page stops sending. The file holds what is on screen in plain text, so
+/// it is for throwaway vaults.
 #[cfg(debug_assertions)]
 #[tauri::command(async)]
-fn dev_screen(text: String) -> CommandResult<bool> {
+fn dev_screen(text: String) -> CommandResult<ScreenFile> {
+    let show_secrets = std::env::var("GLAZE_VAULT_SHOW_SECRETS").is_ok_and(|value| value == "1");
     let Some(path) = std::env::var_os("GLAZE_VAULT_SCREEN").map(PathBuf::from) else {
-        return Ok(false);
+        return Ok(ScreenFile {
+            written: false,
+            show_secrets,
+        });
     };
     // Written beside it and moved into place, so a reader never sees half a screen.
     let partial = path.with_extension("partial");
     fs::write(&partial, text).map_err(file_error)?;
     fs::rename(&partial, &path).map_err(file_error)?;
-    Ok(true)
+    Ok(ScreenFile {
+        written: true,
+        show_secrets,
+    })
+}
+
+#[cfg(debug_assertions)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenFile {
+    written: bool,
+    /// GLAZE_VAULT_SHOW_SECRETS=1: show passwords and recovery words too, for scripts that set up
+    /// a throwaway vault.
+    show_secrets: bool,
+}
+
+/// Development builds only: takes the script in the file GLAZE_VAULT_DRIVE names, if there is
+/// one, for the page to run (ui/devDriver.ts). Fails when no file is named, and the page stops
+/// asking.
+#[cfg(debug_assertions)]
+#[tauri::command(async)]
+fn dev_drive() -> CommandResult<Option<String>> {
+    let Some(path) = std::env::var_os("GLAZE_VAULT_DRIVE").map(PathBuf::from) else {
+        return Err(CommandError::new("off", "GLAZE_VAULT_DRIVE is not set."));
+    };
+    // Moved aside first, so a script written while this one is read is not lost or run twice.
+    let taken = path.with_extension("taken");
+    if fs::rename(&path, &taken).is_err() {
+        return Ok(None);
+    }
+    let script = fs::read_to_string(&taken).map_err(file_error)?;
+    fs::remove_file(&taken).map_err(file_error)?;
+    Ok(Some(script))
 }
 
 /// Whether this build has an updater public key. Builds without one (anyone's own build before
@@ -479,6 +532,9 @@ pub fn run() {
             list_records,
             save_record,
             record_history,
+            delete_record,
+            deleted_records,
+            erase_record,
             get_settings,
             set_settings,
             lock_with_draft,
@@ -495,7 +551,9 @@ pub fn run() {
             check_for_update,
             install_update,
             #[cfg(debug_assertions)]
-            dev_screen
+            dev_screen,
+            #[cfg(debug_assertions)]
+            dev_drive
         ])
         .run(context)
         .expect("error while running Glaze Vault");

@@ -633,3 +633,25 @@ table.umf th {
     break-inside: avoid;
   }
 }
+
+button.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+button.link.danger {
+  color: var(--danger);
+}
+
+.row > .end {
+  margin-left: auto;
+}
+
+.deleted {
+  margin-top: 1rem;
+}
+
+.deleted summary {
+  cursor: pointer;
+  color: var(--muted);
+}

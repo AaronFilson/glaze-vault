@@ -38,6 +38,9 @@ export function useEditor<Content>(empty: Content, same: (a: Content, b: Content
       return { current: newest, draft: newest?.content ?? empty, viewing: null };
     });
 
+  /** Shows a revision with nothing open to edit, such as a deleted record's. */
+  const look = (revision: Revision<Content>) => setState({ current: null, draft: empty, viewing: revision });
+
   /** Puts content in the editor as unsaved edits to the current revision, such as an earlier one's. */
   const edit = (content: Content) => setState((prev) => ({ ...prev, draft: content, viewing: null }));
 
@@ -52,7 +55,7 @@ export function useEditor<Content>(empty: Content, same: (a: Content, b: Content
     ? { recordId: current?.recordId ?? null, revisionId: current?.revisionId ?? null, content: draft }
     : undefined;
 
-  return { current, draft, setDraft, changed, viewing, setViewing, show, open, edit, discard, part };
+  return { current, draft, setDraft, changed, viewing, setViewing, show, open, look, edit, discard, part };
 }
 
 export type Editor<Content> = ReturnType<typeof useEditor<Content>>;

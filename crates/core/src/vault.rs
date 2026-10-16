@@ -61,6 +61,8 @@ pub struct Revision {
     pub number: i64,
     pub saved_at: i64,
     pub content: serde_json::Value,
+    /// This revision deletes the record. It keeps the content it had, to restore it from.
+    pub deleted: bool,
 }
 
 impl Vault {
@@ -330,7 +332,48 @@ impl Vault {
 
     /// Saves a record. With no parent it starts a new one; with one, it adds the next revision
     /// after it. Revisions are never changed, only added (docs/adr/0005-lan-host-and-replicas.md).
+    /// Saving after a revision that deletes a record restores it.
     pub fn save(&mut self, kind: Kind, parent: Option<Uuid>, content: &serde_json::Value) -> Result<Revision> {
+        self.add_revision(kind, parent, content, false)
+    }
+
+    /// Deletes a record by adding a revision after its newest that says so, with the same content.
+    /// It leaves the lists for the deleted ones, where it can be restored or erased (ADR 9).
+    pub fn delete(&mut self, kind: Kind, newest: Uuid) -> Result<Revision> {
+        let revision = self
+            .read_revisions(
+                "WHERE r.kind = ?1 AND r.id = ?2 AND r.deleted = 0
+                 AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)",
+                params![kind.as_str(), newest.to_string()],
+                kind,
+            )?
+            .pop()
+            .ok_or(Error::NotFound)?;
+        self.add_revision(kind, Some(newest), &revision.content, true)
+    }
+
+    /// Erases a deleted record: every revision of it is removed from the vault, and cannot be
+    /// brought back. Backups made before still hold it. Returns how many revisions there were.
+    pub fn erase(&mut self, kind: Kind, record_id: Uuid) -> Result<usize> {
+        if !self.deleted(kind)?.iter().any(|r| r.record_id == record_id) {
+            return Err(Error::NotDeleted);
+        }
+        let erased = self.conn.execute(
+            "DELETE FROM revisions WHERE record_id = ?1 AND kind = ?2",
+            params![record_id.to_string(), kind.as_str()],
+        )?;
+        // secure_delete has zeroed the freed pages; this empties the write-ahead log of them too.
+        self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(erased)
+    }
+
+    fn add_revision(
+        &mut self,
+        kind: Kind,
+        parent: Option<Uuid>,
+        content: &serde_json::Value,
+        deleted: bool,
+    ) -> Result<Revision> {
         let plaintext = Zeroizing::new(serde_json::to_vec(content)?);
         if plaintext.len() > MAX_RECORD_BYTES {
             return Err(Error::TooLarge);
@@ -359,11 +402,12 @@ impl Vault {
             &self.collection_id,
             number,
             parent.as_ref(),
+            deleted,
         );
         let sealed = crypto::encrypt(&self.collection_key, &plaintext, &aad);
         self.conn.execute(
-            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 revision_id.to_string(),
                 record_id.to_string(),
@@ -375,6 +419,7 @@ impl Vault {
                 saved_at,
                 sealed.nonce,
                 sealed.ciphertext,
+                deleted,
             ],
         )?;
         Ok(Revision {
@@ -383,11 +428,22 @@ impl Vault {
             number,
             saved_at,
             content: content.clone(),
+            deleted,
         })
     }
 
-    /// The newest revision of every record of a kind, newest first.
+    /// The newest revision of every record of a kind, newest first, leaving out deleted records.
     pub fn heads(&self, kind: Kind) -> Result<Vec<Revision>> {
+        Ok(self.newest(kind)?.into_iter().filter(|r| !r.deleted).collect())
+    }
+
+    /// The deleted records of a kind, newest first: each one's revision that deleted it.
+    pub fn deleted(&self, kind: Kind) -> Result<Vec<Revision>> {
+        Ok(self.newest(kind)?.into_iter().filter(|r| r.deleted).collect())
+    }
+
+    /// The newest revision of every record of a kind, deleted or not, newest first.
+    fn newest(&self, kind: Kind) -> Result<Vec<Revision>> {
         let revisions = self.read_revisions(
             "WHERE r.kind = ?1 AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)
              ORDER BY r.created_at DESC",
@@ -405,10 +461,11 @@ impl Vault {
         Ok(heads)
     }
 
-    /// Every revision of one record, newest first.
+    /// Every saved revision of one record, newest first. Revisions that deleted it are left out:
+    /// each has the content of the one before.
     pub fn history(&self, kind: Kind, record_id: Uuid) -> Result<Vec<Revision>> {
         let revisions = self.read_revisions(
-            "WHERE r.kind = ?1 AND r.record_id = ?2 ORDER BY r.number DESC, r.created_at DESC",
+            "WHERE r.kind = ?1 AND r.record_id = ?2 AND r.deleted = 0 ORDER BY r.number DESC, r.created_at DESC",
             params![kind.as_str(), record_id.to_string()],
             kind,
         )?;
@@ -427,7 +484,8 @@ impl Vault {
         kind: Kind,
     ) -> Result<Vec<Revision>> {
         let mut statement = self.conn.prepare(&format!(
-            "SELECT r.id, r.record_id, r.parent_id, r.number, r.collection_id, r.created_at, r.nonce, r.ciphertext
+            "SELECT r.id, r.record_id, r.parent_id, r.number, r.collection_id, r.created_at, r.nonce, r.ciphertext,
+                    r.deleted
              FROM revisions r {where_clause}"
         ))?;
         let rows = statement.query_map(values, |row| {
@@ -440,11 +498,12 @@ impl Vault {
                 row.get::<_, i64>(5)?,
                 row.get::<_, Vec<u8>>(6)?,
                 row.get::<_, Vec<u8>>(7)?,
+                row.get::<_, bool>(8)?,
             ))
         })?;
         let mut revisions = Vec::new();
         for row in rows {
-            let (id, record_id, parent_id, number, collection_id, saved_at, nonce, ciphertext) = row?;
+            let (id, record_id, parent_id, number, collection_id, saved_at, nonce, ciphertext, deleted) = row?;
             let (revision_id, record_id, collection_id) =
                 (parse_id(&id)?, parse_id(&record_id)?, parse_id(&collection_id)?);
             let parent = parent_id.as_deref().map(parse_id).transpose()?;
@@ -458,6 +517,7 @@ impl Vault {
                 &collection_id,
                 number,
                 parent.as_ref(),
+                deleted,
             );
             let plaintext = crypto::decrypt(&self.collection_key, &crypto::Sealed { nonce, ciphertext }, &aad)
                 .ok_or_else(|| Error::Corrupt(format!("revision {revision_id} does not decrypt")))?;
@@ -467,6 +527,7 @@ impl Vault {
                 number,
                 saved_at,
                 content: serde_json::from_slice(&plaintext)?,
+                deleted,
             });
         }
         Ok(revisions)
@@ -747,9 +808,13 @@ fn revision_aad(
     collection_id: &Uuid,
     number: i64,
     parent: Option<&Uuid>,
+    deleted: bool,
 ) -> Vec<u8> {
     let parent = parent.map(Uuid::to_string).unwrap_or_default();
-    format!("glaze-vault v1 revision {id} record {record_id} kind {kind} collection {collection_id} number {number} parent {parent}")
+    // Added only for a revision that deletes, so revisions saved before ADR 9 still open, and the
+    // flag cannot be set or cleared without the key.
+    let deleted = if deleted { " deleted" } else { "" };
+    format!("glaze-vault v1 revision {id} record {record_id} kind {kind} collection {collection_id} number {number} parent {parent}{deleted}")
         .into_bytes()
 }
 
@@ -1151,6 +1216,86 @@ mod tests {
         let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
         vault.save(Kind::Material, None, &json!({ "name": "Spar" })).unwrap();
         vault.conn.execute("UPDATE revisions SET kind = 'recipe'", []).unwrap();
+        assert!(matches!(vault.heads(Kind::Recipe), Err(Error::Corrupt(_))));
+    }
+
+    #[test]
+    fn deleting_hides_a_record_until_it_is_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let first = vault.save(Kind::Recipe, None, &json!({ "name": "Shino" })).unwrap();
+        let second = vault
+            .save(Kind::Recipe, Some(first.revision_id), &json!({ "name": "Shino 2" }))
+            .unwrap();
+        // Only the newest revision can delete, so a delete cannot fork the record.
+        assert!(matches!(
+            vault.delete(Kind::Recipe, first.revision_id),
+            Err(Error::NotFound)
+        ));
+
+        let gone = vault.delete(Kind::Recipe, second.revision_id).unwrap();
+        assert!(gone.deleted);
+        assert_eq!((gone.number, &gone.content), (3, &json!({ "name": "Shino 2" })));
+        assert!(vault.heads(Kind::Recipe).unwrap().is_empty());
+        assert_eq!(vault.deleted(Kind::Recipe).unwrap()[0].revision_id, gone.revision_id);
+        assert_eq!(vault.history(Kind::Recipe, first.record_id).unwrap().len(), 2);
+        assert!(matches!(
+            vault.delete(Kind::Recipe, gone.revision_id),
+            Err(Error::NotFound)
+        ));
+
+        let back = vault.save(Kind::Recipe, Some(gone.revision_id), &gone.content).unwrap();
+        assert_eq!((back.number, back.deleted), (4, false));
+        assert_eq!(vault.heads(Kind::Recipe).unwrap()[0].revision_id, back.revision_id);
+        assert!(vault.deleted(Kind::Recipe).unwrap().is_empty());
+    }
+
+    #[test]
+    fn erasing_removes_every_revision_of_a_deleted_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let kept = vault.save(Kind::Recipe, None, &json!({ "name": "Tenmoku" })).unwrap();
+        let first = vault
+            .save(Kind::Recipe, None, &json!({ "name": "Secret Celadon" }))
+            .unwrap();
+        let second = vault
+            .save(
+                Kind::Recipe,
+                Some(first.revision_id),
+                &json!({ "name": "Secret Celadon 2" }),
+            )
+            .unwrap();
+        assert!(matches!(
+            vault.erase(Kind::Recipe, first.record_id),
+            Err(Error::NotDeleted)
+        ));
+
+        vault.delete(Kind::Recipe, second.revision_id).unwrap();
+        assert_eq!(vault.erase(Kind::Recipe, first.record_id).unwrap(), 3);
+        assert!(vault.deleted(Kind::Recipe).unwrap().is_empty());
+        assert!(matches!(
+            vault.history(Kind::Recipe, first.record_id),
+            Err(Error::NotFound)
+        ));
+        assert_eq!(vault.heads(Kind::Recipe).unwrap()[0].record_id, kept.record_id);
+        let left: i64 = vault
+            .conn
+            .query_row(
+                "SELECT count(*) FROM revisions WHERE record_id = ?1",
+                params![first.record_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn a_deletion_cannot_be_undone_without_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let saved = vault.save(Kind::Recipe, None, &json!({ "name": "Shino" })).unwrap();
+        vault.delete(Kind::Recipe, saved.revision_id).unwrap();
+        vault.conn.execute("UPDATE revisions SET deleted = 0", []).unwrap();
         assert!(matches!(vault.heads(Kind::Recipe), Err(Error::Corrupt(_))));
     }
 }

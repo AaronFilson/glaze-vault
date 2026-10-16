@@ -1,13 +1,6 @@
-// Development builds only (main.tsx loads it when import.meta.env.DEV): the screen as text, so
-// work on the app can be followed without screenshots. The core's dev_screen command writes it to
-// the file GLAZE_VAULT_SCREEN names, and does nothing when the variable is not set:
-//
-//     GLAZE_VAULT_DIR=/tmp/test-vault GLAZE_VAULT_SCREEN=/tmp/screen.txt npm run dev
-//     cat /tmp/screen.txt
-//
-// The file is plain text with the recipes on screen in it, so point it at a throwaway vault.
-// Passwords and recovery words (marked data-secret) are left out.
-import { invoke } from '@tauri-apps/api/core';
+// Development builds only: the screen as text, so work on the app can be followed without
+// screenshots (devTools.ts sends it to the core, which writes it to the file GLAZE_VAULT_SCREEN
+// names). Passwords and recovery words (marked data-secret) are left out.
 
 const BLOCKS = new Set([
   'ADDRESS', 'ARTICLE', 'BLOCKQUOTE', 'CAPTION', 'DD', 'DIV', 'DL', 'DT', 'FIGURE', 'FOOTER', 'H1', 'H2',
@@ -29,17 +22,17 @@ const GROUPS: Record<string, string> = {
 };
 const ROLES = new Set(['alert', 'alertdialog', 'dialog', 'status']);
 
-const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
+export const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
 const quote = (text: string) => JSON.stringify(squash(text));
 
-function hidden(element: Element): boolean {
+export function hidden(element: Element): boolean {
   if ((element as HTMLElement).hidden || element.classList.contains('visually-hidden')) return true;
   const style = getComputedStyle(element);
   return style.display === 'none' || style.visibility === 'hidden';
 }
 
 /** What a person would call a control: its aria-label, its label, or its placeholder. */
-function nameOf(element: HTMLElement): string {
+export function nameOf(element: HTMLElement): string {
   const label = element.getAttribute('aria-label');
   if (label) return squash(label);
   const by = element.getAttribute('aria-labelledby');
@@ -63,8 +56,8 @@ function states(element: HTMLElement): string {
 }
 
 /** A control as one token, such as [textbox "Recipe name" = "Shino"], or null if it is not one. */
-function control(element: HTMLElement): string | null {
-  const secret = element.closest('[data-secret]');
+function control(element: HTMLElement, secrets: boolean): string | null {
+  const secret = !secrets && element.closest('[data-secret]');
   switch (element.tagName) {
     case 'BUTTON':
       return `[button ${quote(nameOf(element))}${states(element)}]`;
@@ -87,7 +80,7 @@ function control(element: HTMLElement): string | null {
       if (['button', 'submit', 'reset'].includes(type)) return `[button ${quote(input.value)}${states(element)}]`;
       const kind = type === 'text' || type === 'textbox' ? 'textbox' : type;
       const value =
-        type === 'password' || secret
+        (type === 'password' && !secrets) || secret
           ? input.value
             ? '(hidden)'
             : '""'
@@ -102,7 +95,7 @@ function control(element: HTMLElement): string | null {
 }
 
 /** The visible page as indented lines of text, with controls and their values. */
-export function describeScreen(root: Element = document.body): string {
+export function describeScreen(root: Element = document.body, { secrets = false } = {}): string {
   const lines: string[] = [];
   let line = '';
   let depth = 0;
@@ -131,11 +124,11 @@ export function describeScreen(root: Element = document.body): string {
     if (!(node instanceof HTMLElement) || SKIPPED.has(node.tagName) || hidden(node)) return;
     const tag = node.tagName;
 
-    if (node.dataset.secret !== undefined && !control(node)) {
+    if (!secrets && node.dataset.secret !== undefined && !control(node, secrets)) {
       line += ' (hidden) ';
       return;
     }
-    const token = control(node);
+    const token = control(node, secrets);
     if (token !== null) {
       // Straight inside a form or other group, a control is a line of its own; in a row or a
       // sentence, it stays with its neighbours.
@@ -209,73 +202,4 @@ export function describeScreen(root: Element = document.body): string {
   walk(root);
   flush();
   return lines.join('\n');
-}
-
-const problems: string[] = [];
-
-/** Keeps the page's errors and React's warnings, the newest last, to show with the screen. */
-function collectProblems() {
-  const keep = (text: string) => {
-    problems.push(`${new Date().toLocaleTimeString()} ${squash(text).slice(0, 500)}`);
-    if (problems.length > 20) problems.shift();
-  };
-  window.addEventListener('error', (event) => keep(`error: ${event.message}`));
-  window.addEventListener('unhandledrejection', (event) => {
-    const reason = event.reason;
-    keep(`unhandled rejection: ${reason instanceof Error ? reason.message : JSON.stringify(reason)}`);
-  });
-  const consoleError = console.error.bind(console);
-  console.error = (...args: unknown[]) => {
-    keep(`console.error: ${args.map((a) => (a instanceof Error ? a.message : String(a))).join(' ')}`);
-    consoleError(...args);
-  };
-}
-
-function snapshot(): string {
-  const parts = [`Glaze Vault screen, ${new Date().toLocaleString()}`, '', describeScreen()];
-  if (problems.length) parts.push('', 'Problems:', ...problems.map((p) => '  ' + p));
-  return parts.join('\n') + '\n';
-}
-
-/** Sends the screen to the core whenever it changes, until the core says nobody asked for it. */
-export function startDevScreen() {
-  collectProblems();
-  let last = '';
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let stopped = false;
-
-  const send = async () => {
-    timer = undefined;
-    if (stopped) return;
-    const text = snapshot();
-    // The heading line carries the time, so compare what is below it.
-    const body = text.slice(text.indexOf('\n'));
-    if (body === last) return;
-    last = body;
-    try {
-      if (!(await invoke<boolean>('dev_screen', { text }))) stop();
-    } catch {
-      // Not in Tauri (npm run dev:ui), or a release core without the command.
-      stop();
-    }
-  };
-  const soon = () => {
-    if (!timer && !stopped) timer = setTimeout(send, 200);
-  };
-
-  const observer = new MutationObserver(soon);
-  const events = ['input', 'change', 'focusin', 'toggle'];
-  // Values typed into inputs and the clock in "Saved …" change without a mutation, so look again
-  // now and then too.
-  const interval = setInterval(soon, 2000);
-  function stop() {
-    stopped = true;
-    observer.disconnect();
-    events.forEach((type) => document.removeEventListener(type, soon, true));
-    clearInterval(interval);
-  }
-
-  observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
-  events.forEach((type) => document.addEventListener(type, soon, true));
-  soon();
 }

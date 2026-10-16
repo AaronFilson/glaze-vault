@@ -49,4 +49,11 @@ find it, and the panel on the right lists them so you can change them.
 
 A recipe's earlier revisions are worked out with your materials as they are now.
 
-> Coming later: deleting a material, and importing materials from a file.
+## Deleting a material
+
+Delete, restore and erase a material as you would [a recipe](recipes.md#deleting-a-recipe).
+Before deleting, Glaze Vault says how many recipes use it. They are not changed: they use the
+standard material of the same name instead, if there is one, or show it as unknown, until you
+restore it.
+
+> Coming later: importing materials from a file.

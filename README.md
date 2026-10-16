@@ -51,15 +51,19 @@ folder:
 
     GLAZE_VAULT_DIR=/tmp/test-vault npm run dev
 
-To follow what the app shows without looking at it, such as from a script or a coding agent, name
-a file for a text picture of the screen. It is rewritten whenever the screen changes, with the
-page's errors at the end:
+To follow and drive the app without looking at it, such as from a script or a coding agent, name
+a file for a text picture of the screen, and one for scripts to run:
 
-    GLAZE_VAULT_DIR=/tmp/test-vault GLAZE_VAULT_SCREEN=/tmp/screen.txt npm run dev
+    GLAZE_VAULT_DIR=/tmp/test-vault GLAZE_VAULT_SCREEN=/tmp/screen.txt \
+      GLAZE_VAULT_DRIVE=/tmp/drive.txt npm run dev
+    printf '%s\n' 'type "Recipe name" "Shino"' 'click "Save"' > /tmp/drive.txt
     cat /tmp/screen.txt
 
-It is only in development builds, and holds what is on screen in plain text, so use it with a
-throwaway vault. Passwords and recovery words are left out.
+The screen file is rewritten whenever the screen changes, with the page's errors and the last
+script's results at the end. A script is taken and run once; `ui/devDriver.ts` lists its
+commands. Both are only in development builds. The screen file holds what is on screen in plain
+text, so use them with a throwaway vault. Passwords and recovery words are left out unless
+`GLAZE_VAULT_SHOW_SECRETS=1` is set too, which a script needs to get past checking the recovery key.
 
 ## Scripts
 

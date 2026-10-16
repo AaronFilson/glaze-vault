@@ -1,20 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   api,
   errorText,
   type Draft,
+  type Kind,
   type LastBackup,
   type MaterialHead,
   type RecipeHead,
+  type Revision,
   type Settings as VaultSettings,
   type UpdateInfo,
   type VaultStatus
 } from '../api';
 import { BATCH_UNITS, type BatchUnit } from '../batch';
-import { analyse, materialLibrary, sameName, type MaterialContent, type RecipeContent } from '../chemistry';
+import {
+  analyse,
+  materialLibrary,
+  sameName,
+  standardNamed,
+  type MaterialContent,
+  type RecipeContent
+} from '../chemistry';
 import { localDate } from '../export';
 import { restorePart, useEditor, type Editor } from '../useEditor';
 import { useIdleLock } from '../useIdleLock';
+import { ConfirmNotice } from './Deleted';
 import { EMPTY_MATERIAL, Materials, sameMaterial } from './Materials';
 import { PrintView, type PrintJob } from './PrintView';
 import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
@@ -26,6 +36,15 @@ const DAY = 24 * 60 * 60 * 1000;
 export const DRAFT_DELAY_MS = 1000;
 
 type Scope = 'recipe' | 'material' | 'all';
+
+/** One kind's lists and editor, for what deleting, restoring and erasing do the same for both. */
+interface Records<Content> {
+  kind: Kind;
+  editor: Editor<Content>;
+  setHeads: Dispatch<SetStateAction<Revision<Content>[]>>;
+  setDeleted: Dispatch<SetStateAction<Revision<Content>[]>>;
+  setError: (error: string) => void;
+}
 
 export type LockReason = 'manual' | 'idle' | 'idle-with-draft';
 
@@ -44,6 +63,8 @@ export function Recipes({
 }) {
   const [recipes, setRecipes] = useState<RecipeHead[]>([]);
   const [materials, setMaterials] = useState<MaterialHead[]>([]);
+  const [deletedRecipes, setDeletedRecipes] = useState<RecipeHead[]>([]);
+  const [deletedMaterials, setDeletedMaterials] = useState<MaterialHead[]>([]);
   const recipe = useEditor<RecipeContent>(EMPTY_RECIPE, sameRecipe);
   const material = useEditor<MaterialContent>(EMPTY_MATERIAL, sameMaterial);
   const [loaded, setLoaded] = useState(false);
@@ -54,6 +75,7 @@ export function Recipes({
   // What to do once unsaved changes are saved or discarded. The system webview on macOS has no
   // window.confirm(), so the question is asked in the page.
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
+  const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
   const [view, setView] = useState<'recipes' | 'materials' | 'settings'>('recipes');
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
@@ -78,15 +100,19 @@ export function Recipes({
 
   useEffect(() => {
     (async () => {
-      const [heads, ownMaterials, settings, last, draft] = await Promise.all([
+      const [heads, ownMaterials, gone, goneMaterials, settings, last, draft] = await Promise.all([
         api.recipes(),
         api.materials(),
+        api.deletedRecords<RecipeContent>('recipe'),
+        api.deletedRecords<MaterialContent>('material'),
         api.settings(),
         api.lastBackup(),
         api.draft()
       ]);
       setRecipes(heads);
       setMaterials(ownMaterials);
+      setDeletedRecipes(gone);
+      setDeletedMaterials(goneMaterials);
       setSettings(settings);
       setLastBackup(last);
       draftKept.current = !!draft;
@@ -236,6 +262,75 @@ export function Recipes({
     action();
   };
 
+  const records = {
+    recipe: { kind: 'recipe', editor: recipe, setHeads: setRecipes, setDeleted: setDeletedRecipes, setError },
+    material: {
+      kind: 'material',
+      editor: material,
+      setHeads: setMaterials,
+      setDeleted: setDeletedMaterials,
+      setError: setMaterialError
+    }
+  } satisfies { recipe: Records<RecipeContent>; material: Records<MaterialContent> };
+
+  /** Shows a deleted record, to restore or erase. */
+  const openDeleted = <Content,>(r: Records<Content>, gone: Revision<Content>) =>
+    leave(r.kind, () => {
+      r.editor.look(gone);
+      r.setError('');
+      setKept((k) => ({ ...k, [r.kind]: false }));
+    });
+
+  /** Deletes the open record, unsaved edits and all. */
+  const deleteRecord = async <Content,>(r: Records<Content>) => {
+    const newest = r.editor.current!;
+    try {
+      const gone = await api.deleteRecord<Content>(r.kind, newest.revisionId);
+      r.setHeads((list) => list.filter((head) => head.recordId !== gone.recordId));
+      r.setDeleted((list) => [gone, ...list]);
+      r.editor.show(null);
+      setKept((k) => ({ ...k, [r.kind]: false }));
+    } catch (e) {
+      r.setError(errorText(e));
+    }
+  };
+
+  const restoreRecord = async <Content,>(r: Records<Content>, clash?: string) => {
+    const gone = r.editor.viewing!;
+    if (clash) {
+      r.setError(`You have another material called ${clash}. Rename one of them, then restore this one.`);
+      return;
+    }
+    try {
+      const saved = await api.saveRecord<Content>(r.kind, gone.revisionId, gone.content);
+      r.setDeleted((list) => list.filter((d) => d.recordId !== saved.recordId));
+      r.setHeads((list) => [saved, ...list]);
+      r.editor.show(saved);
+      r.setError('');
+    } catch (e) {
+      r.setError(errorText(e));
+    }
+  };
+
+  const eraseRecord = async <Content,>(r: Records<Content>) => {
+    const gone = r.editor.viewing!;
+    try {
+      await api.eraseRecord(r.kind, gone.recordId);
+      r.setDeleted((list) => list.filter((d) => d.recordId !== gone.recordId));
+      r.editor.show(null);
+    } catch (e) {
+      r.setError(errorText(e));
+    }
+  };
+
+  const confirm = () => {
+    if (!confirming) return;
+    const { action, kind } = confirming;
+    setConfirming(null);
+    const act = action === 'delete' ? deleteRecord : eraseRecord;
+    void (kind === 'recipe' ? act(records.recipe) : act(records.material));
+  };
+
   /** Puts an earlier revision in the editor, once the edits it would replace are saved or discarded. */
   const takeRevision = <Content,>(scope: 'recipe' | 'material', editor: Editor<Content>) => {
     const content = editor.viewing!.content;
@@ -288,6 +383,35 @@ export function Recipes({
         pending.scope !== 'recipe' && material.changed && (material.draft.name || 'This material')
       ].filter((name): name is string => !!name)
     : [];
+  const confirmText = () => {
+    if (!confirming) return null;
+    const editor = confirming.kind === 'recipe' ? recipe : material;
+    const name = (editor.current ?? editor.viewing)?.content.name || 'Untitled';
+    if (confirming.action === 'erase') {
+      return (
+        <p>
+          <strong>Erase {name} permanently?</strong> All its revisions are removed from this vault and cannot be
+          brought back. Backups made before now still have it.
+        </p>
+      );
+    }
+    const users =
+      confirming.kind === 'material'
+        ? recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, name))).length
+        : 0;
+    const standard = confirming.kind === 'material' && standardNamed(name);
+    return (
+      <p>
+        <strong>Delete {name}?</strong> It moves to Deleted, below the list, where you can restore it or erase it for
+        good.
+        {editor.changed && ' Your unsaved changes to it are lost.'}
+        {users > 0 &&
+          ` ${users === 1 ? '1 recipe uses' : `${users} recipes use`} it, and will ${
+            standard ? `use the standard ${standard} instead` : 'not find it'
+          } until it is restored.`}
+      </p>
+    );
+  };
   const viewButton = (name: 'materials' | 'settings', label: string) => (
     <button type="button" aria-pressed={view === name} onClick={() => setView(view === name ? 'recipes' : name)}>
       {label}
@@ -313,6 +437,15 @@ export function Recipes({
       </header>
 
       <div className="notices no-print">
+        {confirming && (
+          <ConfirmNotice
+            confirm={confirming.action === 'delete' ? 'Delete' : 'Erase permanently'}
+            onConfirm={confirm}
+            onCancel={() => setConfirming(null)}
+          >
+            {confirmText()}
+          </ConfirmNotice>
+        )}
         {pending && (
           <div className="notice warning" role="alertdialog" aria-labelledby="unsaved-title">
             <p id="unsaved-title">
@@ -429,6 +562,15 @@ export function Recipes({
           onOpen={openMaterial}
           onSave={() => saveMaterial()}
           onUseRevision={() => takeRevision('material', material)}
+          deleted={deletedMaterials}
+          onOpenDeleted={(gone) => openDeleted(records.material, gone)}
+          onDelete={() => setConfirming({ action: 'delete', kind: 'material' })}
+          onRestore={() => {
+            const name = material.viewing!.content.name;
+            const clash = materials.find((m) => sameName(m.content.name, name));
+            void restoreRecord(records.material, clash?.content.name);
+          }}
+          onErase={() => setConfirming({ action: 'erase', kind: 'material' })}
         />
       ) : (
         <RecipeEditor
@@ -441,6 +583,11 @@ export function Recipes({
           onOpen={openRecipe}
           onSave={() => saveRecipe()}
           onUseRevision={() => takeRevision('recipe', recipe)}
+          deleted={deletedRecipes}
+          onOpenDeleted={(gone) => openDeleted(records.recipe, gone)}
+          onDelete={() => setConfirming({ action: 'delete', kind: 'recipe' })}
+          onRestore={() => void restoreRecord(records.recipe)}
+          onErase={() => setConfirming({ action: 'erase', kind: 'recipe' })}
         />
       )}
 

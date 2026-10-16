@@ -14,6 +14,7 @@ import {
   type OxideLine
 } from '../chemistry';
 import type { Editor } from '../useEditor';
+import { DeletedList, DeletedNotice } from './Deleted';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
 
 export const EMPTY_MATERIAL: MaterialContent = {
@@ -38,15 +39,21 @@ export function sameMaterial(a: MaterialContent, b: MaterialContent): boolean {
 /** The person's own materials, colorants and additives: a list, and an editor for one. */
 export function Materials({
   materials,
+  deleted,
   recipes,
   editor,
   saving,
   error,
   onOpen,
   onSave,
-  onUseRevision
+  onUseRevision,
+  onOpenDeleted,
+  onDelete,
+  onRestore,
+  onErase
 }: {
   materials: MaterialHead[];
+  deleted: MaterialHead[];
   recipes: RecipeHead[];
   editor: Editor<MaterialContent>;
   saving: boolean;
@@ -54,6 +61,10 @@ export function Materials({
   onOpen: (material: MaterialHead | null) => void;
   onSave: () => void;
   onUseRevision: () => void;
+  onOpenDeleted: (material: MaterialHead) => void;
+  onDelete: () => void;
+  onRestore: () => void;
+  onErase: () => void;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -109,10 +120,14 @@ export function Materials({
             )
           )
         )}
+        <DeletedList deleted={deleted} nameOf={(c) => c.name} viewing={viewing} onOpen={onOpenDeleted} />
       </nav>
 
       <main className="editor no-print">
-        {viewing && current && (
+        {viewing?.deleted && (
+          <DeletedNotice deleted={viewing} name={viewing.content.name} onRestore={onRestore} onErase={onErase} />
+        )}
+        {viewing && !viewing.deleted && current && (
           <ViewingNotice
             viewing={viewing}
             newest={current}
@@ -271,6 +286,11 @@ export function Materials({
             <span className="hint">
               Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
             </span>
+          )}
+          {current && !viewing && (
+            <button type="button" className="link danger end" onClick={onDelete}>
+              Delete…
+            </button>
           )}
         </div>
         {error && <p role="alert" className="error">{error}</p>}
