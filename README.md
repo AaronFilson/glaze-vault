@@ -4,10 +4,11 @@
 industrial users with proprietary recipes, built on [Glazecalc](https://github.com/AaronFilson/glazecalc)'s
 glaze chemistry. No account, no cloud, nothing for users to install but the app.
 
-> Early development. A vault for one person works: set up with a password and a 24-word recovery
-> key, unlock, recover, and write recipes with their unity formula. See the
+> Early development. A vault works for one person, or a team on one computer: recipes and their
+> unity formula, your own materials, revisions, comparing, printing, backups, import and export,
+> and people with roles on shared and private collections. See the
 > [user guide](docs/user/README.md) and the [decision records](docs/adr/README.md) for what comes
-> next: printing and export, teams with roles, a LAN host with offline laptops, and updates.
+> next: signed revisions and an audit log, a LAN host with offline laptops, and the first release.
 
 | Part      | Built with                                                                         |
 | --------- | ---------------------------------------------------------------------------------- |
@@ -15,7 +16,7 @@ glaze chemistry. No account, no cloud, nothing for users to install but the app.
 | Core      | Rust: SQLCipher (rusqlite), Argon2id, XChaCha20-Poly1305, HPKE (RFC 9180), BIP 39   |
 | UI        | React 19, TypeScript, Vite                                                         |
 | Chemistry | Glazecalc's `lib/chemistry`, copied into `vendor/glazecalc` for now ([ADR 2](docs/adr/0002-chemistry-copy.md)) |
-| Tests     | Rust unit tests, Vitest                                                            |
+| Tests     | Rust unit tests, Vitest, end-to-end tests that drive the development app            |
 
 ## Layout
 

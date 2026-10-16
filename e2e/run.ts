@@ -14,7 +14,7 @@ const startMinutes = Number(process.env.E2E_START_MINUTES) || 30;
 
 const dir = mkdtempSync(join(tmpdir(), 'glaze-vault-e2e-'));
 const app = new App(dir);
-const vault: Vault = { password: '', recoveryWords: [] };
+const vault: Vault = { password: '', recoveryWords: [], organizationWords: [] };
 const seconds = (since: number) => `${((Date.now() - since) / 1000).toFixed(1)}s`;
 
 let failed = false;

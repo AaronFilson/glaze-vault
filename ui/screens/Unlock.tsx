@@ -1,17 +1,22 @@
 import { useState } from 'react';
-import { api, errorText } from '../api';
+import { api, errorText, type Person } from '../api';
+import { PersonPicker, rememberPerson } from './PersonPicker';
 
 export function Unlock({
+  people,
   notice,
   onUnlocked,
   onForgot,
   onRestore
 }: {
+  /** A team's people to choose from; empty for a one-person vault. */
+  people: Person[];
   notice?: string;
   onUnlocked: () => void;
   onForgot: () => void;
   onRestore: () => void;
 }) {
+  const [person, setPerson] = useState<string | null>(null);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -21,7 +26,8 @@ export function Unlock({
     setBusy(true);
     setError('');
     try {
-      await api.unlock(password);
+      await api.unlock(password, people.length ? person : null);
+      if (person) rememberPerson(person);
       onUnlocked();
     } catch (e) {
       setError(errorText(e));
@@ -34,6 +40,7 @@ export function Unlock({
       <form className="card" onSubmit={unlock}>
         <h1>Unlock your vault</h1>
         {notice && <p role="status">{notice}</p>}
+        {people.length > 0 && <PersonPicker people={people} value={person} onChange={setPerson} />}
         <label htmlFor="password">Password</label>
         <input
           id="password"

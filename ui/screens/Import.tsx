@@ -30,6 +30,8 @@ export function Import({
   plan,
   recipes,
   materials,
+  collection = null,
+  into,
   onImported,
   onClose
 }: {
@@ -37,6 +39,9 @@ export function Import({
   plan: ImportPlan;
   recipes: RecipeHead[];
   materials: MaterialHead[];
+  /** In a team's vault, the collection new records go into, and the picker for it. */
+  collection?: string | null;
+  into?: React.ReactNode;
   onImported: (imported: Imported) => void;
   onClose: () => void;
 }) {
@@ -103,11 +108,11 @@ export function Import({
       for (let at = 0; at < revisions.length; at += BATCH) {
         const batch = revisions.slice(at, at + BATCH);
         try {
-          into.push(...(await api.saveRecords(kind, batch)));
+          into.push(...(await api.saveRecords(kind, batch, collection)));
         } catch {
           for (const [parent, content] of batch) {
             try {
-              into.push(await api.saveRecord(kind, parent, content));
+              into.push(await api.saveRecord(kind, parent, content, parent ? null : collection));
             } catch (e) {
               failed.push(`${content.name || 'Untitled'}: ${errorText(e)}`);
             }
@@ -161,6 +166,7 @@ export function Import({
         the same name as one of yours is skipped unless you choose otherwise. Nothing is changed until you choose
         Import.
       </p>
+      {into}
       {plan.warnings.length > 0 && (
         <details className="import-warnings">
           <summary>

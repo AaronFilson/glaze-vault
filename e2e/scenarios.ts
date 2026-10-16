@@ -13,10 +13,15 @@ export interface Scenario {
 export interface Vault {
   password: string;
   recoveryWords: string[];
+  /** Once the vault is shared, the organization's recovery key. */
+  organizationWords: string[];
 }
 
 const PASSWORD = 'kiln shelf wadding';
 const CHANGED_PASSWORD = 'glaze kiln wedge';
+const ONE_TIME = 'pass this on';
+const BENS_PASSWORD = 'bens own password';
+const ADMIN_PASSWORD = 'back in again';
 const NEW_PASSWORD = 'bisque cone nine';
 
 const quote = (text: string) => JSON.stringify(text);
@@ -394,6 +399,89 @@ export const scenarios: Scenario[] = [
         'expect "Leach 4321"'
       );
       vault.password = NEW_PASSWORD;
+    }
+  },
+  {
+    name: 'Share the vault, add someone, and they see only what they were given',
+    async run(app, vault) {
+      vault.organizationWords = await newRecoveryKey(
+        app,
+        await app.run(
+          'click "Settings"',
+          'type "Your name" "Ana"',
+          'click "Share this vault…"',
+          'click "Share this vault" in "alertdialog"',
+          'expect "The organization\'s recovery key" 30000'
+        )
+      );
+      await app.run(
+        'expect "You are signed in as Ana, an admin."',
+        'type "Name" "Ben"',
+        `type "One-time password" ${quote(ONE_TIME)}`,
+        'click "Add"',
+        'expect "Pass the one-time password on to Ben." 30000',
+        'select "Ben in Shared" "Chemist: reads"',
+        'expect "[select \\"Ben in Shared\\" = \\"Chemist: reads\\"]"',
+        'click "Back to recipes"',
+        'click "Lock"',
+        'select "Your name" "Ben"',
+        `type "Password" ${quote(ONE_TIME)}`,
+        'click "Unlock"',
+        'expect "Welcome, Ben" 30000',
+        `type "Your password" ${quote(BENS_PASSWORD)}`,
+        `type "Type it again" ${quote(BENS_PASSWORD)}`,
+        'click "Set my password"',
+        'expect "Your recovery key" 30000'
+      ).then((sheet) => newRecoveryKey(app, sheet));
+      await app.run(
+        'expect "Leach 4321" 10000',
+        'expect "## Shared"',
+        'click "Leach 4321"',
+        'expect "You can read this recipe, but not change it."',
+        'expect not "[button \\"Save\\""',
+        'expect not "Delete…"',
+        'click "New recipe"',
+        'expect "[select \\"Save in\\" = \\"Private\\"]"',
+        'type "Recipe name" "Ben\'s test"',
+        ...recipeLines([['Silica', '100']]),
+        'click "Save"',
+        'expect "revision 1"',
+        'expect "## Private"',
+        'click "Settings"',
+        'expect "You are signed in as Ben."',
+        'expect not "Back up now…"',
+        'click "Back to recipes"',
+        'click "Lock"',
+        'select "Your name" "Ana"',
+        `type "Password" ${quote(vault.password)}`,
+        'click "Unlock"',
+        'expect "## From Ben" 30000',
+        'expect "Ben\'s test"'
+      );
+    }
+  },
+  {
+    name: "The organization's recovery key gets an admin back in",
+    async run(app, vault) {
+      const screen = await app.run(
+        'click "Lock"',
+        'click "Forgot your password?"',
+        'click "Use the organization\'s recovery key"',
+        'select "Admin" "Ana"',
+        `type "Recovery words" ${quote(vault.organizationWords.join(' '))}`,
+        `type "New password" ${quote(ADMIN_PASSWORD)}`,
+        `type "Type it again" ${quote(ADMIN_PASSWORD)}`,
+        'click "Set password and unlock"',
+        'expect "Your recovery key" 30000'
+      );
+      vault.recoveryWords = await newRecoveryKey(app, screen);
+      vault.password = ADMIN_PASSWORD;
+      await app.run(
+        'expect "Leach 4321" 10000',
+        'click "Lock"',
+        'select "Your name" "Ana"',
+        ...unlock(ADMIN_PASSWORD).slice(1)
+      );
     }
   }
 ];

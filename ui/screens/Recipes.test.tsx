@@ -3,13 +3,13 @@ import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Draft, LastBackup, MaterialHead, RecipeHead, Settings } from '../api';
+import type { Access, Draft, LastBackup, MaterialHead, RecipeHead, Settings } from '../api';
 import { DRAFT_DELAY_MS, Recipes } from './Recipes';
 
 // The whole screen renders in jsdom, with the materials list, so give it time on slow machines.
 vi.setConfig({ testTimeout: 30_000 });
 
-const STATUS = { exists: true, unlocked: true, version: '0.2.0', updatesConfigured: false };
+const STATUS = { exists: true, unlocked: true, version: '0.2.0', updatesConfigured: false, people: [] };
 
 const shino: RecipeHead = {
   recordId: 'record-1',
@@ -37,6 +37,13 @@ const spar: MaterialHead = {
   }
 };
 
+/** A one-person vault's access: its person can do everything in its one collection. */
+const ONE_PERSON: Access = {
+  team: false,
+  me: { id: 'me', name: '', admin: false, mustSetPassword: false },
+  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin' }]
+};
+
 /** A record the fake core refuses to save. */
 const TOO_LARGE = 'Too large';
 const TOO_LARGE_ERROR = { code: 'too-large', message: 'That is too large to save.' };
@@ -51,7 +58,8 @@ function fakeCore({
   deleted = [],
   history = [],
   setAside = [],
-  importFile = null
+  importFile = null,
+  access = ONE_PERSON
 }: {
   settings?: Settings;
   lastBackup?: LastBackup | null;
@@ -62,6 +70,7 @@ function fakeCore({
   history?: (RecipeHead | MaterialHead)[];
   setAside?: { name: string; setAsideAt: number }[];
   importFile?: { fileName: string; contents: string } | null;
+  access?: Access;
 } = {}) {
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
   const revisions = new Map<string, { recordId: string; number: number }>(
@@ -118,6 +127,8 @@ function fakeCore({
         throw { code: 'io', message: 'A file could not be read or written: the disk is full' };
       case 'get_settings':
         return settings;
+      case 'my_access':
+        return access;
       case 'last_backup':
         return lastBackup;
       case 'get_draft':
@@ -307,6 +318,7 @@ describe('your materials', () => {
     expect(core.called('save_record')[0].args).toEqual({
       kind: 'material',
       parent: null,
+      collection: null,
       content: {
         name: 'Whiting, lot 12',
         category: 'material',

@@ -33,7 +33,11 @@ export function RecipeEditor({
   onDelete,
   onRestore,
   onErase,
-  onCompare
+  onCompare,
+  readOnly = false,
+  canCreate = true,
+  groups,
+  newIn
 }: {
   recipes: RecipeHead[];
   deleted: RecipeHead[];
@@ -52,6 +56,14 @@ export function RecipeEditor({
   /** Opens Compare: from here when nothing is said, or with an earlier revision. Missing when
    * there is nothing to compare with. */
   onCompare?: (revisionNumber?: number) => void;
+  /** The person may read this recipe but not change it (a team's vault, ADR 12). */
+  readOnly?: boolean;
+  /** Whether the person may make recipes in any collection. */
+  canCreate?: boolean;
+  /** In a team's vault, the list in groups by collection. */
+  groups?: { label: string; items: RecipeHead[] }[];
+  /** For a new recipe in a team's vault, where it will be saved. */
+  newIn?: React.ReactNode;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -62,21 +74,22 @@ export function RecipeEditor({
   return (
     <>
       <nav className="sidebar no-print" aria-label="Recipes">
-        <button type="button" className="primary" onClick={() => onOpen(null)}>
-          New recipe
-        </button>
+        {canCreate && (
+          <button type="button" className="primary" onClick={() => onOpen(null)}>
+            New recipe
+          </button>
+        )}
         {recipes.length === 0 ? (
           <p className="hint">No recipes yet.</p>
+        ) : groups ? (
+          groups.map((group) => (
+            <section key={group.label}>
+              <h2 className="list-heading">{group.label}</h2>
+              <RecipeList recipes={group.items} current={current} onOpen={onOpen} />
+            </section>
+          ))
         ) : (
-          <ul className="list">
-            {recipes.map((head) => (
-              <li key={head.recordId}>
-                <button type="button" aria-current={head.recordId === current?.recordId} onClick={() => onOpen(head)}>
-                  {head.content.name || 'Untitled'}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <RecipeList recipes={recipes} current={current} onOpen={onOpen} />
         )}
         <DeletedList deleted={deleted} nameOf={(c) => c.name} viewing={viewing} onOpen={onOpenDeleted} />
       </nav>
@@ -94,7 +107,13 @@ export function RecipeEditor({
             onCompare={onCompare && (() => onCompare(viewing.number))}
           />
         )}
-        <fieldset className="plain" disabled={!!viewing}>
+        {readOnly && current && !viewing && (
+          <p className="hint" role="status">
+            You can read this recipe, but not change it. An admin can change what you may do.
+          </p>
+        )}
+        {!current && !viewing && newIn}
+        <fieldset className="plain" disabled={!!viewing || readOnly}>
           <label htmlFor="name">Recipe name</label>
           <input
             id="name"
@@ -171,9 +190,11 @@ export function RecipeEditor({
         </fieldset>
 
         <div className="row">
-          <button type="button" className="primary" disabled={!changed || saving || !!viewing} onClick={onSave}>
-            {saving ? 'Saving…' : 'Save'}
-          </button>
+          {!readOnly && (
+            <button type="button" className="primary" disabled={!changed || saving || !!viewing} onClick={onSave}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          )}
           {current && !changed && !viewing && (
             <span className="hint">
               Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
@@ -184,7 +205,7 @@ export function RecipeEditor({
               Compare…
             </button>
           )}
-          {current && !viewing && (
+          {current && !viewing && !readOnly && (
             <button type="button" className={`link danger${onCompare ? '' : ' end'}`} onClick={onDelete}>
               Delete…
             </button>
@@ -198,5 +219,27 @@ export function RecipeEditor({
         <AnalysisPanel analysis={analysis} />
       </aside>
     </>
+  );
+}
+
+function RecipeList({
+  recipes,
+  current,
+  onOpen
+}: {
+  recipes: RecipeHead[];
+  current: RecipeHead | null;
+  onOpen: (recipe: RecipeHead) => void;
+}) {
+  return (
+    <ul className="list">
+      {recipes.map((head) => (
+        <li key={head.recordId}>
+          <button type="button" aria-current={head.recordId === current?.recordId} onClick={() => onOpen(head)}>
+            {head.content.name || 'Untitled'}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -25,6 +25,16 @@ Work decided on but not done yet, with the reason it waits.
 - More import formats ([ADR 10](adr/0010-importing.md)): Digitalfire's material XML (MDT) once a
   real file is at hand to check against, and Glazy's YAML dumps.
 
+## Teams ([ADR 12](adr/0012-teams-on-one-computer.md)), in this order
+
+- Sign each revision with its author's key ([ADR 4](adr/0004-roles-and-collections.md)), so changes
+  made outside the app show.
+- The audit log: who viewed, printed, exported or changed what.
+- Going back to one person ([ADR 6](adr/0006-one-person-first.md)).
+- The batch operator role, with materials named by in-house codes.
+- Taking admin away from someone without removing them: needs a new organization key.
+- Roles that admins can change, and moving a recipe to another collection.
+
 ## Engineering
 
 - Nobody has installed the app on Windows or Linux yet: the end-to-end tests run the development
@@ -34,5 +44,3 @@ Work decided on but not done yet, with the reason it waits.
 - End-to-end tests of a release build ([ADR 11](adr/0011-end-to-end-tests.md) tests the
   development app): before the first release, a check that each installer opens and unlocks a
   vault.
-- Sign each revision with its author's key ([ADR 4](adr/0004-roles-and-collections.md)), before
-  there is more than one author.

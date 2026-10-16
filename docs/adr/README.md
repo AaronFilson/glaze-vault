@@ -16,3 +16,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0009](0009-deleting-and-erasing.md)     | Deleting, and erasing for good                                         | 2026-10-15 |
 | [0010](0010-importing.md)                | Importing, formula materials, and renaming in recipes                  | 2026-10-15 |
 | [0011](0011-end-to-end-tests.md)         | End-to-end tests through the development screen and driver             | 2026-10-16 |
+| [0012](0012-teams-on-one-computer.md)    | A team on one computer: growing a vault, people, roles and collections | 2026-10-16 |

@@ -18,13 +18,13 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 6. [Printing](printing.md): a recipe, or a batch sheet for weighing out
 7. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
 8. [Importing](importing.md): recipes and materials from other programs and spreadsheets
-9. [Settings](settings.md): locking by itself, your password, updates
-10. [How your recipes are protected](security.md)
+9. [Sharing a vault with others](sharing.md): people, roles and collections
+10. [Settings](settings.md): locking by itself, your password, updates
+11. [How your recipes are protected](security.md)
 
 ## Coming later
 
-- **Teams:** an administrator, other people with their own passwords, roles such as batch
-  operator or formulator, and shared and private collections of recipes. A vault for one person
-  can become a team's vault, and go back to one person, at any time.
+- **More for teams:** a batch operator role that weighs batches without seeing the chemistry, a
+  record of who did what, and going back to one person.
 - **Other computers on your network,** and laptops that take a copy of their part of the vault
   where there is no network, then bring their changes back.

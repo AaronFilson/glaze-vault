@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, expect, it, vi } from 'vitest';
 import { Restore } from './Restore';
 
-const chosen = { path: '/media/usb/b.gvbackup', fileName: 'b.gvbackup', createdAt: Date.UTC(2026, 9, 1), appVersion: '0.2.0' };
+const chosen = { path: '/media/usb/b.gvbackup', fileName: 'b.gvbackup', createdAt: Date.UTC(2026, 9, 1), appVersion: '0.2.0', admins: [] };
 
 afterEach(() => {
   cleanup();
@@ -20,7 +20,7 @@ function fakeCore(restore: (args: Record<string, unknown>) => unknown) {
 }
 
 it('restores with the password, warning first when a vault is here', async () => {
-  const restore = vi.fn(() => ({ setAside: '/vault/replaced-1' }));
+  const restore = vi.fn(() => ({ setAside: '/vault/replaced-1', recoveryWords: null }));
   fakeCore(restore);
   const onRestored = vi.fn();
   render(<Restore vaultExists onRestored={onRestored} onBack={() => {}} />);
@@ -29,12 +29,12 @@ it('restores with the password, warning first when a vault is here', async () =>
   fireEvent.click(screen.getByRole('button', { name: 'Choose backup file…' }));
   fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'cone six oxidation' } });
   fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
-  await waitFor(() => expect(onRestored).toHaveBeenCalledWith({ backup: chosen, setAside: '/vault/replaced-1' }));
+  await waitFor(() => expect(onRestored).toHaveBeenCalledWith({ backup: chosen, setAside: '/vault/replaced-1', recoveryWords: null }));
   expect(restore).toHaveBeenCalledWith(expect.objectContaining({ path: chosen.path, password: 'cone six oxidation' }));
 });
 
 it('can use the recovery key and a new password instead', async () => {
-  const restore = vi.fn(() => ({ setAside: null }));
+  const restore = vi.fn(() => ({ setAside: null, recoveryWords: null }));
   fakeCore(restore);
   render(<Restore vaultExists={false} onRestored={() => {}} onBack={() => {}} />);
   expect(screen.queryByText(/moved into a folder/)).toBeNull();

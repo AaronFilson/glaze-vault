@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import {
   api,
   errorText,
+  type Access,
   type Draft,
   type Kind,
   type LastBackup,
@@ -33,6 +34,8 @@ import { PrintView, type PrintJob } from './PrintView';
 import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
+import { CollectionPicker } from './Team';
+import { byCollection, canEdit, defaultCollection, editableCollections } from '../team';
 
 const DAY = 24 * 60 * 60 * 1000;
 /** How long after the last keystroke unsaved edits are kept as a draft. */
@@ -88,6 +91,12 @@ export function Recipes({
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
   const [kept, setKept] = useState({ recipe: false, material: false });
   const [newWords, setNewWords] = useState<string[] | null>(null);
+  const [organizationWords, setOrganizationWords] = useState<string[] | null>(null);
+  // Who is signed in and what they can open; in a team's vault, names for other people's
+  // private collections (admins only), and where new records go (ADR 12).
+  const [access, setAccess] = useState<Access | null>(null);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [newCollection, setNewCollection] = useState<string | null>(null);
   const [reminderHidden, setReminderHidden] = useState(false);
   const [updateHidden, setUpdateHidden] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -105,9 +114,33 @@ export function Recipes({
     return done;
   };
 
+  const loadAccess = async () => {
+    const now = await api.access();
+    setAccess(now);
+    setNewCollection((chosen) =>
+      chosen && editableCollections(now).some((c) => c.id === chosen) ? chosen : defaultCollection(now)
+    );
+    if (now.team && now.me.admin) {
+      const team = await api.team();
+      setNames(Object.fromEntries(team.people.map((p) => [p.id, p.name])));
+    }
+    return now;
+  };
+
+  /** After growing or changing the team: access, and the lists, which now show collections. */
+  const reloadAccess = () => {
+    Promise.all([loadAccess(), api.recipes(), api.materials()])
+      .then(([, heads, ownMaterials]) => {
+        setRecipes(heads);
+        setMaterials(ownMaterials);
+      })
+      .catch((e) => setError(errorText(e)));
+  };
+
   useEffect(() => {
     (async () => {
-      const [heads, ownMaterials, gone, goneMaterials, settings, last, draft] = await Promise.all([
+      const [, heads, ownMaterials, gone, goneMaterials, settings, last, draft] = await Promise.all([
+        loadAccess(),
         api.recipes(),
         api.materials(),
         api.deletedRecords<RecipeContent>('recipe'),
@@ -206,7 +239,11 @@ export function Recipes({
     setSaving(true);
     setError('');
     try {
-      const saved = await api.saveRecipe(recipe.current?.revisionId ?? null, recipe.draft);
+      const saved = await api.saveRecipe(
+        recipe.current?.revisionId ?? null,
+        recipe.draft,
+        recipe.current ? null : newCollection
+      );
       recipe.show(saved);
       setRecipes((list) => [saved, ...list.filter((r) => r.recordId !== saved.recordId)]);
       setKept((k) => ({ ...k, recipe: false }));
@@ -234,7 +271,11 @@ export function Recipes({
     setMaterialError('');
     try {
       const oldName = material.current?.content.name;
-      const saved = await api.saveMaterial(material.current?.revisionId ?? null, { ...material.draft, name });
+      const saved = await api.saveMaterial(
+        material.current?.revisionId ?? null,
+        { ...material.draft, name },
+        material.current ? null : newCollection
+      );
       material.show(saved);
       setMaterials((list) => [saved, ...list.filter((m) => m.recordId !== saved.recordId)]);
       setKept((k) => ({ ...k, material: false }));
@@ -254,7 +295,10 @@ export function Recipes({
       ...content,
       lines: content.lines.map((line) => (sameName(line.material, oldName) ? { ...line, material: name } : line))
     });
-    const users = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, oldName)));
+    const all = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, oldName)));
+    // In a team's vault, recipes this person may only read keep the old name.
+    const users = all.filter((r) => canEdit(access, r.collectionId));
+    const readOnly = all.filter((r) => !users.includes(r)).map((r) => r.content.name || 'Untitled');
     const failed: string[] = [];
     for (const head of users) {
       try {
@@ -265,9 +309,11 @@ export function Recipes({
         failed.push(head.content.name || 'Untitled');
       }
     }
-    if (failed.length) {
-      setMaterialError(`The new name could not be put in ${failed.join(', ')}. Change it there by hand.`);
-    }
+    const problems = [
+      failed.length && `The new name could not be put in ${failed.join(', ')}. Change it there by hand.`,
+      readOnly.length && `You may not change ${readOnly.join(', ')}, so they still use ${oldName}.`
+    ].filter(Boolean);
+    if (problems.length) setMaterialError(problems.join(' '));
   };
 
   const lock = () =>
@@ -401,9 +447,29 @@ export function Recipes({
   if (newWords) {
     return <RecoverySheet words={newWords} doneLabel="Done" onDone={() => setNewWords(null)} />;
   }
+  if (organizationWords) {
+    return (
+      <RecoverySheet
+        words={organizationWords}
+        organization
+        doneLabel="Done"
+        onDone={() => {
+          setOrganizationWords(null);
+          reloadAccess();
+        }}
+      />
+    );
+  }
 
+  const team = !!access?.team;
+  const mayCreate = !team || editableCollections(access).length > 0;
+  const picker = team && access && (
+    <CollectionPicker access={access} names={names} value={newCollection} onChange={setNewCollection} />
+  );
   const reminderDays = settings?.backupReminderDays ?? 0;
   const backupDue =
+    // In a team's vault only admins back up.
+    (!team || !!access?.me.admin) &&
     !reminderHidden &&
     reminderDays > 0 &&
     recipes.length > 0 &&
@@ -479,6 +545,7 @@ export function Recipes({
           )}
           {viewButton('materials', 'Materials')}
           {viewButton('settings', 'Settings')}
+          {team && access && <span className="hint signed-in">{access.me.name}</span>}
           <button type="button" onClick={lock}>
             Lock
           </button>
@@ -619,6 +686,9 @@ export function Recipes({
             setView('import');
           }}
           onClose={() => setView('recipes')}
+          access={access}
+          onShared={setOrganizationWords}
+          onTeamChanged={reloadAccess}
         />
       ) : view === 'import' && importing ? (
         <Import
@@ -626,6 +696,8 @@ export function Recipes({
           plan={importing.plan}
           recipes={recipes}
           materials={materials}
+          collection={team ? newCollection : null}
+          into={picker || undefined}
           onImported={({ recipes: newRecipes, materials: newMaterials }) => {
             const merge = <Content,>(list: Revision<Content>[], added: Revision<Content>[]) => [
               ...added,
@@ -671,6 +743,9 @@ export function Recipes({
           onErase={() => setConfirming({ action: 'erase', kind: 'material' })}
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
+          readOnly={!canEdit(access, material.current ? material.current.collectionId : newCollection)}
+          canCreate={mayCreate}
+          newIn={picker || undefined}
         />
       ) : (
         <RecipeEditor
@@ -696,6 +771,10 @@ export function Recipes({
                 }
               : undefined
           }
+          readOnly={!canEdit(access, recipe.current ? recipe.current.collectionId : newCollection)}
+          canCreate={mayCreate}
+          groups={team && access ? byCollection(recipes, access, names) : undefined}
+          newIn={picker || undefined}
         />
       )}
 

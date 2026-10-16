@@ -1,11 +1,18 @@
 import { useState } from 'react';
 import { api, errorText, type ChosenBackup } from '../api';
 import { NewPassword } from './NewPassword';
+import { PersonPicker } from './PersonPicker';
 
 export interface RestoreResult {
   backup: ChosenBackup;
   setAside: string | null;
+  /** After restoring with the organization's recovery key, the admin's new recovery words. */
+  recoveryWords: string[] | null;
 }
+
+/** How the backup is opened: a password, the person's recovery key, or for a team's backup the
+ * organization's recovery key. */
+type Using = 'password' | 'recovery' | 'organization';
 
 /** Restores a backup file: choose it, then open it with its password or recovery key. */
 export function Restore({
@@ -18,7 +25,9 @@ export function Restore({
   onBack: () => void;
 }) {
   const [backup, setBackup] = useState<ChosenBackup | null>(null);
-  const [useRecovery, setUseRecovery] = useState(false);
+  const [using, setUsing] = useState<Using>('password');
+  const [admin, setAdmin] = useState<string | null>(null);
+  const useRecovery = using !== 'password';
   const [password, setPassword] = useState('');
   const [words, setWords] = useState('');
   const [newPassword, setNewPassword] = useState<string | null>(null);
@@ -42,11 +51,16 @@ export function Restore({
     setBusy(true);
     setError('');
     try {
-      const { setAside } = await api.restoreBackup(
+      const { setAside, recoveryWords } = await api.restoreBackup(
         backup.path,
-        useRecovery ? { words, newPassword: newPassword ?? '' } : { password }
+        using === 'organization'
+          ? { words, newPassword: newPassword ?? '', organization: true }
+          : useRecovery
+            ? { words, newPassword: newPassword ?? '' }
+            : { password },
+        backup.admins.length ? admin : null
       );
-      onRestored({ backup, setAside });
+      onRestored({ backup, setAside, recoveryWords });
     } catch (e) {
       setError(errorText(e));
       setBusy(false);
@@ -85,6 +99,12 @@ export function Restore({
             <button type="button" className="link left" onClick={choose}>
               Choose another file
             </button>
+            {backup.admins.length > 0 && (
+              <>
+                <p className="hint">This is a team's backup: an admin restores it.</p>
+                <PersonPicker people={backup.admins} value={admin} onChange={setAdmin} label="Admin" />
+              </>
+            )}
             {useRecovery ? (
               <>
                 <label htmlFor="restore-words">Recovery words</label>
@@ -100,7 +120,10 @@ export function Restore({
                   aria-describedby="restore-count"
                 />
                 <p id="restore-count" className="hint">
-                  {count} of 24 words, from the recovery sheet you had when the backup was made
+                  {count} of 24 words, from{' '}
+                  {using === 'organization'
+                    ? "the organization's recovery sheet"
+                    : 'the recovery sheet you had when the backup was made'}
                 </p>
                 <NewPassword label="New password" onChange={setNewPassword} autoFocus={false} />
               </>
@@ -121,9 +144,18 @@ export function Restore({
                 </p>
               </>
             )}
-            <button type="button" className="link left" onClick={() => setUseRecovery(!useRecovery)}>
+            <button
+              type="button"
+              className="link left"
+              onClick={() => setUsing(using === 'password' ? 'recovery' : 'password')}
+            >
               {useRecovery ? 'Use the password instead' : 'Use the recovery key instead'}
             </button>
+            {backup.admins.length > 0 && using !== 'organization' && (
+              <button type="button" className="link left" onClick={() => setUsing('organization')}>
+                Use the organization's recovery key
+              </button>
+            )}
             <button type="submit" className="primary" disabled={!ready || busy}>
               {busy ? 'Restoring…' : 'Restore'}
             </button>
