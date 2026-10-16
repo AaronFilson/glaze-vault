@@ -151,7 +151,8 @@ export function Restored({ result, onDone }: { result: RestoreResult; onDone: ()
         {result.setAside && (
           <p className="hint">
             The vault that was here before was moved, not deleted, to <code className="path">{result.setAside}</code>.
-            The user guide says how to bring it back. Delete that folder once you are sure you do not need it.
+            To switch back to it, open Settings: Vaults set aside lists it. Delete that folder once you are sure you do
+            not need it.
           </p>
         )}
         <button type="button" className="primary" autoFocus onClick={onDone}>

@@ -269,10 +269,7 @@ impl Vault {
 
         let last = LastBackup {
             at,
-            file_name: path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            file_name: file_name_of(path),
         };
         self.set_meta("last_backup", &serde_json::to_string(&last)?)?;
         Ok(last)
@@ -326,6 +323,16 @@ impl Vault {
         let mut vault = Vault::open(dir, keyring, keys)?;
         if let Credential::RecoveryKey { new_password, .. } = credential {
             vault.set_password(new_password)?;
+        }
+        // The vault is now what the backup holds, so the backup is its latest, though the copy
+        // inside the backup was made just before it was recorded.
+        let created_at = backup.header.created_at;
+        if vault.last_backup()?.is_none_or(|last| last.at < created_at) {
+            let last = LastBackup {
+                at: created_at,
+                file_name: file_name_of(path),
+            };
+            vault.set_meta("last_backup", &serde_json::to_string(&last)?)?;
         }
         Ok((vault, set_aside))
     }
@@ -875,6 +882,13 @@ fn revision_aad(
         .into_bytes()
 }
 
+/// The name a backup is shown by: its file's, without the folder.
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn parse_id(text: &str) -> Result<Uuid> {
     Uuid::parse_str(text).map_err(|_| Error::Corrupt(format!("bad id {text}")))
 }
@@ -1122,6 +1136,10 @@ mod tests {
             .map(|r| r.content["name"].clone())
             .collect();
         assert_eq!(names, vec![json!("Before")]);
+        // The backup it came from counts as its latest.
+        let last = restored.last_backup().unwrap().unwrap();
+        assert_eq!(last.file_name, "b.gvbackup");
+        assert_eq!(last.at, Vault::backup_info(&path).unwrap().created_at);
         drop(restored);
         Vault::unlock(dir.path(), "restored password").unwrap();
 
