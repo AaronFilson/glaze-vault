@@ -31,6 +31,7 @@ export function Recover({ onRecovered, onBack }: { onRecovered: () => void; onBa
         <label htmlFor="words">Recovery words</label>
         <textarea
           id="words"
+          data-secret
           rows={4}
           autoComplete="off"
           autoCapitalize="off"

@@ -8,3 +8,6 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>
 );
+
+// The screen as text, for following development without screenshots. Left out of release builds.
+if (import.meta.env.DEV) void import('./devScreen').then(({ startDevScreen }) => startDevScreen());

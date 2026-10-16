@@ -1,11 +1,17 @@
-// Exports: every recipe as CSV (for spreadsheets) or JSON (for other programs). Neither is
-// encrypted; the Settings screen says so before saving.
-import type { RecipeHead } from './api';
+// Exports: every recipe and the person's own materials as CSV (for spreadsheets) or JSON (for
+// other programs). Neither is encrypted; the Settings screen says so before saving.
+import type { MaterialHead, RecipeHead } from './api';
 import { usableLines } from './batch';
+import { MATERIAL_CATEGORIES } from './chemistry';
 
 export const EXPORT_FORMAT = 'glaze-vault-export';
 
-export function exportJson(recipes: RecipeHead[], exportedAt: Date, appVersion: string): string {
+export function exportJson(
+  recipes: RecipeHead[],
+  materials: MaterialHead[],
+  exportedAt: Date,
+  appVersion: string
+): string {
   return (
     JSON.stringify(
       {
@@ -19,6 +25,15 @@ export function exportJson(recipes: RecipeHead[], exportedAt: Date, appVersion: 
           notes: recipe.content.notes,
           revision: recipe.number,
           savedAt: new Date(recipe.savedAt).toISOString()
+        })),
+        materials: materials.map((material) => ({
+          name: material.content.name,
+          category: material.content.category,
+          oxides: material.content.oxides.filter((line) => line.percent.trim()),
+          loi: material.content.loi,
+          notes: material.content.notes,
+          revision: material.number,
+          savedAt: new Date(material.savedAt).toISOString()
         }))
       },
       null,
@@ -48,7 +63,29 @@ export function exportCsv(recipes: RecipeHead[]): string {
       ])
     );
   }
-  return '﻿' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
+  return '\uFEFF' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
+}
+
+const MATERIAL_COLUMNS = ['Material', 'Kind', 'Oxide', 'Percent', 'Notes', 'Revision', 'Saved'];
+
+/** One row per oxide, with the loss on ignition as the last, like a supplier's data sheet. A
+ * material's kind, notes, revision and date are on its first row. */
+export function exportMaterialsCsv(materials: MaterialHead[]): string {
+  const rows = [MATERIAL_COLUMNS];
+  const label = (category: string) => MATERIAL_CATEGORIES.find((c) => c.category === category)?.label ?? category;
+  for (const material of [...materials].sort((a, b) => a.content.name.localeCompare(b.content.name))) {
+    const { name, category, oxides, loi, notes } = material.content;
+    const lines = [
+      ...oxides.filter((line) => line.percent.trim()).map((line) => [line.oxide, line.percent.trim()]),
+      ...(loi.trim() ? [['LOI', loi.trim()]] : [])
+    ];
+    const first = [notes, String(material.number), new Date(material.savedAt).toISOString()];
+    if (!lines.length) rows.push([name, label(category), '', '', ...first]);
+    lines.forEach(([oxide, percent], i) =>
+      rows.push([name, i === 0 ? label(category) : '', oxide, percent, ...(i === 0 ? first : ['', '', ''])])
+    );
+  }
+  return '\uFEFF' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
 }
 
 /** Quotes a field when it needs it (RFC 4180). Text that a spreadsheet would run as a formula gets
@@ -60,8 +97,8 @@ export function csvField(value: string): string {
 }
 
 /** "Glaze Vault recipes 2026-10-14.csv", in local time. */
-export function exportFileName(extension: 'csv' | 'json', now: Date): string {
-  return `Glaze Vault recipes ${localDate(now)}.${extension}`;
+export function exportFileName(extension: 'csv' | 'json', now: Date, what = 'recipes'): string {
+  return `Glaze Vault ${what} ${localDate(now)}.${extension}`;
 }
 
 export function localDate(date: Date): string {

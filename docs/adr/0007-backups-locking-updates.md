@@ -1,6 +1,6 @@
 # 7. Backups, export, locking by itself, and updates
 
-Proposed, 2026-10-14.
+Proposed, 2026-10-14. Drafts are replaced by [ADR 8](0008-materials-history-drafts.md).
 
 ## Context
 

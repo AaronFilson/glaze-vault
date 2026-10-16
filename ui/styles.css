@@ -386,6 +386,77 @@ table.lines td.num {
   font-variant-numeric: tabular-nums;
 }
 
+/* Groups an editor's fields so an earlier revision can show them all disabled. */
+fieldset.plain {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+fieldset.plain:disabled input,
+fieldset.plain:disabled textarea,
+fieldset.plain:disabled select {
+  background: var(--bg);
+  color: var(--text);
+  opacity: 1;
+}
+
+fieldset.plain:disabled button {
+  visibility: hidden;
+}
+
+table.lines caption {
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+table.lines tfoot th {
+  color: var(--text);
+  font-weight: 400;
+  padding-top: 0.35rem;
+}
+
+table.lines tfoot label {
+  display: inline;
+  font-weight: 400;
+  margin: 0;
+}
+
+.list-heading {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 1rem 0 0;
+}
+
+.list-heading + .list {
+  margin-top: 0.25rem;
+}
+
+.copy-from .row {
+  margin: 0 0 1rem;
+}
+
+.copy-from .row input {
+  flex: 1;
+}
+
+.history {
+  margin-top: 1.5rem;
+}
+
+.history summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.plain-list {
+  padding-left: 1.1rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
 .analysis {
   grid-area: analysis;
   padding: 1rem;

@@ -28,6 +28,7 @@ export function RecoverySheet({
               <label htmlFor={'word' + i}>Word {index + 1}</label>
               <input
                 id={'word' + i}
+                data-secret
                 autoComplete="off"
                 autoCapitalize="off"
                 spellCheck={false}
@@ -87,7 +88,7 @@ export function RecoverySheet({
 
 function WordGrid({ words }: { words: string[] }) {
   return (
-    <ol className="words">
+    <ol className="words" data-secret>
       {words.map((word, index) => (
         <li key={index}>
           <span className="n">{index + 1}</span> {word}

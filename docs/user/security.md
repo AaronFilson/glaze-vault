@@ -2,13 +2,14 @@
 
 ## What is encrypted
 
-Everything in your vault: every recipe's name, materials, amounts and notes, and the list of
-recipes itself.
+Everything in your vault: every recipe's name, materials, amounts and notes, every revision,
+your own materials, your unsaved changes, and the lists of them.
 
 - The vault's database is encrypted as a whole with **AES-256** (SQLCipher), so a copy of the
   file shows nothing, not even how many recipes there are.
-- Inside it, each recipe is encrypted again with **XChaCha20-Poly1305**, tied to its place in the
-  vault, so a recipe cannot be swapped or moved without Glaze Vault noticing.
+- Inside it, each revision of a recipe or material is encrypted again with
+  **XChaCha20-Poly1305**, tied to its place in the vault, so one cannot be swapped or moved without
+  Glaze Vault noticing.
 - Your password is never stored. It is stretched with **Argon2id**, which makes each guess slow
   and memory-hungry, into the key that unlocks your keys.
 - Your recovery key is another way to unlock those keys.

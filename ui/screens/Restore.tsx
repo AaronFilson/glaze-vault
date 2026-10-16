@@ -90,6 +90,7 @@ export function Restore({
                 <label htmlFor="restore-words">Recovery words</label>
                 <textarea
                   id="restore-words"
+                  data-secret
                   rows={4}
                   autoComplete="off"
                   autoCapitalize="off"

@@ -3,13 +3,14 @@ import {
   api,
   errorText,
   type LastBackup,
+  type MaterialHead,
   type Preferences,
   type RecipeHead,
   type Settings as VaultSettings,
   type UpdateInfo,
   type VaultStatus
 } from '../api';
-import { exportCsv, exportFileName, exportJson } from '../export';
+import { exportCsv, exportFileName, exportJson, exportMaterialsCsv } from '../export';
 import { NewPassword } from './NewPassword';
 
 const LOCK_MINUTES = [1, 5, 10, 15, 30, 60, 120];
@@ -27,6 +28,7 @@ export function Settings({
   lastBackup,
   backUp,
   recipes,
+  materials,
   status,
   update,
   onUpdate,
@@ -39,6 +41,7 @@ export function Settings({
   lastBackup: LastBackup | null;
   backUp: () => Promise<void>;
   recipes: RecipeHead[];
+  materials: MaterialHead[];
   status: VaultStatus;
   update: UpdateInfo | null;
   onUpdate: (update: UpdateInfo | null) => void;
@@ -56,7 +59,7 @@ export function Settings({
       </div>
       <AutoLock settings={settings} onSettings={onSettings} />
       <Backups settings={settings} onSettings={onSettings} lastBackup={lastBackup} backUp={backUp} />
-      <Export recipes={recipes} version={status.version} />
+      <Export recipes={recipes} materials={materials} version={status.version} />
       <ChangePassword />
       <RecoveryKey onNewRecoveryKey={onNewRecoveryKey} />
       <Updates status={status} update={update} onUpdate={onUpdate} onInstall={onInstall} />
@@ -185,16 +188,31 @@ function Backups({
   );
 }
 
-function Export({ recipes, version }: { recipes: RecipeHead[]; version: string }) {
+function Export({
+  recipes,
+  materials,
+  version
+}: {
+  recipes: RecipeHead[];
+  materials: MaterialHead[];
+  version: string;
+}) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const run = async (kind: 'csv' | 'json') => {
+  const run = async (kind: 'csv' | 'json' | 'materials-csv') => {
     setMessage('');
     setError('');
     const now = new Date();
-    const contents = kind === 'csv' ? exportCsv(recipes) : exportJson(recipes, now, version);
+    const contents =
+      kind === 'csv'
+        ? exportCsv(recipes)
+        : kind === 'json'
+          ? exportJson(recipes, materials, now, version)
+          : exportMaterialsCsv(materials);
+    const fileName =
+      kind === 'materials-csv' ? exportFileName('csv', now, 'materials') : exportFileName(kind, now);
     try {
-      const saved = await api.saveExport(exportFileName(kind, now), contents);
+      const saved = await api.saveExport(fileName, contents);
       if (saved) setMessage(`Saved ${saved}.`);
     } catch (e) {
       setError(errorText(e));
@@ -203,7 +221,8 @@ function Export({ recipes, version }: { recipes: RecipeHead[]; version: string }
   return (
     <Section title="Export">
       <p>
-        Saves every recipe as a spreadsheet (CSV) or as JSON for other programs.{' '}
+        Saves every recipe as a spreadsheet (CSV), or everything as JSON for other programs. Your own materials have
+        a spreadsheet of their own.{' '}
         <strong>Exported files are not encrypted:</strong> anyone who gets the file can read your recipes. Use a
         backup to keep a safe copy.
       </p>
@@ -211,8 +230,11 @@ function Export({ recipes, version }: { recipes: RecipeHead[]; version: string }
         <button type="button" disabled={!recipes.length} onClick={() => run('csv')}>
           Export as CSV…
         </button>
-        <button type="button" disabled={!recipes.length} onClick={() => run('json')}>
+        <button type="button" disabled={!recipes.length && !materials.length} onClick={() => run('json')}>
           Export as JSON…
+        </button>
+        <button type="button" disabled={!materials.length} onClick={() => run('materials-csv')}>
+          Export materials as CSV…
         </button>
       </div>
       {message && <p className="hint" role="status">{message}</p>}

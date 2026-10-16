@@ -13,8 +13,8 @@ to 2 hours in **Lock after**, or untick it to turn it off.
 Time with the computer asleep, or with Glaze Vault minimized, counts: coming back after longer
 than that finds the vault locked.
 
-If you had unsaved changes, they are kept, encrypted, and come back in the editor when you
-unlock (see [Recipes](recipes.md#saving-and-revisions)). The unlock screen says why the vault
+Unsaved changes are kept, encrypted, and come back in the editor when you unlock (see
+[Recipes](recipes.md#saving-and-revisions)). The unlock screen says why the vault
 locked.
 
 This setting is kept in your vault, so it comes with it when you

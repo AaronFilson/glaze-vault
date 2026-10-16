@@ -74,8 +74,12 @@ In **Settings**, under **Export**:
 - **Export as CSV…** saves a spreadsheet: one row for each material in each recipe, with the
   recipe's name, the amount, its percentage of the recipe, and on each recipe's first row its
   notes, revision number and when it was saved. Excel, Numbers and LibreOffice open it directly.
-- **Export as JSON…** saves the same recipes for other programs. Its layout is described by its
-  `"format": "glaze-vault-export"` and `"version": 1` fields.
+- **Export as JSON…** saves the same recipes, and [your own materials](materials.md), for other
+  programs. Its layout is described by its `"format": "glaze-vault-export"` and `"version": 1`
+  fields.
+- **Export materials as CSV…** saves your own materials as a spreadsheet: one row for each oxide,
+  then the loss on ignition, with each material's kind, notes, revision and date on its first
+  row.
 
-Text in a recipe that a spreadsheet would treat as a formula (starting with `=`, `+`, `-` or `@`)
+Text in a recipe or material that a spreadsheet would treat as a formula (starting with `=`, `+`, `-` or `@`)
 gets an apostrophe in front, so opening an export cannot run anything.

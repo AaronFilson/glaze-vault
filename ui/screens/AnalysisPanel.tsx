@@ -40,6 +40,13 @@ export function AnalysisPanel({ analysis }: { analysis: Analysis }) {
         <dt>Loss on ignition</dt>
         <dd>{result.loi.toFixed(1)}%</dd>
       </dl>
+      {analysis.noOxides.length > 0 && (
+        <p className="hint">
+          {listOf(analysis.noOxides)} {analysis.noOxides.length > 1 ? 'add' : 'adds'} no oxides, so{' '}
+          {analysis.noOxides.length > 1 ? 'they are' : 'it is'} left out of the unity formula. {analysis.noOxides.length > 1 ? 'They still count' : 'It still counts'} in
+          the batch.
+        </p>
+      )}
       {result.warnings.length > 0 && (
         <ul className="warnings">
           {result.warnings.map((warning) => (
@@ -49,4 +56,9 @@ export function AnalysisPanel({ analysis }: { analysis: Analysis }) {
       )}
     </>
   );
+}
+
+/** "A", "A and B", "A, B and C" */
+function listOf(names: string[]): string {
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }

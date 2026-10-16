@@ -2,7 +2,7 @@
 //! (docs/adr/0001-tauri-rust-react.md). File dialogs open from here, not from the page, so the
 //! page never chooses where files are written.
 
-use glaze_vault_core::{BACKUP_EXTENSION, Credential, Error, LastBackup, RecipeHead, Settings, Vault};
+use glaze_vault_core::{BACKUP_EXTENSION, Credential, Error, Kind, LastBackup, Revision, Settings, Vault};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -132,13 +132,23 @@ fn new_recovery_key(state: State<AppState>, password: String) -> CommandResult<V
 }
 
 #[tauri::command(async)]
-fn list_recipes(state: State<AppState>) -> CommandResult<Vec<RecipeHead>> {
-    with_vault(&state, |vault| vault.recipes())
+fn list_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revision>> {
+    with_vault(&state, |vault| vault.heads(kind))
 }
 
 #[tauri::command(async)]
-fn save_recipe(state: State<AppState>, parent: Option<Uuid>, content: serde_json::Value) -> CommandResult<RecipeHead> {
-    with_vault(&state, |vault| vault.save_recipe(parent, &content))
+fn save_record(
+    state: State<AppState>,
+    kind: Kind,
+    parent: Option<Uuid>,
+    content: serde_json::Value,
+) -> CommandResult<Revision> {
+    with_vault(&state, |vault| vault.save(kind, parent, &content))
+}
+
+#[tauri::command(async)]
+fn record_history(state: State<AppState>, kind: Kind, record_id: Uuid) -> CommandResult<Vec<Revision>> {
+    with_vault(&state, |vault| vault.history(kind, record_id))
 }
 
 #[tauri::command(async)]
@@ -151,7 +161,7 @@ fn set_settings(state: State<AppState>, settings: Settings) -> CommandResult<()>
     with_vault(&state, |vault| vault.set_settings(&settings))
 }
 
-/// Keeps unsaved edits, encrypted, when the vault locks by itself, then locks it.
+/// Keeps unsaved edits, encrypted, then locks the vault.
 #[tauri::command(async)]
 fn lock_with_draft(state: State<AppState>, draft: serde_json::Value) -> CommandResult<()> {
     let mut vault = state.vault.lock().unwrap();
@@ -162,8 +172,18 @@ fn lock_with_draft(state: State<AppState>, draft: serde_json::Value) -> CommandR
 }
 
 #[tauri::command(async)]
-fn take_draft(state: State<AppState>) -> CommandResult<Option<serde_json::Value>> {
-    with_vault(&state, |vault| vault.take_draft())
+fn get_draft(state: State<AppState>) -> CommandResult<Option<serde_json::Value>> {
+    with_vault(&state, |vault| vault.draft())
+}
+
+#[tauri::command(async)]
+fn save_draft(state: State<AppState>, draft: serde_json::Value) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.save_draft(&draft))
+}
+
+#[tauri::command(async)]
+fn clear_draft(state: State<AppState>) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.clear_draft())
 }
 
 #[tauri::command(async)]
@@ -394,6 +414,23 @@ async fn install_update(app: AppHandle, state: State<'_, AppState>) -> CommandRe
     app.restart();
 }
 
+/// Development builds only: writes the page's text picture of the screen (ui/devScreen.ts) to the
+/// file GLAZE_VAULT_SCREEN names, so the app can be followed without screenshots. Returns false
+/// when no file is named, and the page stops sending. The file holds what is on screen in plain
+/// text, so it is for throwaway vaults.
+#[cfg(debug_assertions)]
+#[tauri::command(async)]
+fn dev_screen(text: String) -> CommandResult<bool> {
+    let Some(path) = std::env::var_os("GLAZE_VAULT_SCREEN").map(PathBuf::from) else {
+        return Ok(false);
+    };
+    // Written beside it and moved into place, so a reader never sees half a screen.
+    let partial = path.with_extension("partial");
+    fs::write(&partial, text).map_err(file_error)?;
+    fs::rename(&partial, &path).map_err(file_error)?;
+    Ok(true)
+}
+
 /// Whether this build has an updater public key. Builds without one (anyone's own build before
 /// docs/releasing.md has been followed) leave the updater out rather than fail to start.
 fn updater_configured(config: &tauri::Config) -> bool {
@@ -439,12 +476,15 @@ pub fn run() {
             lock,
             change_password,
             new_recovery_key,
-            list_recipes,
-            save_recipe,
+            list_records,
+            save_record,
+            record_history,
             get_settings,
             set_settings,
             lock_with_draft,
-            take_draft,
+            get_draft,
+            save_draft,
+            clear_draft,
             last_backup,
             back_up,
             choose_backup,
@@ -453,7 +493,9 @@ pub fn run() {
             get_preferences,
             set_preferences,
             check_for_update,
-            install_update
+            install_update,
+            #[cfg(debug_assertions)]
+            dev_screen
         ])
         .run(context)
         .expect("error while running Glaze Vault");

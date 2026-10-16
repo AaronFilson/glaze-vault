@@ -1,28 +1,36 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
   errorText,
+  type Draft,
   type LastBackup,
+  type MaterialHead,
   type RecipeHead,
   type Settings as VaultSettings,
   type UpdateInfo,
   type VaultStatus
 } from '../api';
 import { BATCH_UNITS, type BatchUnit } from '../batch';
-import { analyse, MATERIAL_NAMES, type RecipeContent, type RecipeLine } from '../chemistry';
+import { analyse, materialLibrary, sameName, type MaterialContent, type RecipeContent } from '../chemistry';
 import { localDate } from '../export';
+import { restorePart, useEditor, type Editor } from '../useEditor';
 import { useIdleLock } from '../useIdleLock';
-import { AnalysisPanel } from './AnalysisPanel';
+import { EMPTY_MATERIAL, Materials, sameMaterial } from './Materials';
 import { PrintView, type PrintJob } from './PrintView';
+import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
 
-const EMPTY: RecipeContent = { name: '', lines: [{ material: '', amount: '' }], notes: '' };
 const DAY = 24 * 60 * 60 * 1000;
+/** How long after the last keystroke unsaved edits are kept as a draft. */
+export const DRAFT_DELAY_MS = 1000;
+
+type Scope = 'recipe' | 'material' | 'all';
 
 export type LockReason = 'manual' | 'idle' | 'idle-with-draft';
 
-/** The open vault: the recipe list and editor, settings, printing, and the notices above them. */
+/** The open vault: the recipe list and editor, materials, settings, printing, and the notices
+ * above them. */
 export function Recipes({
   status,
   update,
@@ -35,17 +43,21 @@ export function Recipes({
   onLocked: (reason: LockReason) => void;
 }) {
   const [recipes, setRecipes] = useState<RecipeHead[]>([]);
-  const [current, setCurrent] = useState<RecipeHead | null>(null);
-  const [draft, setDraft] = useState<RecipeContent>(EMPTY);
+  const [materials, setMaterials] = useState<MaterialHead[]>([]);
+  const recipe = useEditor<RecipeContent>(EMPTY_RECIPE, sameRecipe);
+  const material = useEditor<MaterialContent>(EMPTY_MATERIAL, sameMaterial);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
+  const [materialError, setMaterialError] = useState('');
+  const [backupError, setBackupError] = useState('');
   const [saving, setSaving] = useState(false);
   // What to do once unsaved changes are saved or discarded. The system webview on macOS has no
   // window.confirm(), so the question is asked in the page.
-  const [pending, setPending] = useState<(() => void) | null>(null);
-  const [view, setView] = useState<'recipes' | 'settings'>('recipes');
+  const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
+  const [view, setView] = useState<'recipes' | 'materials' | 'settings'>('recipes');
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
-  const [keptDraft, setKeptDraft] = useState(false);
+  const [kept, setKept] = useState({ recipe: false, material: false });
   const [newWords, setNewWords] = useState<string[] | null>(null);
   const [reminderHidden, setReminderHidden] = useState(false);
   const [updateHidden, setUpdateHidden] = useState(false);
@@ -53,39 +65,77 @@ export function Recipes({
   const [printing, setPrinting] = useState(false);
   const [printJob, setPrintJob] = useState<PrintJob>({ kind: 'recipe' });
   const [printRequest, setPrintRequest] = useState(0);
+  // Whether the vault holds a draft, so one is only cleared when there is one.
+  const draftKept = useRef(false);
+  // Draft writes, one after another: the core runs commands side by side, and a draft kept after
+  // it was cleared would come back.
+  const draftWrites = useRef<Promise<unknown>>(Promise.resolve());
+  const writeDraft = <T,>(write: () => Promise<T>): Promise<T> => {
+    const done = draftWrites.current.then(write);
+    draftWrites.current = done.catch(() => {});
+    return done;
+  };
 
   useEffect(() => {
     (async () => {
-      const [heads, settings, last, kept] = await Promise.all([
+      const [heads, ownMaterials, settings, last, draft] = await Promise.all([
         api.recipes(),
+        api.materials(),
         api.settings(),
         api.lastBackup(),
-        api.takeDraft()
+        api.draft()
       ]);
       setRecipes(heads);
+      setMaterials(ownMaterials);
       setSettings(settings);
       setLastBackup(last);
-      if (kept) {
-        const head = heads.find((h) => h.revisionId === kept.revisionId) ?? null;
-        setCurrent(head);
-        setDraft(kept.content);
-        setKeptDraft(true);
-      }
+      draftKept.current = !!draft;
+      const keptRecipe = draft?.recipe && restorePart(draft.recipe, heads, sameRecipe);
+      const keptMaterial = draft?.material && restorePart(draft.material, ownMaterials, sameMaterial);
+      if (keptRecipe) recipe.show(keptRecipe.current, keptRecipe.content);
+      if (keptMaterial) material.show(keptMaterial.current, keptMaterial.content);
+      if (keptMaterial && !keptRecipe) setView('materials');
+      setKept({ recipe: !!keptRecipe, material: !!keptMaterial });
+      setLoaded(true);
     })().catch((e) => setError(errorText(e)));
+    // Once, on opening.
   }, []);
+
+  // Keeps unsaved edits as an encrypted draft a moment after the last change, and forgets the
+  // draft as soon as nothing is unsaved.
+  const unsaved: Draft | null =
+    recipe.part || material.part ? { recipe: recipe.part, material: material.part } : null;
+  const unsavedJson = JSON.stringify(unsaved);
+  useEffect(() => {
+    if (!loaded) return;
+    if (!unsaved) {
+      if (draftKept.current) {
+        draftKept.current = false;
+        writeDraft(api.clearDraft).catch(() => {});
+      }
+      return;
+    }
+    const timer = setTimeout(() => {
+      draftKept.current = true;
+      writeDraft(() => api.saveDraft(unsaved)).catch(() => {});
+    }, DRAFT_DELAY_MS);
+    return () => clearTimeout(timer);
+    // unsavedJson stands for unsaved, which is a new object every render.
+  }, [loaded, unsavedJson]);
 
   // Print once the page shows the chosen layout.
   useEffect(() => {
     if (printRequest) window.print();
   }, [printRequest]);
 
-  const changed = !sameContent(draft, current?.content ?? EMPTY);
-  const analysis = useMemo(() => analyse(draft.lines), [draft.lines]);
+  const library = useMemo(() => materialLibrary(materials.map((m) => m.content)), [materials]);
+  const shownRecipe = recipe.viewing?.content ?? recipe.draft;
+  const analysis = useMemo(() => analyse(shownRecipe.lines, library), [shownRecipe.lines, library]);
 
   useIdleLock(settings?.autoLock && !newWords ? settings.autoLockMinutes : null, async () => {
     try {
-      if (changed) {
-        await api.lockWithDraft({ revisionId: current?.revisionId ?? null, content: draft });
+      if (unsaved) {
+        await writeDraft(() => api.lockWithDraft(unsaved));
         onLocked('idle-with-draft');
       } else {
         await api.lock();
@@ -97,27 +147,36 @@ export function Recipes({
     }
   });
 
-  /** Runs `action` now, or once the person has saved or discarded their changes. */
-  const leave = (action: () => void) => (changed ? setPending(() => action) : action());
+  const unsavedIn = (scope: Scope) =>
+    (scope !== 'material' && recipe.changed) || (scope !== 'recipe' && material.changed);
 
-  const open = (recipe: RecipeHead | null) =>
-    leave(() => {
-      setCurrent(recipe);
-      setDraft(recipe ? recipe.content : EMPTY);
+  /** Runs `action` now, or once the person has saved or discarded the changes it would lose. */
+  const leave = (scope: Scope, action: () => void) =>
+    unsavedIn(scope) ? setPending({ scope, action }) : action();
+
+  const openRecipe = (head: RecipeHead | null) =>
+    leave('recipe', () => {
+      recipe.open(head);
       setError('');
-      setKeptDraft(false);
+      setKept((k) => ({ ...k, recipe: false }));
       setView('recipes');
     });
 
-  const save = async (): Promise<boolean> => {
+  const openMaterial = (head: MaterialHead | null) =>
+    leave('material', () => {
+      material.open(head);
+      setMaterialError('');
+      setKept((k) => ({ ...k, material: false }));
+    });
+
+  const saveRecipe = async (): Promise<boolean> => {
     setSaving(true);
     setError('');
     try {
-      const saved = await api.saveRecipe(current?.revisionId ?? null, draft);
-      setCurrent(saved);
-      setDraft(saved.content);
-      setRecipes([saved, ...recipes.filter((r) => r.recordId !== saved.recordId)]);
-      setKeptDraft(false);
+      const saved = await api.saveRecipe(recipe.current?.revisionId ?? null, recipe.draft);
+      recipe.show(saved);
+      setRecipes((list) => [saved, ...list.filter((r) => r.recordId !== saved.recordId)]);
+      setKept((k) => ({ ...k, recipe: false }));
       return true;
     } catch (e) {
       setError(errorText(e));
@@ -127,18 +186,60 @@ export function Recipes({
     }
   };
 
+  const saveMaterial = async (): Promise<boolean> => {
+    const name = material.draft.name.trim();
+    const clash = materials.find(
+      (m) => m.recordId !== material.current?.recordId && sameName(m.content.name, name)
+    );
+    if (!name || clash) {
+      setMaterialError(
+        name ? `You already have a material called ${clash!.content.name}.` : 'Give the material a name.'
+      );
+      return false;
+    }
+    setSaving(true);
+    setMaterialError('');
+    try {
+      const saved = await api.saveMaterial(material.current?.revisionId ?? null, { ...material.draft, name });
+      material.show(saved);
+      setMaterials((list) => [saved, ...list.filter((m) => m.recordId !== saved.recordId)]);
+      setKept((k) => ({ ...k, material: false }));
+      return true;
+    } catch (e) {
+      setMaterialError(errorText(e));
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const lock = () =>
-    leave(async () => {
+    leave('all', async () => {
       await api.lock();
       onLocked('manual');
     });
 
   const resolvePending = async (choice: 'save' | 'discard' | 'stay') => {
-    const action = pending;
+    if (!pending) return;
+    const { scope, action } = pending;
     setPending(null);
-    if (!action || choice === 'stay') return;
-    if (choice === 'save' && !(await save())) return;
+    if (choice === 'stay') return;
+    const doRecipe = scope !== 'material' && recipe.changed;
+    const doMaterial = scope !== 'recipe' && material.changed;
+    if (choice === 'save') {
+      if (doRecipe && !(await saveRecipe())) return;
+      if (doMaterial && !(await saveMaterial())) return;
+    } else {
+      if (doRecipe) recipe.discard();
+      if (doMaterial) material.discard();
+    }
     action();
+  };
+
+  /** Puts an earlier revision in the editor, once the edits it would replace are saved or discarded. */
+  const takeRevision = <Content,>(scope: 'recipe' | 'material', editor: Editor<Content>) => {
+    const content = editor.viewing!.content;
+    leave(scope, () => editor.edit(content));
   };
 
   const backUp = async () => {
@@ -152,7 +253,7 @@ export function Recipes({
   };
 
   const install = () =>
-    leave(async () => {
+    leave('all', async () => {
       setInstalling(true);
       try {
         await api.installUpdate();
@@ -171,9 +272,6 @@ export function Recipes({
     setPrintRequest((n) => n + 1);
   };
 
-  const setLine = (index: number, line: RecipeLine) =>
-    setDraft({ ...draft, lines: draft.lines.map((l, i) => (i === index ? line : l)) });
-
   if (newWords) {
     return <RecoverySheet words={newWords} doneLabel="Done" onDone={() => setNewWords(null)} />;
   }
@@ -184,6 +282,17 @@ export function Recipes({
     reminderDays > 0 &&
     recipes.length > 0 &&
     (!lastBackup || Date.now() - lastBackup.at > reminderDays * DAY);
+  const pendingNames = pending
+    ? [
+        pending.scope !== 'material' && recipe.changed && (recipe.draft.name || 'This recipe'),
+        pending.scope !== 'recipe' && material.changed && (material.draft.name || 'This material')
+      ].filter((name): name is string => !!name)
+    : [];
+  const viewButton = (name: 'materials' | 'settings', label: string) => (
+    <button type="button" aria-pressed={view === name} onClick={() => setView(view === name ? 'recipes' : name)}>
+      {label}
+    </button>
+  );
 
   return (
     <div className="shell">
@@ -195,13 +304,8 @@ export function Recipes({
               Print…
             </button>
           )}
-          <button
-            type="button"
-            aria-pressed={view === 'settings'}
-            onClick={() => setView(view === 'settings' ? 'recipes' : 'settings')}
-          >
-            Settings
-          </button>
+          {viewButton('materials', 'Materials')}
+          {viewButton('settings', 'Settings')}
           <button type="button" onClick={lock}>
             Lock
           </button>
@@ -212,7 +316,13 @@ export function Recipes({
         {pending && (
           <div className="notice warning" role="alertdialog" aria-labelledby="unsaved-title">
             <p id="unsaved-title">
-              <strong>{draft.name || 'This recipe'}</strong> has changes that are not saved.
+              {pendingNames.map((name, i) => (
+                <span key={name}>
+                  {i > 0 && ' and '}
+                  <strong>{name}</strong>
+                </span>
+              ))}{' '}
+              {pendingNames.length > 1 ? 'have' : 'has'} changes that are not saved.
             </p>
             <div className="row">
               <button type="button" className="primary" autoFocus onClick={() => resolvePending('save')}>
@@ -227,24 +337,25 @@ export function Recipes({
             </div>
           </div>
         )}
-        {keptDraft && changed && (
-          <div className="notice" role="status">
-            <p>
-              These are the changes to <strong>{draft.name || 'Untitled'}</strong> that were not saved when the vault
-              locked. Save them, or discard them.
-            </p>
-            <div className="row">
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft(current?.content ?? EMPTY);
-                  setKeptDraft(false);
-                }}
-              >
-                Discard changes
-              </button>
-            </div>
-          </div>
+        {kept.recipe && recipe.changed && (
+          <KeptNotice
+            name={recipe.draft.name}
+            onShow={view === 'recipes' ? undefined : () => setView('recipes')}
+            onDiscard={() => {
+              recipe.discard();
+              setKept((k) => ({ ...k, recipe: false }));
+            }}
+          />
+        )}
+        {kept.material && material.changed && (
+          <KeptNotice
+            name={material.draft.name}
+            onShow={view === 'materials' ? undefined : () => setView('materials')}
+            onDiscard={() => {
+              material.discard();
+              setKept((k) => ({ ...k, material: false }));
+            }}
+          />
         )}
         {printing && view === 'recipes' && (
           <PrintOptions job={printJob} onPrint={print} onCancel={() => setPrinting(false)} />
@@ -271,13 +382,21 @@ export function Recipes({
               A backup is an encrypted copy to keep away from this computer.
             </p>
             <div className="row">
-              <button type="button" className="primary" onClick={() => backUp().catch((e) => setError(errorText(e)))}>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => {
+                  setBackupError('');
+                  backUp().catch((e) => setBackupError(errorText(e)));
+                }}
+              >
                 Back up now…
               </button>
               <button type="button" onClick={() => setReminderHidden(true)}>
                 Not now
               </button>
             </div>
+            {backupError && <p role="alert" className="error">{backupError}</p>}
           </div>
         )}
       </div>
@@ -289,6 +408,7 @@ export function Recipes({
           lastBackup={lastBackup}
           backUp={backUp}
           recipes={recipes}
+          materials={materials}
           status={status}
           update={update}
           onUpdate={(found) => {
@@ -299,121 +419,59 @@ export function Recipes({
           onNewRecoveryKey={setNewWords}
           onClose={() => setView('recipes')}
         />
+      ) : view === 'materials' ? (
+        <Materials
+          materials={materials}
+          recipes={recipes}
+          editor={material}
+          saving={saving}
+          error={materialError}
+          onOpen={openMaterial}
+          onSave={() => saveMaterial()}
+          onUseRevision={() => takeRevision('material', material)}
+        />
       ) : (
-        <>
-          <nav className="sidebar no-print" aria-label="Recipes">
-            <button type="button" className="primary" onClick={() => open(null)}>
-              New recipe
-            </button>
-            {recipes.length === 0 ? (
-              <p className="hint">No recipes yet.</p>
-            ) : (
-              <ul className="list">
-                {recipes.map((recipe) => (
-                  <li key={recipe.recordId}>
-                    <button
-                      type="button"
-                      aria-current={recipe.recordId === current?.recordId}
-                      onClick={() => open(recipe)}
-                    >
-                      {recipe.content.name || 'Untitled'}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </nav>
-
-          <main className="editor no-print">
-            <label htmlFor="name">Recipe name</label>
-            <input
-              id="name"
-              className="title"
-              value={draft.name}
-              placeholder="Untitled"
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            />
-
-            <table className="lines">
-              <thead>
-                <tr>
-                  <th scope="col">Material</th>
-                  <th scope="col" className="num">
-                    Amount
-                  </th>
-                  <th scope="col">
-                    <span className="visually-hidden">Remove</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {draft.lines.map((line, index) => (
-                  <tr key={index}>
-                    <td>
-                      <input
-                        aria-label={`Material ${index + 1}`}
-                        list="materials"
-                        value={line.material}
-                        onChange={(e) => setLine(index, { ...line, material: e.target.value })}
-                      />
-                    </td>
-                    <td className="num">
-                      <input
-                        aria-label={`Amount ${index + 1}`}
-                        inputMode="decimal"
-                        value={line.amount}
-                        onChange={(e) => setLine(index, { ...line, amount: e.target.value })}
-                      />
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="link"
-                        aria-label={`Remove material ${index + 1}`}
-                        onClick={() => setDraft({ ...draft, lines: draft.lines.filter((_, i) => i !== index) })}
-                      >
-                        ×
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <datalist id="materials">
-              {MATERIAL_NAMES.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
-            <button
-              type="button"
-              onClick={() => setDraft({ ...draft, lines: [...draft.lines, { material: '', amount: '' }] })}
-            >
-              Add material
-            </button>
-
-            <label htmlFor="notes">Notes</label>
-            <textarea id="notes" rows={4} value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} />
-
-            <div className="row">
-              <button type="button" className="primary" disabled={!changed || saving} onClick={() => save()}>
-                {saving ? 'Saving…' : 'Save'}
-              </button>
-              {current && !changed && (
-                <span className="hint">
-                  Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
-                </span>
-              )}
-            </div>
-            {error && <p role="alert" className="error">{error}</p>}
-          </main>
-
-          <aside className="analysis no-print" aria-label="Unity formula">
-            <AnalysisPanel analysis={analysis} />
-          </aside>
-        </>
+        <RecipeEditor
+          recipes={recipes}
+          editor={recipe}
+          library={library}
+          analysis={analysis}
+          saving={saving}
+          error={error}
+          onOpen={openRecipe}
+          onSave={() => saveRecipe()}
+          onUseRevision={() => takeRevision('recipe', recipe)}
+        />
       )}
 
-      <PrintView job={printJob} content={draft} saved={current} changed={changed} analysis={analysis} />
+      <PrintView
+        job={printJob}
+        content={shownRecipe}
+        saved={recipe.viewing ?? recipe.current}
+        changed={!recipe.viewing && recipe.changed}
+        analysis={analysis}
+      />
+    </div>
+  );
+}
+
+function KeptNotice({ name, onShow, onDiscard }: { name: string; onShow?: () => void; onDiscard: () => void }) {
+  return (
+    <div className="notice" role="status">
+      <p>
+        These are your unsaved changes to <strong>{name || 'Untitled'}</strong> from last time. Save them, or discard
+        them.
+      </p>
+      <div className="row">
+        {onShow && (
+          <button type="button" className="primary" onClick={onShow}>
+            Show them
+          </button>
+        )}
+        <button type="button" onClick={onDiscard}>
+          Discard changes
+        </button>
+      </div>
     </div>
   );
 }
@@ -479,15 +537,5 @@ function PrintOptions({
         </button>
       </div>
     </form>
-  );
-}
-
-/** Compares by value: the core hands content back with its keys in another order. */
-function sameContent(a: RecipeContent, b: RecipeContent): boolean {
-  return (
-    a.name === b.name &&
-    a.notes === b.notes &&
-    a.lines.length === b.lines.length &&
-    a.lines.every((line, i) => line.material === b.lines[i].material && line.amount === b.lines[i].amount)
   );
 }

@@ -30,6 +30,7 @@ export function NewPassword({
       <input
         id={id + 'a'}
         type={shown ? 'text' : 'password'}
+        data-secret
         autoComplete="new-password"
         autoFocus={autoFocus}
         value={first}
@@ -43,6 +44,7 @@ export function NewPassword({
       <input
         id={id + 'b'}
         type={shown ? 'text' : 'password'}
+        data-secret
         autoComplete="new-password"
         value={second}
         onChange={(e) => update(first, e.target.value)}
