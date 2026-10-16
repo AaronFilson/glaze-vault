@@ -14,4 +14,4 @@ mod vault;
 pub use backup::EXTENSION as BACKUP_EXTENSION;
 pub use error::Error;
 pub use recovery::RecoveryKey;
-pub use vault::{BackupInfo, Credential, Kind, LastBackup, MIN_PASSWORD_CHARS, Revision, Settings, Vault};
+pub use vault::{BackupInfo, Credential, Kind, LastBackup, MIN_PASSWORD_CHARS, Revision, SetAside, Settings, Vault};

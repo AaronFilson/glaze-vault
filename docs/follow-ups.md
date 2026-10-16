@@ -22,8 +22,6 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Next for one person ([ADR 6](adr/0006-one-person-first.md))
 
-- Bring back a vault set aside by a restore from inside the app; today the user guide explains
-  moving its files.
 - Importing materials and recipes from a JSON export, or a supplier's CSV.
 
 ## Engineering

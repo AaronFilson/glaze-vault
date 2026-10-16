@@ -45,7 +45,8 @@ function fakeCore({
   recipes = [shino],
   materials = [],
   deleted = [],
-  history = []
+  history = [],
+  setAside = []
 }: {
   settings?: Settings;
   lastBackup?: LastBackup | null;
@@ -54,6 +55,7 @@ function fakeCore({
   materials?: MaterialHead[];
   deleted?: (RecipeHead | MaterialHead)[];
   history?: (RecipeHead | MaterialHead)[];
+  setAside?: { name: string; setAsideAt: number }[];
 } = {}) {
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
   const revisions = new Map<string, { recordId: string; number: number }>(
@@ -90,6 +92,10 @@ function fakeCore({
       }
       case 'erase_record':
         return 2;
+      case 'set_aside_vaults':
+        return setAside;
+      case 'bring_back_vault':
+        return { setAside: '/vault/replaced-2' };
       case 'record_history':
         return history.filter((r) => r.recordId === a.recordId);
       case 'back_up':
@@ -694,4 +700,15 @@ it('offers each export only when there is something to export', async () => {
   await user.click(await screen.findByRole('button', { name: 'Settings' }));
   expect(enabled('Export as CSV…')).toBe(true);
   expect(enabled('Export materials as CSV…')).toBe(false);
+});
+
+it('switches to a vault a restore set aside, after asking', async () => {
+  const core = fakeCore({ setAside: [{ name: 'replaced-1', setAsideAt: Date.UTC(2026, 9, 1) }] });
+  const onLocked = show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Settings' }));
+  await user.click(await screen.findByRole('button', { name: 'Switch to it…' }));
+  await user.click(screen.getByRole('button', { name: 'Switch vaults' }));
+  await waitFor(() => expect(onLocked).toHaveBeenCalledWith('switched'));
+  expect(core.called('bring_back_vault')[0].args).toEqual({ name: 'replaced-1' });
 });

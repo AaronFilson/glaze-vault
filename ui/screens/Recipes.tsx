@@ -47,7 +47,7 @@ interface Records<Content> {
   setError: (error: string) => void;
 }
 
-export type LockReason = 'manual' | 'idle' | 'idle-with-draft';
+export type LockReason = 'manual' | 'idle' | 'idle-with-draft' | 'switched';
 
 /** The open vault: the recipe list and editor, materials, settings, printing, and the notices
  * above them. */
@@ -73,6 +73,7 @@ export function Recipes({
   const [materialError, setMaterialError] = useState('');
   const [backupError, setBackupError] = useState('');
   const [renameInRecipes, setRenameInRecipes] = useState(true);
+  const [switchError, setSwitchError] = useState('');
   const [saving, setSaving] = useState(false);
   // What to do once unsaved changes are saved or discarded. The system webview on macOS has no
   // window.confirm(), so the question is asked in the page.
@@ -595,6 +596,21 @@ export function Recipes({
           }}
           onInstall={install}
           onNewRecoveryKey={setNewWords}
+          onSwitchVault={(name) =>
+            leave('all', async () => {
+              setSwitchError('');
+              try {
+                await api.bringBack(name);
+                onLocked('switched');
+              } catch (e) {
+                // The vault locks first, so a failed switch can leave it locked.
+                const now = await api.status().catch(() => null);
+                if (now && !now.unlocked) onLocked('manual');
+                else setSwitchError(errorText(e));
+              }
+            })
+          }
+          switchError={switchError}
           onClose={() => setView('recipes')}
         />
       ) : view === 'compare' && comparing ? (

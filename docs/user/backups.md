@@ -51,15 +51,12 @@ If this computer already had a vault, restoring does not delete it. It is moved 
 named `replaced-` followed by a number, inside the
 [vault folder](installing.md#where-your-vault-is-kept), and the restore screen shows where.
 
-To go back to it:
+To go back to it, open **Settings**: **Vaults set aside** lists each one with when it was set
+aside. Choose **Switch to it…**, then **Switch vaults**. The vault you have open locks and is set
+aside in its place, so you can switch back the same way. Unlock the other with its own password:
+the one it had when it was set aside.
 
-1. Quit Glaze Vault.
-2. In the vault folder, move `vault.db` and `vault.keys` into a new folder of their own, as a
-   precaution.
-3. Move `vault.db` and `vault.keys` out of the `replaced-…` folder, up into the vault folder.
-4. Open Glaze Vault and unlock with that vault's password.
-
-Once you are sure you do not need it, delete the `replaced-…` folder.
+Once you are sure you do not need one, delete its `replaced-…` folder from the vault folder.
 
 ## Exporting recipes
 

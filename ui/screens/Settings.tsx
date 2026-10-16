@@ -6,6 +6,7 @@ import {
   type MaterialHead,
   type Preferences,
   type RecipeHead,
+  type SetAside,
   type Settings as VaultSettings,
   type UpdateInfo,
   type VaultStatus
@@ -34,6 +35,8 @@ export function Settings({
   onUpdate,
   onInstall,
   onNewRecoveryKey,
+  onSwitchVault,
+  switchError,
   onClose
 }: {
   settings: VaultSettings;
@@ -47,6 +50,9 @@ export function Settings({
   onUpdate: (update: UpdateInfo | null) => void;
   onInstall: () => void;
   onNewRecoveryKey: (words: string[]) => void;
+  /** Swaps this vault with one a restore set aside, and locks. */
+  onSwitchVault: (name: string) => void;
+  switchError: string;
   onClose: () => void;
 }) {
   return (
@@ -59,11 +65,67 @@ export function Settings({
       </div>
       <AutoLock settings={settings} onSettings={onSettings} />
       <Backups settings={settings} onSettings={onSettings} lastBackup={lastBackup} backUp={backUp} />
+      <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />
       <Export recipes={recipes} materials={materials} version={status.version} />
       <ChangePassword />
       <RecoveryKey onNewRecoveryKey={onNewRecoveryKey} />
       <Updates status={status} update={update} onUpdate={onUpdate} onInstall={onInstall} />
     </main>
+  );
+}
+
+/** Vaults a restore set aside, to switch back to. Shown only when there are some. */
+function SetAsideVaults({ onSwitch, error }: { onSwitch: (name: string) => void; error: string }) {
+  const [vaults, setVaults] = useState<SetAside[] | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState('');
+  useEffect(() => {
+    api
+      .setAside()
+      .then(setVaults)
+      .catch((e) => setLoadError(errorText(e)));
+  }, []);
+  if (!vaults?.length && !loadError) return null;
+  const when = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return (
+    <Section title="Vaults set aside">
+      <p>
+        Restoring a backup set the vault that was here aside, not deleted. Switch to one to use it again: the vault
+        open now is set aside in its place, so you can switch back the same way.
+      </p>
+      <ul className="plain-list">
+        {(vaults ?? []).map((vault) => (
+          <li key={vault.name}>
+            Set aside {when(vault.setAsideAt)}{' '}
+            <button type="button" className="link" onClick={() => setAsking(vault.name)}>
+              Switch to it…
+            </button>
+            {asking === vault.name && (
+              <div className="notice warning" role="alertdialog" aria-label="Switch vaults">
+                <p>
+                  Switch to the vault set aside {when(vault.setAsideAt)}? This vault locks and is set aside. You then
+                  unlock the other with its own password.
+                </p>
+                <div className="row">
+                  <button type="button" className="primary" onClick={() => onSwitch(vault.name)}>
+                    Switch vaults
+                  </button>
+                  <button type="button" onClick={() => setAsking(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      {(error || loadError) && (
+        <p role="alert" className="error">
+          {error || loadError}
+        </p>
+      )}
+      <p className="hint">The folders are in the vault folder; delete one there once you are sure you do not need it.</p>
+    </Section>
   );
 }
 

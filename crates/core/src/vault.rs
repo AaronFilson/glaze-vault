@@ -330,6 +330,46 @@ impl Vault {
         Ok((vault, set_aside))
     }
 
+    /// The vaults a restore set aside in `dir`, newest first.
+    pub fn set_aside(dir: &Path) -> Result<Vec<SetAside>> {
+        let mut found = Vec::new();
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(found),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let name = entry?.file_name().to_string_lossy().into_owned();
+            if let Some(at) = set_aside_time(&name)
+                && Vault::exists(&dir.join(&name))
+            {
+                found.push(SetAside { name, set_aside_at: at });
+            }
+        }
+        found.sort_by_key(|aside| std::cmp::Reverse(aside.set_aside_at));
+        Ok(found)
+    }
+
+    /// Puts a vault that a restore set aside back in `dir`, and sets aside the one there in its
+    /// place, so switching back is the same step. The vault must be locked. Returns the folder the
+    /// vault that was there went into.
+    pub fn bring_back(dir: &Path, name: &str) -> Result<Option<PathBuf>> {
+        // Only a folder this module named: never a path elsewhere.
+        if set_aside_time(name).is_none() || !Vault::exists(&dir.join(name)) {
+            return Err(Error::NotFound);
+        }
+        let from = dir.join(name);
+        let replaced = set_aside_vault(dir)?;
+        for file in [KEYRING_FILE, DATABASE_FILE, "vault.db-wal", "vault.db-shm"] {
+            if from.join(file).exists() {
+                fs::rename(from.join(file), dir.join(file))?;
+            }
+        }
+        // Empty now, unless something else was put in it.
+        let _ = fs::remove_dir(&from);
+        Ok(replaced)
+    }
+
     /// Saves a record. With no parent it starts a new one; with one, it adds the next revision
     /// after it. Revisions are never changed, only added (docs/adr/0005-lan-host-and-replicas.md).
     /// Saving after a revision that deletes a record restores it.
@@ -705,6 +745,23 @@ pub struct LastBackup {
     pub file_name: String,
 }
 
+/// A vault that a restore moved into a `replaced-…` folder beside the vault's files.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetAside {
+    pub name: String,
+    pub set_aside_at: i64,
+}
+
+/// When a `replaced-<milliseconds>` folder was made, or None for any other name.
+fn set_aside_time(name: &str) -> Option<i64> {
+    let digits = name.strip_prefix("replaced-")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupInfo {
@@ -1072,6 +1129,39 @@ mod tests {
         assert!(aside.file_name().unwrap().to_string_lossy().starts_with("replaced-"));
         let old = Vault::unlock(&aside, "changed since").unwrap();
         assert_eq!(old.heads(Kind::Recipe).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_vault_set_aside_can_be_brought_back() {
+        let (dir, files) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        vault.save(Kind::Recipe, None, &json!({ "name": "Before" })).unwrap();
+        let path = files.path().join("b.gvbackup");
+        vault.back_up(&path).unwrap();
+        vault.save(Kind::Recipe, None, &json!({ "name": "After" })).unwrap();
+        drop(vault);
+        let (restored, _) = Vault::restore(dir.path(), &path, &Credential::Password(PASSWORD)).unwrap();
+        drop(restored);
+
+        let aside = Vault::set_aside(dir.path()).unwrap();
+        assert_eq!(aside.len(), 1);
+        let replaced = Vault::bring_back(dir.path(), &aside[0].name).unwrap().unwrap();
+        assert!(!dir.path().join(&aside[0].name).exists());
+        let back = Vault::unlock(dir.path(), PASSWORD).unwrap();
+        assert_eq!(back.heads(Kind::Recipe).unwrap().len(), 2);
+        drop(back);
+        // The restored vault went aside in its place, to switch back to.
+        let now = Vault::set_aside(dir.path()).unwrap();
+        assert_eq!(now.len(), 1);
+        assert_eq!(dir.path().join(&now[0].name), replaced);
+
+        for name in ["../elsewhere", "replaced-", "replaced-1/..", "vault.keys"] {
+            assert!(
+                matches!(Vault::bring_back(dir.path(), name), Err(Error::NotFound)),
+                "{name}"
+            );
+        }
+        assert!(Vault::set_aside(&dir.path().join("missing")).unwrap().is_empty());
     }
 
     #[test]

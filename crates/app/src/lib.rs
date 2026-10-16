@@ -2,7 +2,7 @@
 //! (docs/adr/0001-tauri-rust-react.md). File dialogs open from here, not from the page, so the
 //! page never chooses where files are written.
 
-use glaze_vault_core::{BACKUP_EXTENSION, Credential, Error, Kind, LastBackup, Revision, Settings, Vault};
+use glaze_vault_core::{BACKUP_EXTENSION, Credential, Error, Kind, LastBackup, Revision, SetAside, Settings, Vault};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -290,6 +290,24 @@ fn restore_backup(
     })
 }
 
+/// The vaults a restore set aside, to switch back to.
+#[tauri::command(async)]
+fn set_aside_vaults(state: State<AppState>) -> CommandResult<Vec<SetAside>> {
+    Ok(Vault::set_aside(&state.dir)?)
+}
+
+/// Locks the vault, and swaps it with one a restore set aside. The page then asks for that
+/// vault's password.
+#[tauri::command(async)]
+fn bring_back_vault(state: State<AppState>, name: String) -> CommandResult<Restored> {
+    let mut vault = state.vault.lock().unwrap();
+    vault.take();
+    let set_aside = Vault::bring_back(&state.dir, &name)?;
+    Ok(Restored {
+        set_aside: set_aside.map(|dir| dir.to_string_lossy().into_owned()),
+    })
+}
+
 /// Asks where to save an export the page has made (CSV or JSON), then writes it. Returns the file
 /// name, or None if the person cancelled.
 #[tauri::command(async)]
@@ -545,6 +563,8 @@ pub fn run() {
             back_up,
             choose_backup,
             restore_backup,
+            set_aside_vaults,
+            bring_back_vault,
             save_export,
             get_preferences,
             set_preferences,

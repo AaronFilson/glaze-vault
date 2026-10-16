@@ -35,6 +35,12 @@ export interface ChosenBackup {
   appVersion: string;
 }
 
+/** A vault that a restore moved aside, beside the vault's files. */
+export interface SetAside {
+  name: string;
+  setAsideAt: number;
+}
+
 export interface UpdateInfo {
   version: string;
   notes: string | null;
@@ -117,6 +123,9 @@ export const api = {
   chooseBackup: () => invoke<ChosenBackup | null>('choose_backup'),
   restoreBackup: (path: string, using: RestoreWith) =>
     invoke<{ setAside: string | null }>('restore_backup', { path, ...using }),
+  setAside: () => invoke<SetAside[]>('set_aside_vaults'),
+  /** Locks, and swaps the vault with one set aside; returns where the open one went. */
+  bringBack: (name: string) => invoke<{ setAside: string | null }>('bring_back_vault', { name }),
   /** Asks where to save, then writes. The file name, or null if cancelled. */
   saveExport: (suggestedName: string, contents: string) =>
     invoke<string | null>('save_export', { suggestedName, contents }),
