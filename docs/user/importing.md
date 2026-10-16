@@ -49,5 +49,7 @@ GlazeChem materials given as a molar formula, rather than a percent analysis, be
 [materials given as a formula](materials.md#a-material-as-a-formula). Insight recipes that mix
 units, such as kilograms and grams, are converted with the factors in the file.
 
-> Coming later: Digitalfire's material files (MDT), Glazy's data downloads, and exporting
-> recipes as Insight XML.
+To take recipes the other way, to Insight-live or Glazy, use
+[Export as Insight XML](backups.md#exporting-recipes).
+
+> Coming later: Digitalfire's material files (MDT) and Glazy's data downloads.

@@ -71,6 +71,10 @@ In **Settings**, under **Export**:
 - **Export as CSV…** saves a spreadsheet: one row for each material in each recipe, with the
   recipe's name, the amount, its percentage of the recipe, and on each recipe's first row its
   notes, revision number and when it was saved. Excel, Numbers and LibreOffice open it directly.
+- **Export as Insight XML…** saves your recipes in the XML that Digitalfire's Insight-live and
+  Glazy import, to take them there. Amounts are written as grams, and each recipe is dated the
+  day its newest revision was saved. Your own materials are not in it: those programs look
+  materials up by name in their own lists.
 - **Export as JSON…** saves the same recipes, and [your own materials](materials.md), for other
   programs. Its layout is described by its `"format": "glaze-vault-export"` and `"version": 1`
   fields.

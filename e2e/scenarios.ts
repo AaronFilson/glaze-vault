@@ -235,6 +235,7 @@ export const scenarios: Scenario[] = [
       const csv = fileIn(app, 'recipes.csv');
       const json = fileIn(app, 'everything.json');
       const materials = fileIn(app, 'materials.csv');
+      const xml = fileIn(app, 'recipes.xml');
       await app.run(
         'click "Settings"',
         `pick ${quote(csv)}`,
@@ -245,10 +246,13 @@ export const scenarios: Scenario[] = [
         'wait 500',
         `pick ${quote(materials)}`,
         'click "Export materials as CSV…"',
+        'wait 500',
+        `pick ${quote(xml)}`,
+        'click "Export as Insight XML…"',
         'wait 500'
       );
       await app.until(
-        () => [csv, json, materials].every((file) => readable(file)),
+        () => [csv, json, materials, xml].every((file) => readable(file)),
         10_000,
         'The exports were not written'
       );
@@ -262,6 +266,8 @@ export const scenarios: Scenario[] = [
         throw new Error('The JSON export has the wrong materials');
       if (!readFileSync(csv, 'utf8').includes('Leach 4321')) throw new Error('The CSV export lacks Leach 4321');
       if (!readFileSync(materials, 'utf8').includes('Mystery frit')) throw new Error('The materials CSV lacks Mystery frit');
+      if (!readFileSync(xml, 'utf8').includes('<recipeline material="Custer" amount="40"'))
+        throw new Error('The Insight XML lacks Leach 4321');
       await app.run('click "Back to recipes"');
     }
   },
@@ -303,9 +309,12 @@ export const scenarios: Scenario[] = [
         `type "Password" ${quote(vault.password)}`,
         'click "Restore"',
         'expect "Backup restored" 30000',
+        'expect "Vaults set aside lists it"',
         'click "Open my vault"',
         'expect "Leach 4321" 10000',
         'expect not "After the backup"',
+        // The backup it came from is its latest, so there is nothing to remind about.
+        'expect not "have not been backed up"',
         'click "Settings"',
         'expect "Vaults set aside" 5000',
         'click "Switch to it…"',

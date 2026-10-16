@@ -1,5 +1,6 @@
 // Exports: every recipe and the person's own materials as CSV (for spreadsheets) or JSON (for
-// other programs). Neither is encrypted; the Settings screen says so before saving.
+// other programs), and the recipes as Insight XML (for Insight-live and Glazy). None is
+// encrypted; the Settings screen says so before saving.
 import type { MaterialHead, RecipeHead } from './api';
 import { usableLines } from './batch';
 import { MATERIAL_CATEGORIES } from './chemistry';
@@ -96,6 +97,40 @@ export function exportMaterialsCsv(materials: MaterialHead[]): string {
   return '\uFEFF' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
 }
 
+/** Recipes as Insight XML, which Digitalfire's Insight-live and Glazy import (docs/adr/0010-importing.md).
+ * Amounts are parts, written as grams; each recipe is dated the day its revision was saved. */
+export function exportInsightXml(recipes: RecipeHead[]): string {
+  const out = ['<?xml version="1.0" encoding="UTF-8"?>', '<recipes version="1.0" encoding="UTF-8">'];
+  for (const recipe of recipes) {
+    const { name, notes } = recipe.content;
+    out.push(`<recipe name="${xmlText(name)}" keywords="" id="" date="${localDate(new Date(recipe.savedAt))}" codenum="">`);
+    out.push('<recipelines>');
+    for (const line of usableLines(recipe.content.lines)) {
+      out.push(
+        `<recipeline material="${xmlText(line.material)}" amount="${line.amount}" unitabbr="g" conversion="1.0000" added="0"/>`
+      );
+    }
+    out.push('</recipelines>');
+    if (notes.trim()) out.push(`<notes>${xmlText(notes.trim(), false)}</notes>`);
+    out.push('</recipe>');
+  }
+  out.push('</recipes>');
+  return out.join('\n') + '\n';
+}
+
+/** Text for XML: escaped, without the control characters XML 1.0 cannot hold. In an attribute,
+ * line breaks are kept as character references, which readers would otherwise turn into spaces. */
+function xmlText(text: string, attribute = true): string {
+  const escaped = text
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+  return attribute
+    ? escaped.replaceAll('"', '&quot;').replaceAll('\r', '&#13;').replaceAll('\n', '&#10;').replaceAll('\t', '&#9;')
+    : escaped;
+}
+
 /** Quotes a field when it needs it (RFC 4180). Text that a spreadsheet would run as a formula gets
  * a leading apostrophe, so opening an export cannot run anything. */
 export function csvField(value: string): string {
@@ -105,7 +140,7 @@ export function csvField(value: string): string {
 }
 
 /** "Glaze Vault recipes 2026-10-14.csv", in local time. */
-export function exportFileName(extension: 'csv' | 'json', now: Date, what = 'recipes'): string {
+export function exportFileName(extension: 'csv' | 'json' | 'xml', now: Date, what = 'recipes'): string {
   return `Glaze Vault ${what} ${localDate(now)}.${extension}`;
 }
 

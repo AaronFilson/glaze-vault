@@ -11,7 +11,7 @@ import {
   type UpdateInfo,
   type VaultStatus
 } from '../api';
-import { exportCsv, exportFileName, exportJson, exportMaterialsCsv } from '../export';
+import { exportCsv, exportFileName, exportInsightXml, exportJson, exportMaterialsCsv } from '../export';
 import { ImportError, readImport, type ImportPlan } from '../importFormats';
 import { NewPassword } from './NewPassword';
 
@@ -298,7 +298,7 @@ function Export({
 }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const run = async (kind: 'csv' | 'json' | 'materials-csv') => {
+  const run = async (kind: 'csv' | 'json' | 'xml' | 'materials-csv') => {
     setMessage('');
     setError('');
     const now = new Date();
@@ -307,7 +307,9 @@ function Export({
         ? exportCsv(recipes)
         : kind === 'json'
           ? exportJson(recipes, materials, now, version)
-          : exportMaterialsCsv(materials);
+          : kind === 'xml'
+            ? exportInsightXml(recipes)
+            : exportMaterialsCsv(materials);
     const fileName =
       kind === 'materials-csv' ? exportFileName('csv', now, 'materials') : exportFileName(kind, now);
     try {
@@ -320,14 +322,17 @@ function Export({
   return (
     <Section title="Export">
       <p>
-        Saves every recipe as a spreadsheet (CSV), or everything as JSON for other programs. Your own materials have
-        a spreadsheet of their own.{' '}
+        Saves every recipe as a spreadsheet (CSV), or as Insight XML for Insight-live and Glazy, or everything as JSON
+        for other programs. Your own materials have a spreadsheet of their own.{' '}
         <strong>Exported files are not encrypted:</strong> anyone who gets the file can read your recipes. Use a
         backup to keep a safe copy.
       </p>
       <div className="row">
         <button type="button" disabled={!recipes.length} onClick={() => run('csv')}>
           Export as CSV…
+        </button>
+        <button type="button" disabled={!recipes.length} onClick={() => run('xml')}>
+          Export as Insight XML…
         </button>
         <button type="button" disabled={!recipes.length && !materials.length} onClick={() => run('json')}>
           Export as JSON…

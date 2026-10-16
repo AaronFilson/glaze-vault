@@ -365,7 +365,8 @@ fn save_export(
     let (kind, extension) = match Path::new(&suggested_name).extension().and_then(|e| e.to_str()) {
         Some("csv") => ("CSV spreadsheet", "csv"),
         Some("json") => ("JSON", "json"),
-        _ => return Err(CommandError::new("bad-request", "Exports are CSV or JSON.")),
+        Some("xml") => ("Insight XML", "xml"),
+        _ => return Err(CommandError::new("bad-request", "Exports are CSV, JSON or XML.")),
     };
     let Some(path) = save_dialog(&window, &suggested_name, kind, extension)? else {
         return Ok(None);
