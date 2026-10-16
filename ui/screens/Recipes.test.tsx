@@ -288,6 +288,7 @@ describe('your materials', () => {
       content: {
         name: 'Whiting, lot 12',
         category: 'material',
+        basis: 'analysis',
         oxides: [{ oxide: 'CaO', percent: '56.03' }],
         loi: '43.97',
         notes: ''
@@ -365,6 +366,59 @@ describe('your materials', () => {
       parent: 'material-revision-2',
       content: { loi: '0' }
     });
+  });
+
+  it('can be given as a formula', async () => {
+    const core = fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'Whiting, theory' } });
+    await user.selectOptions(screen.getByLabelText('Given as'), 'formula');
+    await user.click(screen.getByRole('button', { name: 'Add oxide' }));
+    await user.click(screen.getByRole('button', { name: 'Add oxide' }));
+    await user.selectOptions(screen.getByLabelText('Formula oxide 1'), 'CaO');
+    await user.selectOptions(screen.getByLabelText('Formula oxide 2'), 'CO2');
+    fireEvent.change(screen.getByLabelText('Moles 1'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Moles 2'), { target: { value: '1' } });
+    expect(screen.getByTestId('material-total').textContent).toBe('100.09');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args.content).toMatchObject({
+      basis: 'formula',
+      formula: [
+        { oxide: 'CaO', moles: '1' },
+        { oxide: 'CO2', moles: '1' }
+      ]
+    });
+  });
+
+  it('take a new name into the recipes that use them', async () => {
+    const usesSpar = { ...shino, content: { ...shino.content, lines: [{ material: 'spar lot 7', amount: '50' }] } };
+    const core = fakeCore({ recipes: [usesSpar], materials: [spar] });
+    show();
+    const user = userEvent.setup();
+    // Shino is open with unsaved notes while the material is renamed.
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Thicker' } });
+    await user.click(screen.getByRole('button', { name: 'Materials' }));
+    await user.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'Spar, lot 8' } });
+    const check = screen.getByRole('complementary', { name: 'Material check' });
+    expect(check.textContent).toContain('1 recipe uses the old name, Spar, lot 7:');
+    expect((screen.getByLabelText(/Also rename it in this recipe/) as HTMLInputElement).checked).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(2));
+    expect(core.called('save_record')[1].args).toMatchObject({
+      kind: 'recipe',
+      parent: 'revision-1',
+      content: { lines: [{ material: 'Spar, lot 8', amount: '50' }], notes: '' }
+    });
+    await user.click(screen.getByRole('button', { name: 'Materials' }));
+    expect((screen.getByLabelText('Material 1') as HTMLInputElement).value).toBe('Spar, lot 8');
+    expect((screen.getByLabelText('Notes') as HTMLTextAreaElement).value).toBe('Thicker');
+    expect(screen.getByRole('button', { name: 'Save' }).matches(':disabled')).toBe(false);
   });
 
   it('cannot share a name with another of yours', async () => {

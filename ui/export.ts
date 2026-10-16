@@ -66,23 +66,27 @@ export function exportCsv(recipes: RecipeHead[]): string {
   return '\uFEFF' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
 }
 
-const MATERIAL_COLUMNS = ['Material', 'Kind', 'Oxide', 'Percent', 'Notes', 'Revision', 'Saved'];
+const MATERIAL_COLUMNS = ['Material', 'Kind', 'Oxide', 'Percent', 'Moles', 'Notes', 'Revision', 'Saved'];
 
-/** One row per oxide, with the loss on ignition as the last, like a supplier's data sheet. A
- * material's kind, notes, revision and date are on its first row. */
+/** One row per oxide, with the loss on ignition as the last, like a supplier's data sheet; a
+ * material given as a formula has moles instead. A material's kind, notes, revision and date are
+ * on its first row. */
 export function exportMaterialsCsv(materials: MaterialHead[]): string {
   const rows = [MATERIAL_COLUMNS];
   const label = (category: string) => MATERIAL_CATEGORIES.find((c) => c.category === category)?.label ?? category;
   for (const material of [...materials].sort((a, b) => a.content.name.localeCompare(b.content.name))) {
-    const { name, category, oxides, loi, notes } = material.content;
-    const lines = [
-      ...oxides.filter((line) => line.percent.trim()).map((line) => [line.oxide, line.percent.trim()]),
-      ...(loi.trim() ? [['LOI', loi.trim()]] : [])
-    ];
+    const { name, category, basis, oxides, loi, formula, notes } = material.content;
+    const lines =
+      basis === 'formula'
+        ? (formula ?? []).filter((line) => line.moles.trim()).map((line) => [line.oxide, '', line.moles.trim()])
+        : [
+            ...oxides.filter((line) => line.percent.trim()).map((line) => [line.oxide, line.percent.trim(), '']),
+            ...(loi.trim() ? [['LOI', loi.trim(), '']] : [])
+          ];
     const first = [notes, String(material.number), new Date(material.savedAt).toISOString()];
-    if (!lines.length) rows.push([name, label(category), '', '', ...first]);
-    lines.forEach(([oxide, percent], i) =>
-      rows.push([name, i === 0 ? label(category) : '', oxide, percent, ...(i === 0 ? first : ['', '', ''])])
+    if (!lines.length) rows.push([name, label(category), '', '', '', ...first]);
+    lines.forEach(([oxide, percent, moles], i) =>
+      rows.push([name, i === 0 ? label(category) : '', oxide, percent, moles, ...(i === 0 ? first : ['', '', ''])])
     );
   }
   return '\uFEFF' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';

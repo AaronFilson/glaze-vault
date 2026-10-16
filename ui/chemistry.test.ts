@@ -110,6 +110,37 @@ describe('your own materials', () => {
   });
 });
 
+describe('materials given as a formula', () => {
+  const kaolin = (moles: [string, string][]): MaterialContent => ({
+    ...own('Kaolin, theory', []),
+    basis: 'formula',
+    formula: moles.map(([oxide, moles]) => ({ oxide, moles }))
+  });
+
+  it('work like the standard formula materials', () => {
+    const mine = kaolin([['Al2O3', '1'], ['SiO2', '2'], ['H2O', '2']]);
+    const check = checkMaterial(mine);
+    expect(check.total).toBeCloseTo(258.16, 2);
+    expect('loi' in check && check.loi).toBeCloseTo(13.96, 2);
+    const library = materialLibrary([mine]);
+    const withMine = analyse([...LEACH_4321.slice(0, 3), { material: 'Kaolin, theory', amount: '10' }], library);
+    expect(withMine!.result!.umf.Al2O3).toBeCloseTo(analyse(LEACH_4321)!.result!.umf.Al2O3, 4);
+  });
+
+  it('report an amount that is not a number, and count water alone as no oxides', () => {
+    expect(checkMaterial(kaolin([['Al2O3', 'one']]))).toMatchObject({
+      problem: 'The amount of Al2O3 in Kaolin, theory is not a number.'
+    });
+    expect(checkMaterial(kaolin([['H2O', '2']])).noOxides).toBe(true);
+  });
+
+  it('keep the analysis, unused, while given as a formula', () => {
+    const both = { ...kaolin([['CaO', '1'], ['CO2', '1']]), oxides: [{ oxide: 'SiO2', percent: '100' }] };
+    const check = checkMaterial(both);
+    expect('unity' in check && check.unity).toEqual({ CaO: 1 });
+  });
+});
+
 describe('standard additives', () => {
   it('are in the list and the chemistry', () => {
     expect(MATERIAL_NAMES).toContain('Chromium Oxide');

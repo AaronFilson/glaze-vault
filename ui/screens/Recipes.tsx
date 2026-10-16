@@ -72,6 +72,7 @@ export function Recipes({
   const [error, setError] = useState('');
   const [materialError, setMaterialError] = useState('');
   const [backupError, setBackupError] = useState('');
+  const [renameInRecipes, setRenameInRecipes] = useState(true);
   const [saving, setSaving] = useState(false);
   // What to do once unsaved changes are saved or discarded. The system webview on macOS has no
   // window.confirm(), so the question is asked in the page.
@@ -228,16 +229,40 @@ export function Recipes({
     setSaving(true);
     setMaterialError('');
     try {
+      const oldName = material.current?.content.name;
       const saved = await api.saveMaterial(material.current?.revisionId ?? null, { ...material.draft, name });
       material.show(saved);
       setMaterials((list) => [saved, ...list.filter((m) => m.recordId !== saved.recordId)]);
       setKept((k) => ({ ...k, material: false }));
+      if (renameInRecipes && oldName && !sameName(oldName, name)) await renameMaterial(oldName, name);
       return true;
     } catch (e) {
       setMaterialError(errorText(e));
       return false;
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** Puts a material's new name in every recipe that uses its old one, each as a new revision. */
+  const renameMaterial = async (oldName: string, name: string) => {
+    const rename = (content: RecipeContent): RecipeContent => ({
+      ...content,
+      lines: content.lines.map((line) => (sameName(line.material, oldName) ? { ...line, material: name } : line))
+    });
+    const users = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, oldName)));
+    const failed: string[] = [];
+    for (const head of users) {
+      try {
+        const saved = await api.saveRecipe(head.revisionId, rename(head.content));
+        setRecipes((list) => [saved, ...list.filter((r) => r.recordId !== saved.recordId)]);
+        recipe.rebase(saved, rename);
+      } catch {
+        failed.push(head.content.name || 'Untitled');
+      }
+    }
+    if (failed.length) {
+      setMaterialError(`The new name could not be put in ${failed.join(', ')}. Change it there by hand.`);
     }
   };
 
@@ -599,6 +624,8 @@ export function Recipes({
             void restoreRecord(records.material, clash?.content.name);
           }}
           onErase={() => setConfirming({ action: 'erase', kind: 'material' })}
+          renameInRecipes={renameInRecipes}
+          onRenameInRecipes={setRenameInRecipes}
         />
       ) : (
         <RecipeEditor

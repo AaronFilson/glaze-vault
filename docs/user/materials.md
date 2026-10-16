@@ -33,6 +33,16 @@ too.
 The panel on the right shows the material's own unity formula, warns if the analysis does not
 add up to 100, and lists the recipes that use it.
 
+## A material as a formula
+
+A material whose makeup is a chemical formula rather than an analysis, such as a theoretical
+kaolin (Al₂O₃·2SiO₂·2H₂O) or a pure carbonate, can be entered as one. Set **Given as** to
+**A formula**, and give the moles of each oxide, with the water (H₂O), carbon dioxide (CO₂) or
+sulfur (SO₃) that burns off. For kaolin: Al₂O₃ 1, SiO₂ 2, H₂O 2. The formula weight and the loss
+on ignition are worked out for you.
+
+Switching **Given as** back keeps both: the one it is set to is the one used.
+
 ## Colorants and stains with no analysis
 
 A commercial stain's makeup is often secret. Save it with no oxides: recipes can use it, it is
@@ -44,8 +54,10 @@ formula, with a note saying so. The standard CMC gum and silicon carbide work th
 Open it, change it, and save. Like a recipe, every save adds a revision and keeps the one before:
 see [earlier revisions](recipes.md#earlier-revisions).
 
-Recipes use a material by its name. If you rename one, recipes that used the old name no longer
-find it, and the panel on the right lists them so you can change them.
+Recipes use a material by its name. If you rename one that recipes use, the panel on the right
+lists them, with **Also rename it in these recipes when saving**, which is ticked. Saving then
+changes the name in each of them too, as a new revision of each. Untick it to leave them as they
+are: they will then not find the material by its old name.
 
 A recipe's earlier revisions are worked out with your materials as they are now.
 
