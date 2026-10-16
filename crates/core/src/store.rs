@@ -40,6 +40,17 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX revisions_by_parent ON revisions(parent_id);",
     // 2: a revision that deletes its record, keeping its content to restore (ADR 9).
     "ALTER TABLE revisions ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;",
+    // 3: a team on one computer (ADR 12): collections have names, and a private one its person;
+    // grants carry a role; every collection key is also sealed to the organization, once there is
+    // one. Grants made before are a one-person vault's, whose person is its admin.
+    "ALTER TABLE collections ADD COLUMN name TEXT NOT NULL DEFAULT '';
+    ALTER TABLE collections ADD COLUMN owner_id TEXT;
+    ALTER TABLE grants ADD COLUMN role TEXT NOT NULL DEFAULT 'admin';
+    CREATE TABLE organization_grants (
+        collection_id TEXT PRIMARY KEY REFERENCES collections(id),
+        enc BLOB NOT NULL,
+        ciphertext BLOB NOT NULL
+    );",
 ];
 
 pub fn open(path: &Path, key: &Key) -> Result<Connection> {
@@ -54,6 +65,16 @@ pub fn open(path: &Path, key: &Key) -> Result<Connection> {
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA secure_delete = ON;")?;
     migrate(&conn)?;
     Ok(conn)
+}
+
+/// Encrypts the whole database again under a new key. SQLCipher does this only outside
+/// write-ahead logging.
+pub fn rekey(conn: &Connection, key: &Key) -> Result<()> {
+    let pragma = Zeroizing::new(format!("PRAGMA rekey = \"x'{}'\";", hex::encode(key.as_ref())));
+    conn.query_row("PRAGMA journal_mode = DELETE", [], |_| Ok(()))?;
+    conn.execute_batch(&pragma)?;
+    conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
+    Ok(())
 }
 
 fn migrate(conn: &Connection) -> Result<()> {

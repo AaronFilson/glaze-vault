@@ -153,7 +153,7 @@ fn save_records(
     kind: Kind,
     revisions: Vec<(Option<Uuid>, serde_json::Value)>,
 ) -> CommandResult<Vec<Revision>> {
-    with_vault(&state, |vault| vault.save_all(kind, &revisions))
+    with_vault(&state, |vault| vault.save_all(kind, None, &revisions))
 }
 
 #[tauri::command(async)]
@@ -293,7 +293,7 @@ fn restore_backup(
     // The vault's files are about to be moved, so it must not be open.
     let mut vault = state.vault.lock().unwrap();
     vault.take();
-    let (restored, set_aside) = Vault::restore(&state.dir, Path::new(&path), &credential)?;
+    let (restored, set_aside) = Vault::restore(&state.dir, Path::new(&path), None, &credential)?;
     *vault = Some(restored);
     Ok(Restored {
         set_aside: set_aside.map(|dir| dir.to_string_lossy().into_owned()),
