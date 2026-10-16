@@ -76,8 +76,9 @@ chosen on this computer.
 
 ## More than one admin
 
-**Make admin…** makes someone an admin. Admins can do everything, so choose them with care.
-Taking it back means removing them and adding them again.
+**Make admin…** makes someone an admin. Admins can do everything, so choose them with care: in
+this version an admin cannot be made an ordinary member again, or removed. That needs a new
+organization key, which comes later.
 
 ## If every admin is locked out
 

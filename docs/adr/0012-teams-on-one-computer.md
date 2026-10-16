@@ -36,8 +36,15 @@ decides the steps people take and what is built first.
 - **The core checks every command** against the person's capabilities on the record's collection.
   The UI hides what is refused, but does not decide.
 - **Removing a person** takes them out of the key file and removes their grants. Every collection
-  they could open gets a new key and is re-encrypted, since they may have kept the old one. Their
-  private collection stays, for admins, under "From name".
+  they could open, and the database, get new keys and are re-encrypted, since they may have kept
+  the old ones. Their private collection stays, for admins, under "From name". An admin holds the
+  organization key, which opens every collection key, so removing an admin, or taking admin away,
+  waits for changing the organization key.
+- **Lost passwords:** someone with their recovery sheet uses it as in a one-person vault. For
+  someone who lost both, an admin gives them new keys and a one-time password, as when they were
+  added; the admin holds every collection key through the organization key, so nothing else is
+  needed from them. When every admin is locked out, the organization recovery key does the same
+  for an admin of their choosing.
 - **Backups and restoring:** only admins back up, since a backup holds every collection. A team's
   backup restores with an admin's password, or the organization recovery key.
 - **Formats:** the key file gains an organization section and per-person fields (format 2), written

@@ -298,7 +298,11 @@ impl Vault {
         if person == self.user_id {
             return Err(Error::NotAllowed);
         }
-        self.keyring.user(&person)?;
+        // An admin holds the organization's private key, which opens every collection's key, so
+        // removing one needs a new organization key: not built yet.
+        if self.keyring.user(&person)?.organization_key.is_some() {
+            return Err(Error::RemovingAdmin);
+        }
         let mut statement = self
             .conn
             .prepare("SELECT collection_id FROM grants WHERE user_id = ?1")?;
@@ -343,8 +347,8 @@ impl Vault {
         Ok(())
     }
 
-    /// Makes someone an admin: the organization key is sealed to them. Taking it back would need
-    /// a new organization key, so for now an admin is removed and added again instead.
+    /// Makes someone an admin: the organization key is sealed to them. Taking it back, or removing
+    /// an admin, needs a new organization key, which comes later.
     pub fn make_admin(&mut self, person: Uuid) -> Result<()> {
         let organization = self.admin()?;
         let vault_id = self.keyring.vault_id;
@@ -1150,6 +1154,7 @@ mod tests {
             Err(Error::NotAllowed)
         ));
         ana.make_admin(ben.id).unwrap();
+        assert!(matches!(ana.remove_person(ben.id), Err(Error::RemovingAdmin)));
         let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME).unwrap();
         as_ben.set_own_password(BENS).unwrap();
         assert!(as_ben.me().admin);

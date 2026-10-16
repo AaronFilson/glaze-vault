@@ -32,7 +32,8 @@ Work decided on but not done yet, with the reason it waits.
 - The audit log: who viewed, printed, exported or changed what.
 - Going back to one person ([ADR 6](adr/0006-one-person-first.md)).
 - The batch operator role, with materials named by in-house codes.
-- Taking admin away from someone without removing them: needs a new organization key.
+- Removing an admin, or taking admin away: needs a new organization key, sealed to the admins
+  left, every collection key sealed to it again, and a new organization recovery sheet.
 - Roles that admins can change, and moving a recipe to another collection.
 
 ## Engineering

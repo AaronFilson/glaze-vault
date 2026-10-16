@@ -198,13 +198,15 @@ export function People({ access, onChanged }: { access: Access; onChanged: () =>
                     <button type="button" className="link" onClick={() => setAsking({ person: person.id, action: 'reset' })}>
                       Reset password…
                     </button>
-                    <button
-                      type="button"
-                      className="link danger"
-                      onClick={() => setAsking({ person: person.id, action: 'remove' })}
-                    >
-                      Remove…
-                    </button>
+                    {!person.admin && (
+                      <button
+                        type="button"
+                        className="link danger"
+                        onClick={() => setAsking({ person: person.id, action: 'remove' })}
+                      >
+                        Remove…
+                      </button>
+                    )}
                   </div>
                 )}
               </td>
@@ -339,8 +341,8 @@ function PersonQuestion({
       )}
       {action === 'admin' && (
         <p>
-          Make {name} an admin? They can open and change everything, and manage people. Taking that back means removing
-          them and adding them again.
+          Make {name} an admin? They can open and change everything, and manage people. In this version, an admin
+          cannot be made an ordinary member again, or removed.
         </p>
       )}
       {action === 'reset' && (

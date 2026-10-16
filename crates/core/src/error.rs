@@ -40,6 +40,8 @@ pub enum Error {
     NotATeam,
     #[error("This vault is already shared with others.")]
     AlreadyATeam,
+    #[error("An admin cannot be removed in this version: it needs a new organization key, which comes later.")]
+    RemovingAdmin,
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -72,6 +74,7 @@ impl Error {
             Error::NameMissing => "name-missing",
             Error::NotATeam => "not-a-team",
             Error::AlreadyATeam => "already-a-team",
+            Error::RemovingAdmin => "removing-admin",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",
