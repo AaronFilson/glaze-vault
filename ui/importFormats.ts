@@ -466,7 +466,6 @@ function tidy(text: string): string {
   return trimmed && Number.isFinite(number) ? String(number) : trimmed;
 }
 
-/** An editor always has a line to type in. */
 /** A recipe's details from text as files give them; what matches no option is left out. */
 function readDetails(text: { [Field in keyof RecipeDetails]?: string }): RecipeDetails {
   return details({
@@ -480,6 +479,7 @@ function readDetails(text: { [Field in keyof RecipeDetails]?: string }): RecipeD
   });
 }
 
+/** An editor always has a line to type in. */
 function withLine(recipe: RecipeContent): RecipeContent {
   return recipe.lines.length ? recipe : { ...recipe, lines: [{ material: '', amount: '' }] };
 }

@@ -133,7 +133,7 @@ export function Blend({
                     <th scope="row">{oxideLabel(oxide)}</th>
                     {analyses.map((x, i) => (
                       <td key={i} className="num">
-                        {x?.result ? x.result.umf[oxide].toFixed(3) : '—'}
+                        {x?.result ? (x.result.umf[oxide] ?? 0).toFixed(3) : '—'}
                       </td>
                     ))}
                   </tr>

@@ -372,6 +372,7 @@ impl Vault {
     /// an admin, needs a new organization key, which comes later.
     pub fn make_admin(&mut self, person: Uuid) -> Result<()> {
         let organization = self.admin()?;
+        self.keyring.user(&person)?;
         let vault_id = self.keyring.vault_id;
         let mut keyring = self.keyring.clone();
         let user = super::user_mut(&mut keyring, &person);
@@ -1373,6 +1374,24 @@ mod tests {
         assert!(as_ben.me().admin);
         assert_eq!(names(&as_ben, Kind::Recipe), ["Shino", "Tenmoku"]);
         assert!(as_ben.collections().iter().any(|c| c.name == "Production"));
+        assert!(matches!(ana.make_admin(Uuid::new_v4()), Err(Error::NoSuchPerson)));
+    }
+
+    #[test]
+    fn a_batch_operator_made_admin_opens_the_collection() {
+        let (dir, mut ana, _) = team();
+        let shared = shared(&ana);
+        let ben = ana.add_person("Ben", ONE_TIME, &[(shared, Role::Operator)]).unwrap();
+        ana.make_admin(ben.id).unwrap();
+        let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME).unwrap();
+        as_ben.set_own_password(BENS).unwrap();
+        assert_eq!(
+            *as_ben.readable(&shared).unwrap().key,
+            *ana.readable(&shared).unwrap().key
+        );
+        assert_eq!(names(&as_ben, Kind::Recipe), ["Shino"]);
+        as_ben.set_role(ben.id, shared, Some(Role::Chemist)).unwrap();
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
     }
 
     #[test]

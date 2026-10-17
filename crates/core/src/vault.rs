@@ -826,7 +826,8 @@ impl Vault {
         if let Some(organization) = &self.organization {
             for collection in team::organization_collections(&self.conn, &self.keyring, organization)? {
                 match collections.iter_mut().find(|c| c.id == collection.id) {
-                    Some(granted) => granted.role = Role::Admin,
+                    // An admin's own grant may be an operator's, which holds only the batch key.
+                    Some(granted) => *granted = collection,
                     None => collections.push(collection),
                 }
             }
