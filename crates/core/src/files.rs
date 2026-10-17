@@ -7,10 +7,18 @@ use std::path::{Path, PathBuf};
 
 /// Writes a temporary file beside `path`, flushes it to disk, and renames it over `path`.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_atomically_with(path, |file| file.write_all(bytes))
+}
+
+/// As [`write_atomically`], with `write` writing the file a piece at a time.
+pub fn write_atomically_with(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let temp = temporary(path);
     let result = (|| {
         let mut file = fs::File::create(&temp)?;
-        file.write_all(bytes)?;
+        write(&mut file)?;
         file.sync_all()?;
         fs::rename(&temp, path)
     })();

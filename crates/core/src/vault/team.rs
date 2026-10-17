@@ -455,14 +455,15 @@ impl Vault {
         new_password: &str,
     ) -> Result<(Vault, Option<std::path::PathBuf>, RecoveryKey)> {
         check_password(new_password)?;
-        let backup = crate::backup::Backup::parse(&std::fs::read(path)?)?;
+        let backup = crate::backup::Backup::open(path)?;
         let (_, database_key) = open_by_organization_recovery(&backup.header.keyring, words)?;
         if backup.header.keyring.user(&admin)?.organization_key.is_none() {
             return Err(Error::NotAllowed);
         }
-        let set_aside = super::place_backup(dir, &backup, &database_key)?;
+        let created_at = backup.header.created_at;
+        let set_aside = super::place_backup(dir, backup, &database_key)?;
         let (mut vault, recovery) = Vault::recover_organization(dir, words, admin, new_password)?;
-        vault.record_restored(&backup, path)?;
+        vault.record_restored(created_at, path)?;
         Ok((vault, set_aside, recovery))
     }
 

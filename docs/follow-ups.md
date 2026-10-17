@@ -39,7 +39,6 @@ Work decided on but not done yet, with the reason it waits.
 - Nobody has installed the app on Windows or Linux yet: the end-to-end tests run the development
   app there in CI, but the installers from a CI run's artifacts are untried. The first real
   release also tests the updater end to end.
-- Stream backups instead of holding the database in memory, before vaults hold attachments.
 - End-to-end tests of a release build ([ADR 11](adr/0011-end-to-end-tests.md) tests the
   development app): before the first release, a check that each installer opens and unlocks a
   vault.

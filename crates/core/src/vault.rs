@@ -326,17 +326,16 @@ impl Vault {
         if busy != 0 {
             return Err(Error::Io(std::io::Error::other("the vault was busy; try again")));
         }
-        let database = fs::read(self.dir.join(DATABASE_FILE))?;
         let database_key = self.database_key()?;
         let at = now_ms();
-        let file = Backup::seal(
+        Backup::write(
+            path,
             self.keyring.vault_id,
             at,
             self.keyring.clone(),
             &database_key,
-            &database,
+            &self.dir.join(DATABASE_FILE),
         )?;
-        files::write_atomically(path, &file)?;
 
         let last = LastBackup {
             at,
@@ -348,7 +347,7 @@ impl Vault {
 
     /// What can be told about a backup before it is opened.
     pub fn backup_info(path: &Path) -> Result<BackupInfo> {
-        let backup = Backup::parse(&fs::read(path)?)?;
+        let backup = Backup::open(path)?;
         let admins = match backup.header.keyring.organization {
             Some(_) => team::people_of(&backup.header.keyring)
                 .into_iter()
@@ -373,7 +372,7 @@ impl Vault {
         person: Option<Uuid>,
         credential: &Credential,
     ) -> Result<(Vault, Option<PathBuf>)> {
-        let backup = Backup::parse(&fs::read(path)?)?;
+        let backup = Backup::open(path)?;
         let keyring = backup.header.keyring.clone();
         let user = person_in(&keyring, person)?;
         // A team's backup replaces everyone's vault, so only an admin restores it (ADR 12).
@@ -388,19 +387,19 @@ impl Vault {
         )
         .ok_or(Error::BackupDamaged)?;
         let user_id = user.id;
-        let set_aside = place_backup(dir, &backup, &database_key)?;
+        let created_at = backup.header.created_at;
+        let set_aside = place_backup(dir, backup, &database_key)?;
         let mut vault = Vault::open(dir, keyring, user_id, keys)?;
         if let Credential::RecoveryKey { new_password, .. } = credential {
             vault.set_password(new_password)?;
         }
-        vault.record_restored(&backup, path)?;
+        vault.record_restored(created_at, path)?;
         Ok((vault, set_aside))
     }
 
     /// The vault is now what the backup holds, so the backup is its latest, though the copy
     /// inside the backup was made just before it was recorded.
-    fn record_restored(&mut self, backup: &Backup, path: &Path) -> Result<()> {
-        let created_at = backup.header.created_at;
+    fn record_restored(&mut self, created_at: i64, path: &Path) -> Result<()> {
         if self.last_backup()?.is_none_or(|last| last.at < created_at) {
             let last = LastBackup {
                 at: created_at,
@@ -1049,13 +1048,23 @@ fn set_aside_orphan_database(dir: &Path) -> Result<()> {
 
 /// Puts a backup's database and key file in `dir`, once the database has opened and been checked,
 /// and returns the folder the vault already there was moved to, if there was one.
-fn place_backup(dir: &Path, backup: &Backup, database_key: &Key) -> Result<Option<PathBuf>> {
-    let keyring = &backup.header.keyring;
-    let database = backup.open(database_key)?;
+fn place_backup(dir: &Path, backup: Backup, database_key: &Key) -> Result<Option<PathBuf>> {
+    let keyring = backup.header.keyring.clone();
+    let created = !dir.exists();
     fs::create_dir_all(dir)?;
     let restoring = dir.join(format!("{DATABASE_FILE}.restoring"));
-    files::write_atomically(&restoring, &database)?;
-    let checked = store::open(&restoring, database_key).and_then(|conn| {
+    // Decrypted a piece at a time; a backup found damaged part way leaves nothing behind.
+    let checked = files::write_atomically_with(&restoring, |file| {
+        backup
+            .restore_into(database_key, &mut std::io::BufWriter::new(file))
+            .map_err(std::io::Error::other)
+    })
+    .map_err(|error| match error.downcast::<Error>() {
+        Ok(error) => error,
+        Err(error) => Error::Io(error),
+    })
+    .and_then(|()| store::open(&restoring, database_key))
+    .and_then(|conn| {
         let stored_id: String =
             conn.query_row("SELECT value FROM meta WHERE name = 'vault_id'", [], |row| row.get(0))?;
         if parse_id(&stored_id)? != keyring.vault_id {
@@ -1065,6 +1074,9 @@ fn place_backup(dir: &Path, backup: &Backup, database_key: &Key) -> Result<Optio
     });
     if let Err(error) = checked {
         let _ = fs::remove_file(&restoring);
+        if created {
+            let _ = fs::remove_dir(dir);
+        }
         return Err(error);
     }
     let set_aside = set_aside_vault(dir)?;
