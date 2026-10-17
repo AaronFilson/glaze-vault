@@ -68,7 +68,8 @@ export function Materials({
   onRenameInRecipes,
   readOnly = false,
   canCreate = true,
-  newIn
+  newIn,
+  moveTo
 }: {
   materials: MaterialHead[];
   deleted: MaterialHead[];
@@ -91,6 +92,8 @@ export function Materials({
   canCreate?: boolean;
   /** For a new material in a team's vault, where it will be saved. */
   newIn?: React.ReactNode;
+  /** Below a saved material, in a team's vault: moving it to another collection. */
+  moveTo?: React.ReactNode;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -371,6 +374,7 @@ export function Materials({
           )}
         </div>
         {error && <p role="alert" className="error">{error}</p>}
+        {moveTo}
         {current && (
           <RevisionHistory kind="material" current={current} viewing={viewing} onView={editor.setViewing} />
         )}

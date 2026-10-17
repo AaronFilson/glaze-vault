@@ -41,6 +41,7 @@ export function MoveTo({
   kinds,
   name,
   along,
+  note,
   onMove
 }: {
   access: Access;
@@ -52,6 +53,8 @@ export function MoveTo({
   name: string;
   /** What goes with it, such as "its 3 firings" and "its batch sheet". */
   along: string[];
+  /** What else moving it to a collection, by id and by name, would change, if anything. */
+  note?: (to: string, there: string) => string;
   onMove: (to: string) => Promise<void>;
 }) {
   const id = useId();
@@ -98,7 +101,7 @@ export function MoveTo({
               Move {name || 'Untitled'} to {label(there)}?
             </strong>{' '}
             It goes with {inWords(['every revision', ...along])}. People who can open {label(here)} but not{' '}
-            {label(there)} will no longer see it.
+            {label(there)} will no longer see it.{note && note(to, label(there)) && ` ${note(to, label(there))}`}
           </p>
           <div className="row">
             <button type="button" className="primary" disabled={busy} onClick={() => void move()}>

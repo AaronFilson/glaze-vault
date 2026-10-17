@@ -692,6 +692,40 @@ export function Recipes({
     );
   };
 
+  /** Below a saved material someone may change, in a team's vault: moving it to another
+   * collection. Recipes find it by name, so those elsewhere lose it for people who cannot open
+   * where it goes. */
+  const materialMovePart = () => {
+    const current = material.current;
+    if (!team || !access || !current || material.viewing) return null;
+    if (!canEdit(access, current.collectionId, 'material')) return null;
+    const users = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, current.content.name)));
+    return (
+      <MoveTo
+        key={`${current.recordId} ${current.collectionId}`}
+        access={access}
+        names={names}
+        from={current.collectionId!}
+        kinds={['material']}
+        name={current.content.name}
+        along={[]}
+        note={(to, there) => {
+          const elsewhere = users.filter((r) => r.collectionId !== to).length;
+          if (!elsewhere) return '';
+          const one = elsewhere === 1;
+          return `${one ? '1 recipe' : `${elsewhere} recipes`} outside ${there} ${one ? 'uses' : 'use'} it. People who cannot open ${there} will see ${one ? 'it' : 'them'} worked out without it, or with the standard material of that name.`;
+        }}
+        onMove={async (to) => {
+          await api.moveRecords([['material', current.recordId]], to);
+          setMaterials((list) =>
+            list.map((item) => (item.recordId === current.recordId ? { ...item, collectionId: to } : item))
+          );
+          material.rebase({ ...current, collectionId: to }, (draft) => draft);
+        }}
+      />
+    );
+  };
+
   /** Below a saved recipe: its firings, and logging another. */
   const firingsPart = () => {
     const current = recipe.current;
@@ -1054,6 +1088,7 @@ export function Recipes({
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
           readOnly={!canEdit(access, material.current ? material.current.collectionId : newIn('material'), 'material')}
+          moveTo={materialMovePart()}
           canCreate={!team || editableCollections(access, 'material').length > 0}
           newIn={
             (team && access && (

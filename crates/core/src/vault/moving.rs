@@ -216,4 +216,40 @@ mod tests {
             Err(Error::NotFound)
         ));
     }
+
+    #[test]
+    fn a_material_moves_for_someone_who_may_change_materials_in_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ana, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        ana.grow_into_team("Ana").unwrap();
+        let shared = ana.collections().iter().find(|c| c.owner.is_none()).unwrap().id;
+        let production = ana.create_collection("Production").unwrap().id;
+        let material = ana
+            .save_in(Kind::Material, shared, &json!({ "name": "Grolleg" }))
+            .unwrap();
+        let recipes_only = ana.create_role("Recipes only", &[Kind::Recipe]).unwrap();
+        let ben = ana
+            .add_person(
+                "Ben",
+                ONE_TIME,
+                &[
+                    (shared, Role::Custom(recipes_only.id)),
+                    (production, Role::Custom(recipes_only.id)),
+                ],
+            )
+            .unwrap();
+        let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME).unwrap();
+        as_ben.set_own_password("bens own password").unwrap();
+        assert!(matches!(
+            as_ben.move_records(&[(Kind::Material, material.record_id)], production),
+            Err(Error::NotAllowed)
+        ));
+        drop(as_ben);
+
+        ana.move_records(&[(Kind::Material, material.record_id)], production)
+            .unwrap();
+        let head = &ana.heads(Kind::Material).unwrap()[0];
+        assert_eq!(head.collection_id, production);
+        assert_eq!(head.content["name"], "Grolleg");
+    }
 }

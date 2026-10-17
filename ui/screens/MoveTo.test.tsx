@@ -37,4 +37,23 @@ describe('moving a recipe to another collection', () => {
     const { container } = render(<MoveTo access={one} names={{}} from="shared" kinds={['recipe']} name="Shino" along={[]} onMove={async () => {}} />);
     expect(container.textContent).toBe('');
   });
+
+  it('says what else a move changes, for the collection chosen', () => {
+    render(
+      <MoveTo
+        access={ACCESS}
+        names={{}}
+        from="shared"
+        kinds={['material']}
+        name="Grolleg"
+        along={[]}
+        note={(to, there) => (to === 'production' ? `2 recipes outside ${there} use it.` : '')}
+        onMove={async () => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Move…' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain(
+      'It goes with every revision. People who can open Shared but not Production will no longer see it. 2 recipes outside Production use it.'
+    );
+  });
 });

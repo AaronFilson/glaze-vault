@@ -38,6 +38,11 @@ all its revisions, firings, photos and batch sheet, and is encrypted again for i
 collection: people who could open the old one but not the new one stop seeing it. You need to be
 able to change recipes in both.
 
+A material moves the same way, from **Move to** below it, if you can change materials in both.
+Recipes find materials by name, so a recipe in another collection that uses it is worked out
+without it, or with the standard material of that name, for people who cannot open where it
+went. Glaze Vault says how many recipes that is before it moves.
+
 Admins add collections at the bottom of **Settings** › **People**, and rename them there.
 
 ## Adding someone

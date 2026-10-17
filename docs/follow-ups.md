@@ -29,7 +29,6 @@ Work decided on but not done yet, with the reason it waits.
 
 - Capabilities that are not about changing a kind of record, such as exporting, or reading
   recipes without their chemistry, for roles admins make (ADR 4).
-- Moving a material to another collection, as recipes move.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
