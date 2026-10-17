@@ -24,7 +24,6 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 
 ## Coming later
 
-- **More for teams:** a batch operator role that weighs batches without seeing the chemistry, a
-  record of who did what, and going back to one person.
+- **More for teams:** a record of who did what, which comes with other computers on your network.
 - **Other computers on your network,** and laptops that take a copy of their part of the vault
   where there is no network, then bring their changes back.

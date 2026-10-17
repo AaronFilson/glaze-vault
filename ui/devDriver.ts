@@ -33,7 +33,22 @@ const FIND_FOR_MS = 2000;
 /** How long commands wait for their element or text: FIND_FOR_MS, unless a script says. */
 let waitFor = FIND_FOR_MS;
 
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+let coreWaits = true;
+
+/** Waits `ms`. The page's own timers nearly stop while its window is hidden or the display sleeps
+ * (WebKit throttles them), but answers from the core still come, so ask the core to wait
+ * (dev_wait), and use a timer only without one, as in tests. */
+export async function pause(ms: number): Promise<void> {
+  if (coreWaits) {
+    try {
+      await invoke('dev_wait', { ms });
+      return;
+    } catch {
+      coreWaits = false;
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** Splits a line into words, keeping "quoted text" (JSON string rules) and /regex/ whole. */
 export function words(line: string): string[] {

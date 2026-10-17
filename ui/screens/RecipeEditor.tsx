@@ -37,7 +37,8 @@ export function RecipeEditor({
   readOnly = false,
   canCreate = true,
   groups,
-  newIn
+  newIn,
+  batchSheet
 }: {
   recipes: RecipeHead[];
   deleted: RecipeHead[];
@@ -64,6 +65,8 @@ export function RecipeEditor({
   groups?: { label: string; items: RecipeHead[] }[];
   /** For a new recipe in a team's vault, where it will be saved. */
   newIn?: React.ReactNode;
+  /** Below the recipe: its batch sheet, in a team's vault. */
+  batchSheet?: React.ReactNode;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -212,6 +215,7 @@ export function RecipeEditor({
           )}
         </div>
         {error && <p role="alert" className="error">{error}</p>}
+        {batchSheet}
         {current && <RevisionHistory kind="recipe" current={current} viewing={viewing} onView={editor.setViewing} />}
       </main>
 

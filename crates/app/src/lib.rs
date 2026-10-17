@@ -219,6 +219,14 @@ fn make_admin(state: State<AppState>, person: Uuid) -> CommandResult<()> {
     with_vault(&state, |vault| vault.make_admin(person))
 }
 
+/// Makes a team's vault this admin's alone again (ADR 6). Returns where the backup made first is.
+#[tauri::command(async)]
+fn go_back_to_one_person(state: State<AppState>) -> CommandResult<String> {
+    with_vault(&state, |vault| {
+        Ok(vault.go_back_to_one_person()?.to_string_lossy().into_owned())
+    })
+}
+
 #[tauri::command(async)]
 fn create_collection(state: State<AppState>, name: String) -> CommandResult<Collection> {
     with_vault(&state, |vault| vault.create_collection(&name))
@@ -741,6 +749,16 @@ fn dev_drive() -> CommandResult<Option<String>> {
     Ok(Some(script))
 }
 
+/// Development builds only: answers after `ms`. The page's own timers nearly stop while its
+/// window is hidden or the display sleeps (WebKit throttles them, and macOS before 14 cannot turn
+/// that off), but answers from the core still come, so the dev tools wait with this.
+#[cfg(debug_assertions)]
+#[tauri::command]
+async fn dev_wait(ms: u64) {
+    let _ =
+        tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(ms))).await;
+}
+
 /// Whether this build has an updater public key. Builds without one (anyone's own build before
 /// docs/releasing.md has been followed) leave the updater out rather than fail to start.
 fn updater_configured(config: &tauri::Config) -> bool {
@@ -796,6 +814,7 @@ pub fn run() {
             remove_person,
             reset_person,
             make_admin,
+            go_back_to_one_person,
             create_collection,
             rename_collection,
             list_records,
@@ -828,7 +847,9 @@ pub fn run() {
             #[cfg(debug_assertions)]
             dev_drive,
             #[cfg(debug_assertions)]
-            dev_pick
+            dev_pick,
+            #[cfg(debug_assertions)]
+            dev_wait
         ])
         .run(context)
         .expect("error while running Glaze Vault");

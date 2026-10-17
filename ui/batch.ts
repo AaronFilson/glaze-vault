@@ -1,5 +1,6 @@
-// Scaling a recipe to a batch, for the batch sheet.
-import { amountOf, type RecipeLine } from './chemistry';
+// Scaling a recipe to a batch, for the batch sheet, and batch sheets kept for a batch operator.
+import type { RecipeHead, Revision } from './api';
+import { amountOf, sameName, type RecipeContent, type RecipeLine } from './chemistry';
 
 export type BatchUnit = 'g' | 'kg' | 'lb' | 'oz';
 
@@ -47,4 +48,63 @@ export function scaleBatch(lines: RecipeLine[], size: number): Batch | null {
 export function formatWeight(weight: number, unit: BatchUnit): string {
   const decimals = BATCH_UNITS.find((u) => u.unit === unit)?.decimals ?? 2;
   return weight.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+/** What the core keeps for a batch sheet (ADR 12): a recipe's lines with each material named by
+ * its in-house code, and the recipe and revision it was made from. A batch operator can open
+ * these and nothing else. */
+export interface BatchSheetContent extends RecipeContent {
+  recipe: string | null;
+  recipeNumber: number | null;
+}
+
+export type BatchSheet = Revision<BatchSheetContent>;
+
+/** A code a material has been given on a batch sheet. */
+export interface CodePair {
+  material: string;
+  code: string;
+}
+
+/** A recipe's batch sheet, with `codes` in the order of its lines that have an amount. */
+export function sheetFrom(recipe: RecipeHead, codes: string[], name: string, notes: string): BatchSheetContent {
+  return {
+    name,
+    notes,
+    lines: usableLines(recipe.content.lines).map((line, i) => ({
+      material: codes[i].trim(),
+      amount: String(line.amount)
+    })),
+    recipe: recipe.recordId,
+    recipeNumber: recipe.number
+  };
+}
+
+/** The codes on sheets, matched to the materials of the revisions they were made from. */
+export function knownCodes(pairs: { recipe: RecipeContent; sheet: BatchSheetContent }[]): CodePair[] {
+  const found: CodePair[] = [];
+  for (const { recipe, sheet } of pairs) {
+    const lines = usableLines(recipe.lines);
+    if (lines.length !== sheet.lines.length) continue;
+    lines.forEach((line, i) => {
+      const code = sheet.lines[i].material.trim();
+      if (code && !found.some((k) => sameName(k.material, line.material))) found.push({ material: line.material, code });
+    });
+  }
+  return found;
+}
+
+const sameCode = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** What is wrong with the codes typed for `materials`, if anything: each needs one, and a code
+ * stands for one material, here and on the sheets already made. */
+export function codeProblem(materials: string[], codes: string[], known: CodePair[]): string | null {
+  if (codes.some((code) => !code.trim())) return 'Give each material a code.';
+  for (const [i, code] of codes.entries()) {
+    const other =
+      materials.find((material, j) => sameCode(codes[j], code) && !sameName(material, materials[i])) ??
+      known.find((k) => sameCode(k.code, code) && !sameName(k.material, materials[i]))?.material;
+    if (other) return `${code.trim()} is the code for ${other} too. Give each material its own.`;
+  }
+  return null;
 }

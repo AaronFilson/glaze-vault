@@ -117,6 +117,16 @@ pub fn backup_key(database_key: &Key, salt: &[u8], info: &[u8]) -> Key {
     key
 }
 
+/// A key for one use, from a key that opens more: whoever holds `key` can make it, but it does not
+/// lead back to `key`.
+pub fn narrower_key(key: &Key, info: &[u8]) -> Key {
+    let mut narrower = Zeroizing::new([0u8; 32]);
+    Hkdf::<Sha256>::new(None, key.as_ref())
+        .expand(info, narrower.as_mut())
+        .expect("32 bytes is a valid HKDF length");
+    narrower
+}
+
 /// A user's X25519 key pair. Keys are sealed to the public key; the private key never leaves
 /// memory unencrypted.
 pub struct KeyPair {

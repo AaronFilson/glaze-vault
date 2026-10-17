@@ -1,7 +1,19 @@
 // The Rust core's commands (crates/app/src/lib.rs). The UI makes no access decisions: it shows
 // what these return.
-import { invoke } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke, type InvokeArgs } from '@tauri-apps/api/core';
+import type { BatchSheet } from './batch';
 import type { MaterialContent, RecipeContent } from './chemistry';
+
+/** Calls to the core not answered yet, by when they were made; the development tools show any
+ * that take long. */
+export const pendingCalls = new Map<number, { command: string; at: number }>();
+let nextCall = 0;
+
+function invoke<T>(command: string, args?: InvokeArgs): Promise<T> {
+  const id = ++nextCall;
+  pendingCalls.set(id, { command, at: Date.now() });
+  return tauriInvoke<T>(command, args).finally(() => pendingCalls.delete(id));
+}
 
 export interface VaultStatus {
   exists: boolean;
@@ -13,7 +25,7 @@ export interface VaultStatus {
 }
 
 /** What a person may do in a collection (docs/adr/0012-teams-on-one-computer.md). */
-export type Role = 'chemist' | 'formulator' | 'admin';
+export type Role = 'operator' | 'chemist' | 'formulator' | 'admin';
 
 export interface Person {
   id: string;
@@ -114,7 +126,7 @@ export interface RestoreResult {
   recoveryWords: string[] | null;
 }
 
-export type Kind = 'recipe' | 'material';
+export type Kind = 'recipe' | 'material' | 'batch';
 
 /** One saved revision of a record. A list holds each record's newest. */
 export interface Revision<Content> {
@@ -164,6 +176,8 @@ export const api = {
   resetPerson: (person: string, oneTimePassword: string) =>
     invoke<void>('reset_person', { person, oneTimePassword }),
   makeAdmin: (person: string) => invoke<void>('make_admin', { person }),
+  /** Removes everyone else and the organization key; returns where the backup made first is. */
+  goBackToOnePerson: () => invoke<string>('go_back_to_one_person'),
   createCollection: (name: string) => invoke<Collection>('create_collection', { name }),
   renameCollection: (collection: string, name: string) => invoke<void>('rename_collection', { collection, name }),
   lock: () => invoke<void>('lock'),
@@ -173,6 +187,7 @@ export const api = {
   saveRecipe: (parent: string | null, content: RecipeContent, collection: string | null = null) =>
     invoke<RecipeHead>('save_record', { kind: 'recipe', parent, collection, content }),
   materials: () => invoke<MaterialHead[]>('list_records', { kind: 'material' }),
+  batchSheets: () => invoke<BatchSheet[]>('list_records', { kind: 'batch' }),
   saveMaterial: (parent: string | null, content: MaterialContent, collection: string | null = null) =>
     invoke<MaterialHead>('save_record', { kind: 'material', parent, collection, content }),
   saveRecord: <Content>(kind: Kind, parent: string | null, content: Content, collection: string | null = null) =>

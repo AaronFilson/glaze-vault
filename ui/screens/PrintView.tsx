@@ -12,13 +12,16 @@ export function PrintView({
   content,
   saved,
   changed,
-  analysis
+  analysis,
+  sheet = false
 }: {
   job: PrintJob;
   content: RecipeContent;
   saved: RecipeHead | null;
   changed: boolean;
   analysis: Analysis;
+  /** A batch sheet, whose materials are codes. */
+  sheet?: boolean;
 }) {
   const printed = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const status = changed
@@ -35,7 +38,7 @@ export function PrintView({
         {content.name || 'Untitled'}
       </h1>
       {status && <p className="meta">{status}</p>}
-      {job.kind === 'batch' ? <BatchTable content={content} size={job.size} unit={job.unit} /> : <RecipeTable content={content} />}
+      {job.kind === 'batch' ? <BatchTable content={content} size={job.size} unit={job.unit} heading={sheet ? 'Code' : 'Material'} /> : <RecipeTable content={content} />}
       {content.notes.trim() && (
         <>
           <h2>Notes</h2>
@@ -97,7 +100,18 @@ function RecipeTable({ content }: { content: RecipeContent }) {
   );
 }
 
-function BatchTable({ content, size, unit }: { content: RecipeContent; size: number; unit: BatchUnit }) {
+/** A batch of `size`, line by line; on a batch sheet the materials are codes, under `heading`. */
+export function BatchTable({
+  content,
+  size,
+  unit,
+  heading = 'Material'
+}: {
+  content: RecipeContent;
+  size: number;
+  unit: BatchUnit;
+  heading?: string;
+}) {
   const batch = scaleBatch(content.lines, size);
   const unitLabel = BATCH_UNITS.find((u) => u.unit === unit)?.label ?? unit;
   if (!batch) return <p>This recipe has no amounts to scale.</p>;
@@ -112,7 +126,7 @@ function BatchTable({ content, size, unit }: { content: RecipeContent; size: num
       <table className="paper-table batch">
         <thead>
           <tr>
-            <th scope="col">Material</th>
+            <th scope="col">{heading}</th>
             <th scope="col" className="num">
               %
             </th>

@@ -7,7 +7,7 @@ use crate::crypto::{self, Key, KeyPair, PasswordKdf, SealedBox};
 use crate::error::{Error, Result};
 use crate::keyring::{self, Keyring, KeyringUser, Organization};
 use crate::recovery::RecoveryKey;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::path::Path;
 use uuid::Uuid;
@@ -118,7 +118,7 @@ impl Vault {
         if self.is_team() {
             return Err(Error::AlreadyATeam);
         }
-        let name = checked_name(&self.keyring, name, None)?;
+        let name = checked_name(&self.keyring, name, Some(self.user_id))?;
         let draft = self.draft()?;
         let vault_id = self.keyring.vault_id;
         let organization = KeyPair::generate();
@@ -154,17 +154,20 @@ impl Vault {
         for collection in &self.collections {
             insert_organization_grant(&tx, &vault_id, &organization.public, &collection.id, &collection.key)?;
         }
-        let private = create_collection(&tx, "", Some(self.user_id))?;
-        insert_grant(
-            &tx,
-            &vault_id,
-            &self.user_id,
-            &self.keys.public,
-            &private.0,
-            &private.1,
-            Role::Formulator,
-        )?;
-        insert_organization_grant(&tx, &vault_id, &organization.public, &private.0, &private.1)?;
+        // A vault that was a team's before keeps the private collection it had.
+        if !self.collections.iter().any(|c| c.owner == Some(self.user_id)) {
+            let private = create_collection(&tx, "", Some(self.user_id))?;
+            insert_grant(
+                &tx,
+                &vault_id,
+                &self.user_id,
+                &self.keys.public,
+                &private.0,
+                &private.1,
+                Role::Formulator,
+            )?;
+            insert_organization_grant(&tx, &vault_id, &organization.public, &private.0, &private.1)?;
+        }
         tx.commit()?;
         keyring.write(&self.dir.join(KEYRING_FILE))?;
         self.keyring = keyring;
@@ -261,6 +264,24 @@ impl Vault {
         let vault_id = self.keyring.vault_id;
         match role {
             Some(role) => {
+                let previous: Option<String> = self
+                    .conn
+                    .query_row(
+                        "SELECT role FROM grants WHERE user_id = ?1 AND collection_id = ?2",
+                        params![person.to_string(), collection.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                // Someone who held the collection's key and now gets only its batch key may have
+                // kept the first, so the collection gets a new one.
+                if role == Role::Operator && previous.is_some_and(|previous| previous != Role::Operator.as_str()) {
+                    self.conn.execute(
+                        "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
+                        params![person.to_string(), collection.to_string()],
+                    )?;
+                    self.rotate_collection_key(&collection)?;
+                    self.load_collections()?;
+                }
                 let collection = self.readable(&collection)?;
                 let tx = self.conn.unchecked_transaction()?;
                 tx.execute(
@@ -445,6 +466,69 @@ impl Vault {
         Ok((vault, set_aside, recovery))
     }
 
+    /// Makes a team's vault one person's again, this admin's (ADR 6). Everyone else is removed;
+    /// their private collections stay, named "From" them. The organization key goes, and every
+    /// collection and the database get new keys, so this person's password and recovery key are
+    /// once more the only ways in. A backup is made first, beside the vault, and its path returned.
+    pub fn go_back_to_one_person(&mut self) -> Result<std::path::PathBuf> {
+        self.admin()?;
+        let backup = self
+            .dir
+            .join(format!("before-one-person-{}.{}", now_ms(), crate::backup::EXTENSION));
+        self.back_up(&backup)?;
+        let vault_id = self.keyring.vault_id;
+        let me = self.user_id;
+        let others: Vec<(Uuid, String)> = self
+            .keyring
+            .users
+            .iter()
+            .filter(|user| user.id != me)
+            .map(|user| (user.id, user.name.clone()))
+            .collect();
+
+        // This person keeps every collection, as a one-person vault's person does.
+        let tx = self.conn.unchecked_transaction()?;
+        for collection in &self.collections {
+            tx.execute(
+                "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
+                params![me.to_string(), collection.id.to_string()],
+            )?;
+            insert_grant(
+                &tx,
+                &vault_id,
+                &me,
+                &self.keys.public,
+                &collection.id,
+                &collection.key,
+                Role::Admin,
+            )?;
+        }
+        tx.execute("DELETE FROM grants WHERE user_id != ?1", params![me.to_string()])?;
+        for (id, name) in &others {
+            tx.execute(
+                "UPDATE collections SET name = ?1, owner_id = NULL WHERE owner_id = ?2",
+                params![format!("From {name}"), id.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        let collections: Vec<Uuid> = self.collections.iter().map(|c| c.id).collect();
+        for collection in &collections {
+            self.rotate_collection_key(collection)?;
+        }
+        self.conn.execute("DELETE FROM organization_grants", [])?;
+
+        let mut keyring = self.keyring.clone();
+        keyring.users.retain(|user| user.id == me);
+        keyring.organization = None;
+        super::user_mut(&mut keyring, &me).organization_key = None;
+        self.keyring = keyring;
+        self.organization = None;
+        // Writes the key file, now without the organization, with the new database key.
+        self.rotate_database_key()?;
+        self.load_collections()?;
+        Ok(backup)
+    }
+
     /// Fails unless this person is an admin of a team's vault, and returns the organization key.
     pub(super) fn admin(&self) -> Result<&KeyPair> {
         if !self.is_team() {
@@ -491,6 +575,11 @@ impl Vault {
                     parent.as_ref(),
                     deleted,
                 );
+                let (old, new) = if kind == "batch" {
+                    (super::batch_key(&old, collection), super::batch_key(&new, collection))
+                } else {
+                    (old.clone(), new.clone())
+                };
                 let plaintext = crypto::decrypt(&old, &crypto::Sealed { nonce, ciphertext }, &aad)
                     .ok_or_else(|| Error::Corrupt(format!("revision {id} does not decrypt")))?;
                 let sealed = crypto::encrypt(&new, &plaintext, &aad);
@@ -498,6 +587,23 @@ impl Vault {
                     "UPDATE revisions SET nonce = ?1, ciphertext = ?2 WHERE id = ?3",
                     params![sealed.nonce, sealed.ciphertext, id],
                 )?;
+            }
+            // Drafts kept under this collection's key, each bound to its person (Vault::draft_aad).
+            let mut statement = tx.prepare("SELECT name, value FROM meta WHERE name LIKE 'draft %'")?;
+            let drafts = statement
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (name, value) in drafts {
+                let person = name.trim_start_matches("draft ");
+                let aad = super::draft_aad_for(&vault_id, person, collection);
+                let sealed: crypto::Sealed = serde_json::from_str(&value)?;
+                if let Some(plaintext) = crypto::decrypt(&old, &sealed, &aad) {
+                    let resealed = crypto::encrypt(&new, &plaintext, &aad);
+                    tx.execute(
+                        "UPDATE meta SET value = ?1 WHERE name = ?2",
+                        params![serde_json::to_string(&resealed)?, name],
+                    )?;
+                }
             }
             let mut statement = tx.prepare("SELECT user_id, role FROM grants WHERE collection_id = ?1")?;
             let grants = statement
@@ -809,7 +915,13 @@ fn insert_grant(
     key: &Key,
     role: Role,
 ) -> Result<()> {
-    let sealed = crypto::seal_key(public_key, key, &grant_info(vault_id, collection, person));
+    // A batch operator gets the batch key only (super::batch_key).
+    let key = if role == Role::Operator {
+        super::batch_key(key, collection)
+    } else {
+        key.clone()
+    };
+    let sealed = crypto::seal_key(public_key, &key, &grant_info(vault_id, collection, person, role));
     conn.execute(
         "INSERT INTO grants (user_id, collection_id, enc, ciphertext, role) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
@@ -979,6 +1091,72 @@ mod tests {
         .unwrap();
         ana.load_collections().unwrap();
         assert_eq!(names(&ana, Kind::Recipe), ["Ana's secret", "Ben's test", "Shino"]);
+    }
+
+    #[test]
+    fn a_batch_operator_opens_batch_sheets_and_nothing_else() {
+        let (dir, mut ana, _) = team();
+        let shared = shared(&ana);
+        let sheet = ana
+            .save_in(
+                Kind::Batch,
+                shared,
+                &json!({ "name": "Shino", "lines": [{ "material": "M-104", "amount": "40" }] }),
+            )
+            .unwrap();
+        let ben = ana.add_person("Ben", ONE_TIME, &[(shared, Role::Operator)]).unwrap();
+        let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME).unwrap();
+        as_ben.set_own_password(BENS).unwrap();
+
+        assert_eq!(names(&as_ben, Kind::Batch), ["Shino"]);
+        assert!(names(&as_ben, Kind::Recipe).is_empty());
+        assert!(names(&as_ben, Kind::Material).is_empty());
+        let recipe = ana.heads(Kind::Recipe).unwrap()[0].record_id;
+        assert!(matches!(as_ben.history(Kind::Recipe, recipe), Err(Error::NotFound)));
+        assert!(matches!(
+            as_ben.save(Kind::Batch, Some(sheet.revision_id), &json!({ "name": "Changed" })),
+            Err(Error::NotAllowed)
+        ));
+        assert!(matches!(
+            as_ben.save_in(Kind::Recipe, shared, &json!({ "name": "Ben's glaze" })),
+            Err(Error::NotAllowed)
+        ));
+        // What Ben holds is the batch key, made from the collection's key, which it does not lead
+        // back to, so it opens no recipe, whatever the app does.
+        let held = as_ben.readable(&shared).unwrap().key.clone();
+        let collection_key = ana.readable(&shared).unwrap().key.clone();
+        assert_eq!(*held, *super::super::batch_key(&collection_key, &shared));
+        assert_ne!(*held, *collection_key);
+        // In their own private collection, Ben does as he likes.
+        let own = private_of(&as_ben, ben.id);
+        as_ben
+            .save_in(Kind::Recipe, own, &json!({ "name": "Ben's glaze" }))
+            .unwrap();
+    }
+
+    #[test]
+    fn making_someone_a_batch_operator_changes_the_collections_key() {
+        let (dir, mut ana, _) = team();
+        let shared = shared(&ana);
+        ana.save_in(Kind::Batch, shared, &json!({ "name": "Shino" })).unwrap();
+        let ben = ana.add_person("Ben", ONE_TIME, &[(shared, Role::Chemist)]).unwrap();
+        let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME).unwrap();
+        as_ben.set_own_password(BENS).unwrap();
+        let kept_key = as_ben.readable(&shared).unwrap().key.clone();
+        drop(as_ben);
+
+        ana.set_role(ben.id, shared, Some(Role::Operator)).unwrap();
+        assert_ne!(*ana.readable(&shared).unwrap().key, *kept_key);
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
+        assert_eq!(names(&ana, Kind::Batch), ["Shino"]);
+        let as_ben = Vault::unlock_as(dir.path(), Some(ben.id), BENS).unwrap();
+        assert!(names(&as_ben, Kind::Recipe).is_empty());
+        assert_eq!(names(&as_ben, Kind::Batch), ["Shino"]);
+        drop(as_ben);
+
+        // And taking it away again re-encrypts the sheets too.
+        ana.set_role(ben.id, shared, None).unwrap();
+        assert_eq!(names(&ana, Kind::Batch), ["Shino"]);
     }
 
     #[test]
@@ -1160,5 +1338,53 @@ mod tests {
         assert!(as_ben.me().admin);
         assert_eq!(names(&as_ben, Kind::Recipe), ["Shino", "Tenmoku"]);
         assert!(as_ben.collections().iter().any(|c| c.name == "Production"));
+    }
+
+    #[test]
+    fn a_team_goes_back_to_one_person_and_can_grow_again() {
+        let (dir, mut ana, _) = team();
+        let ana_id = ana.me().id;
+        let shared = shared(&ana);
+        let ben = ana.add_person("Ben", ONE_TIME, &[(shared, Role::Formulator)]).unwrap();
+        let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME).unwrap();
+        as_ben.set_own_password(BENS).unwrap();
+        as_ben
+            .save_in(
+                Kind::Recipe,
+                private_of(&as_ben, ben.id),
+                &json!({ "name": "Ben's test" }),
+            )
+            .unwrap();
+        let bens_shared_key = as_ben.readable(&shared).unwrap().key.clone();
+        drop(as_ben);
+        ana.load_collections().unwrap();
+
+        let backup = ana.go_back_to_one_person().unwrap();
+        assert!(backup.is_file());
+        assert!(!ana.is_team());
+        assert_ne!(*ana.readable(&shared).unwrap().key, *bens_shared_key);
+        assert_eq!(names(&ana, Kind::Recipe), ["Ben's test", "Shino"]);
+        assert!(
+            ana.collections()
+                .iter()
+                .any(|c| c.name == "From Ben" && c.owner.is_none())
+        );
+        assert_eq!(ana.draft().unwrap().unwrap(), json!({ "editing": "Celadon" }));
+        drop(ana);
+
+        assert!(Vault::people_in(dir.path()).unwrap().is_empty());
+        let text = fs::read_to_string(dir.path().join(KEYRING_FILE)).unwrap();
+        assert!(text.contains("\"format\": 1") && !text.contains("organization"));
+        assert!(matches!(
+            Vault::unlock_as(dir.path(), Some(ben.id), BENS),
+            Err(Error::NoSuchPerson)
+        ));
+        let mut ana = Vault::unlock(dir.path(), PASSWORD).unwrap();
+        assert_eq!(names(&ana, Kind::Recipe), ["Ben's test", "Shino"]);
+
+        // Growing again keeps Ana's private collection rather than making another.
+        ana.grow_into_team("Ana").unwrap();
+        assert_eq!(ana.collections().iter().filter(|c| c.owner == Some(ana_id)).count(), 1);
+        assert_eq!(names(&ana, Kind::Recipe), ["Ben's test", "Shino"]);
     }
 }

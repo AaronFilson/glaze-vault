@@ -14,12 +14,14 @@ export function collectionLabel(collection: Collection, access: Access, names: R
 export function canEdit(access: Access | null, collectionId: string | null | undefined): boolean {
   if (!access?.team) return true;
   const collection = access.collections.find((c) => c.id === collectionId);
-  return !!collection && collection.role !== 'chemist';
+  return !!collection && changes(collection);
 }
+
+const changes = (collection: Collection) => collection.role === 'formulator' || collection.role === 'admin';
 
 /** The collections new records can go into. */
 export function editableCollections(access: Access | null): Collection[] {
-  return (access?.collections ?? []).filter((c) => c.role !== 'chemist');
+  return (access?.collections ?? []).filter(changes);
 }
 
 /** Where a new record goes unless the person chooses: the first shared collection they may change,
@@ -42,4 +44,11 @@ export function byCollection<Item extends { collectionId?: string }>(
       items: items.filter((item) => item.collectionId === collection.id)
     }))
     .filter((group) => group.items.length > 0);
+}
+
+/** Whether someone may only weigh batches in every shared collection they have: they start on
+ * the batch sheets. */
+export function onlyWeighs(access: Access | null): boolean {
+  const shared = (access?.collections ?? []).filter((c) => !c.owner);
+  return !!access?.team && shared.length > 0 && shared.every((c) => c.role === 'operator');
 }

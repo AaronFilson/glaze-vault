@@ -461,6 +461,46 @@ export const scenarios: Scenario[] = [
     }
   },
   {
+    name: 'A batch operator weighs from a batch sheet, without the recipe',
+    async run(app, vault) {
+      await app.run(
+        'click "Leach 4321"',
+        'click "Batch sheet…"',
+        'type "Code for Custer" "M-104"',
+        'type "Code for Silica" "M-200"',
+        'type "Code for Whiting" "M-310"',
+        'type "Code for EPK" "M-104"',
+        'click "Save batch sheet"',
+        'expect "M-104 is the code for Custer too."',
+        'type "Code for EPK" "M-401"',
+        'type "Notes for weighing" "Sieve through 80 mesh"',
+        'click "Save batch sheet"',
+        'expect "Its batch sheet is up to date." 10000',
+        'click "Settings"',
+        'select "Ben in Shared" "Batch operator: weighs"',
+        'expect "[select \\"Ben in Shared\\" = \\"Batch operator: weighs\\"]" 30000',
+        'click "Back to recipes"',
+        'click "Lock"',
+        'select "Your name" "Ben"',
+        `type "Password" ${quote(BENS_PASSWORD)}`,
+        'click "Unlock"',
+        // Ben only weighs in Shared, so he starts on the batch sheets.
+        'expect "[button \\"Batch sheets\\" (pressed)]" 30000',
+        'click "Leach 4321" in "Batch sheets"',
+        'expect "| M-104 | 38.10 | 381.0 |"',
+        'expect "Sieve through 80 mesh"',
+        'expect not "Custer"',
+        'expect not "Delete…"',
+        'click "Batch sheets"',
+        'expect "Ben\'s test"',
+        'expect not "Leach 4321"',
+        'click "Lock"',
+        'select "Your name" "Ana"',
+        ...unlock(vault.password).slice(1)
+      );
+    }
+  },
+  {
     name: "The organization's recovery key gets an admin back in",
     async run(app, vault) {
       const screen = await app.run(
@@ -481,6 +521,27 @@ export const scenarios: Scenario[] = [
         'click "Lock"',
         'select "Your name" "Ana"',
         ...unlock(ADMIN_PASSWORD).slice(1)
+      );
+    }
+  },
+  {
+    name: 'Go back to one person',
+    async run(app, vault) {
+      await app.run(
+        'click "Settings"',
+        'click "Go back to one person…"',
+        'expect "Ben can no longer sign in."',
+        'click "Go back to one person" in "alertdialog"',
+        'expect "This vault is yours alone again." 60000',
+        'expect "## Sharing"',
+        'click "Back to recipes"',
+        'expect not "## Shared"',
+        'expect "Ben\'s test"',
+        'click "Lock"',
+        'expect not "Your name"',
+        `type "Password" ${quote(vault.password)}`,
+        'click "Unlock"',
+        'expect "Leach 4321" 30000'
       );
     }
   }

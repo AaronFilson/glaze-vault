@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
+    /// Reads batch sheets, and nothing else: no recipes, materials or chemistry. Their grant
+    /// holds only the collection's batch key (crate::vault::batch_key).
+    Operator,
     /// Reads recipes, materials and their chemistry.
     Chemist,
     /// Also makes, changes, deletes and erases them.
@@ -19,6 +22,7 @@ pub enum Role {
 impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
+            Role::Operator => "operator",
             Role::Chemist => "chemist",
             Role::Formulator => "formulator",
             Role::Admin => "admin",
@@ -27,6 +31,7 @@ impl Role {
 
     pub fn parse(text: &str) -> Option<Role> {
         match text {
+            "operator" => Some(Role::Operator),
             "chemist" => Some(Role::Chemist),
             "formulator" => Some(Role::Formulator),
             "admin" => Some(Role::Admin),

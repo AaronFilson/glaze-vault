@@ -37,3 +37,8 @@ another file (`ui/devTools.ts`), for working on the app without seeing it.
 - The screen file is a description of the page, not a picture: layout, colours and printing are
   not checked, and a person still looks at new screens.
 - A scenario that fails leaves the later ones unrun; its output says how many.
+- WebKit slows the timers of a page whose window is hidden, and on macOS stops answering it after
+  a few minutes with the display asleep. The dev tools wait by asking the core (`dev_wait`), whose
+  answers are not slowed, and on macOS the runner keeps the display awake with `caffeinate` for
+  as long as it runs. A screen locked by the person still hides the window, so run the tests on
+  a Mac that is not locked.

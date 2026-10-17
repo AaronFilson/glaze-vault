@@ -96,7 +96,7 @@ function fakeCore({
     calls.push({ cmd, args: a });
     switch (cmd) {
       case 'list_records':
-        return a.kind === 'recipe' ? recipes : materials;
+        return a.kind === 'recipe' ? recipes : a.kind === 'material' ? materials : [];
       case 'save_record':
         return save(a.parent as string | null, a.content as { name?: string });
       case 'save_records': {

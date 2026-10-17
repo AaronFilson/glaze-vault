@@ -51,7 +51,21 @@ struct OpenCollection {
     /// The person whose private collection it is.
     owner: Option<Uuid>,
     role: Role,
+    /// The collection's key, or for a batch operator its batch key only.
     key: Key,
+}
+
+impl OpenCollection {
+    /// The key records of a kind are encrypted with here, if this person may read them: batch
+    /// sheets under the batch key, so a batch operator can open them and nothing else.
+    fn key_for(&self, kind: Kind) -> Option<Key> {
+        match (self.role, kind) {
+            (Role::Operator, Kind::Batch) => Some(self.key.clone()),
+            (Role::Operator, _) => None,
+            (_, Kind::Batch) => Some(batch_key(&self.key, &self.id)),
+            _ => Some(self.key.clone()),
+        }
+    }
 }
 
 /// What a record is. Each kind keeps its own list; the core does not look inside the content.
@@ -61,6 +75,9 @@ pub enum Kind {
     Recipe,
     /// A person's own material, colorant or additive.
     Material,
+    /// A batch sheet: a recipe's lines with its materials named by in-house codes, for a batch
+    /// operator to weigh out (ADR 4).
+    Batch,
 }
 
 impl Kind {
@@ -68,6 +85,7 @@ impl Kind {
         match self {
             Kind::Recipe => "recipe",
             Kind::Material => "material",
+            Kind::Batch => "batch",
         }
     }
 }
@@ -147,7 +165,7 @@ impl Vault {
         let sealed = crypto::seal_key(
             &keys.public,
             &collection_key,
-            &grant_info(&vault_id, &collection_id, &user_id),
+            &grant_info(&vault_id, &collection_id, &user_id, Role::Admin),
         );
         let tx = conn.unchecked_transaction()?;
         tx.execute(
@@ -530,7 +548,7 @@ impl Vault {
                 (parse_id(&record_id)?, number + 1, parse_id(&collection_id)?)
             }
         };
-        let collection_key = &self.editable(&collection_id)?.key;
+        let collection_key = self.editable(&collection_id)?.key_for(kind).ok_or(Error::NotAllowed)?;
         let revision_id = Uuid::new_v4();
         let saved_at = now_ms();
         let aad = revision_aad(
@@ -542,7 +560,7 @@ impl Vault {
             parent.as_ref(),
             deleted,
         );
-        let sealed = crypto::encrypt(collection_key, &plaintext, &aad);
+        let sealed = crypto::encrypt(&collection_key, &plaintext, &aad);
         self.conn.execute(
             "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -646,7 +664,12 @@ impl Vault {
             let (revision_id, record_id, collection_id) =
                 (parse_id(&id)?, parse_id(&record_id)?, parse_id(&collection_id)?);
             let parent = parent_id.as_deref().map(parse_id).transpose()?;
-            let Some(collection) = self.collections.iter().find(|c| c.id == collection_id) else {
+            let Some(key) = self
+                .collections
+                .iter()
+                .find(|c| c.id == collection_id)
+                .and_then(|c| c.key_for(kind))
+            else {
                 continue;
             };
             let aad = revision_aad(
@@ -658,7 +681,7 @@ impl Vault {
                 parent.as_ref(),
                 deleted,
             );
-            let plaintext = crypto::decrypt(&collection.key, &crypto::Sealed { nonce, ciphertext }, &aad)
+            let plaintext = crypto::decrypt(&key, &crypto::Sealed { nonce, ciphertext }, &aad)
                 .ok_or_else(|| Error::Corrupt(format!("revision {revision_id} does not decrypt")))?;
             revisions.push(Revision {
                 record_id,
@@ -755,17 +778,18 @@ impl Vault {
         let mut collections = Vec::new();
         for (id, name, owner, role, enc, ciphertext) in rows {
             let id = parse_id(&id)?;
+            let role = Role::parse(&role).ok_or_else(|| Error::Corrupt(format!("unknown role {role}")))?;
             let key = crypto::open_key(
                 &self.keys,
                 &crypto::SealedBox { enc, ciphertext },
-                &grant_info(&self.keyring.vault_id, &id, &self.user_id),
+                &grant_info(&self.keyring.vault_id, &id, &self.user_id, role),
             )
             .ok_or_else(|| Error::Corrupt("a collection key does not open".into()))?;
             collections.push(OpenCollection {
                 id,
                 name,
                 owner: owner.as_deref().map(parse_id).transpose()?,
-                role: Role::parse(&role).ok_or_else(|| Error::Corrupt(format!("unknown role {role}")))?,
+                role,
                 key,
             });
         }
@@ -846,13 +870,11 @@ impl Vault {
     }
 
     fn draft_aad(&self) -> Result<Vec<u8>> {
-        Ok(format!(
-            "glaze-vault v1 draft vault {} user {} collection {}",
-            self.keyring.vault_id,
-            self.user_id,
-            self.draft_collection()?.id
-        )
-        .into_bytes())
+        Ok(draft_aad_for(
+            &self.keyring.vault_id,
+            &self.user_id.to_string(),
+            &self.draft_collection()?.id,
+        ))
     }
 
     /// Drafts are encrypted with the person's private collection's key in a team's vault, which
@@ -1069,8 +1091,29 @@ fn set_aside_vault(dir: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(aside))
 }
 
-fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid) -> Vec<u8> {
-    format!("glaze-vault v1 collection-key vault {vault_id} collection {collection_id} user {user_id}").into_bytes()
+/// Binds a person's draft to them and to the collection whose key encrypts it.
+fn draft_aad_for(vault_id: &Uuid, user_id: &str, collection_id: &Uuid) -> Vec<u8> {
+    format!("glaze-vault v1 draft vault {vault_id} user {user_id} collection {collection_id}").into_bytes()
+}
+
+/// What a grant's sealed key is bound to. A batch operator's grant holds the batch key, under
+/// other words, so it cannot be passed off as the collection's key.
+fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid, role: Role) -> Vec<u8> {
+    let what = if role == Role::Operator {
+        "batch-key"
+    } else {
+        "collection-key"
+    };
+    format!("glaze-vault v1 {what} vault {vault_id} collection {collection_id} user {user_id}").into_bytes()
+}
+
+/// A collection's batch sheets are encrypted with a key made from its key, which is all a batch
+/// operator is given: it opens the sheets, and does not lead back to the recipes and materials.
+pub(crate) fn batch_key(collection_key: &Key, collection_id: &Uuid) -> Key {
+    crypto::narrower_key(
+        collection_key,
+        format!("glaze-vault v1 batch-key collection {collection_id}").as_bytes(),
+    )
 }
 
 /// Binds a revision's content to where it belongs, so ciphertext cannot be moved to another

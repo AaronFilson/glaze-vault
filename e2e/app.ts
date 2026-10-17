@@ -71,6 +71,12 @@ export class App {
       shell: windows
     });
     this.child.on('exit', () => (this.exited = true));
+    if (process.platform === 'darwin') {
+      // macOS slows a hidden window's page, and after a few minutes with the display asleep
+      // stops answering it, so keep the display awake (and wake it) while the tests run. It
+      // changes no setting, and ends with this process.
+      spawn('caffeinate', ['-d', '-i', '-u', '-w', String(process.pid)], { stdio: 'ignore' }).unref();
+    }
     await this.until(() => existsSync(this.screenFile), timeoutMs, 'The app did not start');
   }
 

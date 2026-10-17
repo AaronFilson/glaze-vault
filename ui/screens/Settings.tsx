@@ -71,6 +71,7 @@ export function Settings({
   /** People or collections changed: reads this person's access again. */
   onTeamChanged: () => void;
 }) {
+  const [shrunkTo, setShrunkTo] = useState<string | null>(null);
   // In a team's vault, backups and switching vaults change everyone's, so they are for admins.
   const team = !!access?.team;
   const admin = !team || !!access?.me.admin;
@@ -84,10 +85,22 @@ export function Settings({
       </div>
       {access && (
         <Section title={team ? 'People' : 'Sharing'}>
+          {shrunkTo && !team && (
+            <p className="hint" role="status">
+              This vault is yours alone again. The backup made first is {shrunkTo}.
+            </p>
+          )}
           {!team ? (
             <ShareVault onShared={onShared} />
           ) : access.me.admin ? (
-            <People access={access} onChanged={onTeamChanged} />
+            <People
+              access={access}
+              onChanged={onTeamChanged}
+              onShrunk={(backup) => {
+                setShrunkTo(backup);
+                onTeamChanged();
+              }}
+            />
           ) : (
             <p>
               You are signed in as <strong>{access.me.name}</strong>. An admin decides what you can see and change, and

@@ -65,7 +65,7 @@ export function ShareVault({ onShared }: { onShared: (organizationWords: string[
           <p>
             Sharing makes an organization recovery key, which opens everything if every admin loses their password and
             recovery sheet. You print it and keep it in a safe next. Your recipes and materials go into a collection
-            called Shared, and you get a private one. Going back to one person is not in this version yet.
+            called Shared, and you get a private one. You can go back to one person later.
           </p>
           <div className="row">
             <button type="button" className="primary" disabled={busy} onClick={share}>
@@ -84,12 +84,23 @@ export function ShareVault({ onShared }: { onShared: (organizationWords: string[
 
 const ROLES: { role: Role | ''; label: string }[] = [
   { role: '', label: 'No access' },
+  { role: 'operator', label: 'Batch operator: weighs' },
   { role: 'chemist', label: 'Chemist: reads' },
   { role: 'formulator', label: 'Formulator: changes' }
 ];
 
 /** Settings for a team's admin: people, what each may do in each collection, and collections. */
-export function People({ access, onChanged }: { access: Access; onChanged: () => void }) {
+export function People({
+  access,
+  onChanged,
+  onShrunk
+}: {
+  access: Access;
+  onChanged: () => void;
+  /** The vault is one person's again; with where the backup made first is. */
+  onShrunk: (backup: string) => void;
+}) {
+  const [shrinking, setShrinking] = useState(false);
   const [team, setTeam] = useState<Team | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -309,6 +320,53 @@ export function People({ access, onChanged }: { access: Access; onChanged: () =>
           Add collection
         </button>
       </form>
+
+      <h3>Going back to one person</h3>
+      <p>
+        Makes this vault yours alone again. Everyone else is removed; what was in their private collections stays,
+        named after them. Every collection gets a new key, and the organization recovery sheet stops working.
+      </p>
+      <div className="row">
+        <button type="button" className="danger" disabled={busy} onClick={() => setShrinking(true)}>
+          Go back to one person…
+        </button>
+      </div>
+      {shrinking && (
+        <div className="notice warning" role="alertdialog" aria-label="Go back to one person">
+          <p>
+            {team.people.length > 1
+              ? `${team.people
+                  .filter((p) => p.id !== access.me.id)
+                  .map((p) => p.name)
+                  .join(', ')} can no longer sign in. `
+              : ''}
+            A backup of the vault as it is now is made first, in the vault's folder, in case you need to go back.
+          </p>
+          <div className="row">
+            <button
+              type="button"
+              className="danger"
+              disabled={busy}
+              onClick={async () => {
+                // Not through change(): afterwards there is no team to read again.
+                setBusy(true);
+                setError('');
+                try {
+                  onShrunk(await api.goBackToOnePerson());
+                } catch (e) {
+                  setError(errorText(e));
+                  setBusy(false);
+                }
+              }}
+            >
+              Go back to one person
+            </button>
+            <button type="button" onClick={() => setShrinking(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {message && <p className="hint" role="status">{message}</p>}
       {error && <p role="alert" className="error">{error}</p>}

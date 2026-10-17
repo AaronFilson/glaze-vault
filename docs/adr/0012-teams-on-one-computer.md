@@ -30,9 +30,18 @@ decides the steps people take and what is built first.
 - **Roles** are fixed sets of capabilities for now: Chemist (view recipes, materials and their
   chemistry), Formulator (also make, change and delete them) and Admin (everything, on every
   collection, including people, collections and backups). An admin gives a person a role on a
-  collection, which seals its key to them. Batch operator, which needs materials named by in-house
-  codes to keep the chemistry back (ADR 4), comes with that feature. Roles editable by admins come
-  later.
+  collection, which seals its key to them. Roles editable by admins come later.
+- **Batch operator** is a fourth role, for weighing out. A formulator makes a recipe's **batch
+  sheet**: its lines with each material named by an in-house code (M-104) instead, a name, and
+  notes for the weighing. The sheet is its own record, of kind `batch`, in the recipe's
+  collection, linked to the recipe and the revision it was made from, so the recipe shows when it
+  has changed since. Batch sheets are encrypted with the collection's **batch key**, made from the
+  collection's key with HKDF; a batch operator's grant holds only the batch key, which does not
+  lead back to the collection key, so they can open the sheets and nothing else in it, whatever
+  the app does. Everyone else derives the batch key from the collection key. Making someone a
+  batch operator who held more gives the collection a new key, as taking a role away does. The
+  codes are not kept in a list of their own: the formulator types them, and the app suggests the
+  codes already used for each material on sheets they can read.
 - **The core checks every command** against the person's capabilities on the record's collection.
   The UI hides what is refused, but does not decide.
 - **Removing a person** takes them out of the key file and removes their grants. Every collection
@@ -50,8 +59,15 @@ decides the steps people take and what is built first.
 - **Formats:** the key file gains an organization section and per-person fields (format 2), written
   only when a vault grows, so a one-person vault's files stay as they are. The database gains
   collection names, owners and roles (schema 3).
-- **Later in this work, in order:** signing each revision with its author's key (ADR 4), the audit
-  log, going back to one person (ADR 6), then the batch operator.
+- **Going back to one person** (ADR 6) is a step for an admin: a backup goes in the vault's folder
+  first, everyone else is removed, their private collections stay as "From name", the
+  organization key goes, and every collection and the database get new keys. Roles are not
+  remembered for growing again; the admin's private collection is.
+- **Signing revisions and the audit log wait for the LAN host** (ADR 5). On one computer, anyone
+  who could forge a revision or rewrite a log already holds the database key and their own
+  signing key, so signatures there show little; with a host, the host checks each signature
+  against keys the organization has signed, and keeps the log where a member cannot rewrite it.
+  Both need the same organization-signed keys, so they are built with it.
 
 ## Consequences
 
