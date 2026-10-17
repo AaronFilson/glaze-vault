@@ -50,10 +50,8 @@ impl Vault {
             .optional()?
             .ok_or(Error::NotFound)?;
         let collection_id = parse_id(&collection_id)?;
-        let key = self
-            .editable(&collection_id, kind)?
-            .key_for(kind)
-            .ok_or(Error::NotAllowed)?;
+        let collection = self.editable(&collection_id, kind)?;
+        let key = self.key_for(collection, kind).ok_or(Error::NotAllowed)?;
         let attachment = Attachment {
             id: Uuid::new_v4(),
             record_id,
@@ -117,7 +115,7 @@ impl Vault {
             .collections
             .iter()
             .find(|c| c.id == collection_id)
-            .and_then(|c| c.key_for(kind))
+            .and_then(|c| self.key_for(c, kind))
             .ok_or(Error::NotFound)?;
         let bytes = crypto::decrypt(
             &key,

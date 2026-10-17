@@ -1,8 +1,10 @@
 //! A team on one computer (docs/adr/0012-teams-on-one-computer.md): growing a one-person vault,
 //! people, collections and what each person may do in them.
 
+use super::roles::Capabilities;
 use super::{
-    KEYRING_FILE, Kind, OpenCollection, Vault, check_password, grant_info, now_ms, parse_id, parse_role, revision_aad,
+    Held, KEYRING_FILE, Kind, OpenCollection, Vault, check_password, grant_info, kind_key, now_ms, parse_id,
+    parse_role, revision_aad, summaries, summary_key,
 };
 use crate::access::Role;
 use crate::crypto::{self, Key, KeyPair, PasswordKdf, SealedBox};
@@ -40,6 +42,9 @@ pub struct Collection {
     pub role: Role,
     /// The kinds of record this person may make and change here.
     pub changes: Vec<Kind>,
+    /// What else they may do here. An admin manages every collection.
+    #[serde(flatten)]
+    pub may: Capabilities,
 }
 
 /// One person's role on one collection, for the people screen.
@@ -71,9 +76,12 @@ impl Vault {
         person(self.user())
     }
 
-    /// Everyone in a team's vault, for an admin.
+    /// Everyone in a team's vault, for an admin or someone who manages a collection. The lock
+    /// screen names them all anyway.
     pub fn people(&self) -> Result<Vec<Person>> {
-        self.admin()?;
+        if self.admin().is_err() && !self.collections.iter().any(|c| self.managed(&c.id).is_ok()) {
+            return Err(Error::NotAllowed);
+        }
         Ok(people(&self.keyring))
     }
 
@@ -90,13 +98,25 @@ impl Vault {
                     .into_iter()
                     .filter(|&kind| self.may_change(c.role, kind))
                     .collect(),
+                may: Capabilities {
+                    manage: self.managed(&c.id).is_ok(),
+                    ..self.capabilities(c.role)
+                },
             })
             .collect()
     }
 
-    /// Every grant in the vault, for an admin.
+    /// Whether this person may export from any collection they can open.
+    pub fn may_export(&self) -> bool {
+        self.collections.iter().any(|c| self.capabilities(c.role).export)
+    }
+
+    /// Every grant in the vault for an admin, and on the collections they manage for anyone else.
     pub fn grants(&self) -> Result<Vec<Grant>> {
-        self.admin()?;
+        let admin = self.admin().is_ok();
+        if !admin && !self.collections.iter().any(|c| self.managed(&c.id).is_ok()) {
+            return Err(Error::NotAllowed);
+        }
         let mut statement = self
             .conn
             .prepare("SELECT user_id, collection_id, role FROM grants ORDER BY user_id")?;
@@ -117,6 +137,7 @@ impl Vault {
                     role: parse_role(&role)?,
                 })
             })
+            .filter(|grant| !matches!(grant, Ok(g) if !admin && self.managed(&g.collection).is_err()))
             .collect()
     }
 
@@ -161,6 +182,7 @@ impl Vault {
                 &private.0,
                 &private.1,
                 Role::Formulator,
+                Held::Collection,
             )?;
             insert_organization_grant(&tx, &vault_id, &organization.public, &private.0, &private.1)?;
         }
@@ -199,6 +221,7 @@ impl Vault {
             &private.0,
             &private.1,
             Role::Formulator,
+            Held::Collection,
         )?;
         insert_organization_grant(&tx, &vault_id, &organization_public, &private.0, &private.1)?;
         for (collection, role) in roles {
@@ -210,8 +233,9 @@ impl Vault {
                 &id,
                 &keys.public,
                 &collection.id,
-                &collection.key,
+                collection.full_key()?,
                 *role,
+                self.held(*role),
             )?;
         }
         tx.commit()?;
@@ -254,37 +278,50 @@ impl Vault {
     }
 
     /// Gives a person a role on a collection, or with None takes it away. Taking it away gives the
-    /// collection a new key, since they may have kept the old one (ADR 3).
+    /// collection a new key, since they may have kept the old one (ADR 3). An admin may give any
+    /// role; someone who manages the collection may give any but an admin's or a manager's, to
+    /// anyone but an admin, a manager or themselves.
     pub fn set_role(&mut self, person: Uuid, collection: Uuid, role: Option<Role>) -> Result<()> {
-        self.admin()?;
         let user = self.keyring.user(&person)?.clone();
         let vault_id = self.keyring.vault_id;
+        let previous: Option<Role> = self
+            .conn
+            .query_row(
+                "SELECT role FROM grants WHERE user_id = ?1 AND collection_id = ?2",
+                params![person.to_string(), collection.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|role| parse_role(&role))
+            .transpose()?;
+        if self.admin().is_err() {
+            self.managed(&collection)?;
+            let lower =
+                |role: Option<Role>| role.is_none_or(|role| role != Role::Admin && !self.capabilities(role).manage);
+            if person == self.user_id || user.organization_key.is_some() || !lower(previous) || !lower(role) {
+                return Err(Error::ManagersOnlyLower);
+            }
+        }
         match role {
             Some(role) => {
                 self.known_role(role)?;
-                let previous: Option<String> = self
-                    .conn
-                    .query_row(
-                        "SELECT role FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                        params![person.to_string(), collection.to_string()],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
                 let tx = self.conn.unchecked_transaction()?;
                 tx.execute(
                     "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
                     params![person.to_string(), collection.to_string()],
                 )?;
-                // Someone who held the collection's key and now gets only its batch key may have
-                // kept the first, so the collection gets a new one, in the same transaction: a
-                // failure part way leaves them with the role they had.
-                let key =
-                    if role == Role::Operator && previous.is_some_and(|previous| previous != Role::Operator.code()) {
-                        self.rotate_collection_key_in(&tx, &collection)?
-                    } else {
-                        self.readable(&collection)?.key.clone()
-                    };
-                insert_grant(&tx, &vault_id, &person, &user.public_key, &collection, &key, role)?;
+                // Someone who held the collection's key and now gets only a key made from it, or
+                // who goes from one such key to the other, may have kept what they had, so the
+                // collection gets a new key, in the same transaction: a failure part way leaves
+                // them with the role they had.
+                let held = self.held(role);
+                let before = previous.map(|previous| self.held(previous));
+                let key = if before.is_some_and(|before| before != held && held != Held::Collection) {
+                    self.rotate_collection_key_in(&tx, &collection)?
+                } else {
+                    self.readable(&collection)?.full_key()?.clone()
+                };
+                insert_grant(&tx, &vault_id, &person, &user.public_key, &collection, &key, role, held)?;
                 tx.commit()?;
             }
             None => {
@@ -478,11 +515,15 @@ impl Vault {
             owner: None,
             role: Role::Admin,
             changes: Kind::ALL.to_vec(),
+            may: Capabilities {
+                manage: true,
+                ..Capabilities::BUILT_IN
+            },
         })
     }
 
     pub fn rename_collection(&mut self, id: Uuid, name: &str) -> Result<()> {
-        self.admin()?;
+        self.managed(&id)?;
         let name = collection_name(name)?;
         if self.readable(&id)?.owner.is_some() {
             return Err(Error::NotAllowed);
@@ -588,8 +629,9 @@ impl Vault {
                 &me,
                 &self.keys.public,
                 &collection.id,
-                &collection.key,
+                collection.full_key()?,
                 Role::Admin,
+                Held::Collection,
             )?;
         }
         tx.execute("DELETE FROM grants WHERE user_id != ?1", params![me.to_string()])?;
@@ -637,19 +679,83 @@ impl Vault {
     /// As [`Vault::rotate_collection_key`], in the caller's transaction, which it must commit and
     /// then reload the collections. Returns the new key.
     fn rotate_collection_key_in(&self, tx: &Connection, collection: &Uuid) -> Result<Key> {
-        let organization = self.admin()?.public.clone();
+        let organization = self
+            .keyring
+            .organization
+            .as_ref()
+            .ok_or(Error::NotATeam)?
+            .public_key
+            .clone();
         self.rotate_collection_key_for(tx, collection, &organization)
+    }
+
+    /// A collection this person manages: an admin manages every one.
+    pub(super) fn managed(&self, collection: &Uuid) -> Result<&OpenCollection> {
+        if !self.is_team() {
+            return Err(Error::NotATeam);
+        }
+        let open = self.readable(collection)?;
+        if self.organization.is_none() && !self.capabilities(open.role).manage {
+            return Err(Error::NotAllowed);
+        }
+        Ok(open)
+    }
+
+    /// After a role admins make changes what key it holds, in memory: its grants sealed again for
+    /// the key it now holds, in one transaction with `also`. Going to a narrower key gives each of
+    /// its collections a new key, since its people held the old one.
+    pub(super) fn regrant(&self, role: Role, before: Held, also: impl FnOnce(&Connection) -> Result<()>) -> Result<()> {
+        let after = self.held(role);
+        let vault_id = self.keyring.vault_id;
+        let tx = self.conn.unchecked_transaction()?;
+        also(&tx)?;
+        if after != before {
+            let mut statement = tx.prepare("SELECT user_id, collection_id FROM grants WHERE role = ?1")?;
+            let grants = statement
+                .query_map(params![role.code()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(statement);
+            let mut rotated: Vec<Uuid> = Vec::new();
+            for (person, collection) in grants {
+                let (person, collection) = (parse_id(&person)?, parse_id(&collection)?);
+                if after == Held::Collection {
+                    tx.execute(
+                        "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
+                        params![person.to_string(), collection.to_string()],
+                    )?;
+                    let user = self.keyring.user(&person)?;
+                    insert_grant(
+                        &tx,
+                        &vault_id,
+                        &person,
+                        &user_public_key(user, &self.keys, &self.user_id),
+                        &collection,
+                        self.readable(&collection)?.full_key()?,
+                        role,
+                        after,
+                    )?;
+                } else if !rotated.contains(&collection) {
+                    self.rotate_collection_key_in(&tx, &collection)?;
+                    rotated.push(collection);
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// As [`Vault::rotate_collection_key_in`], sealing the new key to `organization`: a new
     /// organization key's, while it is changing.
     fn rotate_collection_key_for(&self, tx: &Connection, collection: &Uuid, organization: &[u8]) -> Result<Key> {
         let vault_id = self.keyring.vault_id;
-        let old = self.readable(collection)?.key.clone();
+        let old = self.readable(collection)?.full_key()?.clone();
         let new = crypto::random_key();
+        let kind_of = |kind: &str| Kind::parse(kind).ok_or_else(|| Error::Corrupt(format!("unknown kind {kind}")));
         {
             let mut statement = tx.prepare(
-                "SELECT id, record_id, kind, number, parent_id, deleted, nonce, ciphertext
+                "SELECT id, record_id, kind, number, parent_id, deleted, nonce, ciphertext, summary_nonce, summary
                  FROM revisions WHERE collection_id = ?1",
             )?;
             let rows = statement
@@ -663,10 +769,13 @@ impl Vault {
                         row.get::<_, bool>(5)?,
                         row.get::<_, Vec<u8>>(6)?,
                         row.get::<_, Vec<u8>>(7)?,
+                        row.get::<_, Option<Vec<u8>>>(8)?,
+                        row.get::<_, Option<Vec<u8>>>(9)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            for (id, record_id, kind, number, parent, deleted, nonce, ciphertext) in rows {
+            let (old_summary, new_summary) = (summary_key(&old, collection), summary_key(&new, collection));
+            for (id, record_id, kind, number, parent, deleted, nonce, ciphertext, summary_nonce, summary) in rows {
                 let parent = parent.as_deref().map(parse_id).transpose()?;
                 let aad = revision_aad(
                     &parse_id(&id)?,
@@ -677,7 +786,11 @@ impl Vault {
                     parent.as_ref(),
                     deleted,
                 );
-                let (old, new) = (kind_key(&old, &kind, collection), kind_key(&new, &kind, collection));
+                let kind = kind_of(&kind)?;
+                let (old, new) = (
+                    kind_key(&old, kind, collection, self.summaries),
+                    kind_key(&new, kind, collection, self.summaries),
+                );
                 let plaintext = crypto::decrypt(&old, &crypto::Sealed { nonce, ciphertext }, &aad)
                     .ok_or_else(|| Error::Corrupt(format!("revision {id} does not decrypt")))?;
                 let sealed = crypto::encrypt(&new, &plaintext, &aad);
@@ -685,6 +798,19 @@ impl Vault {
                     "UPDATE revisions SET nonce = ?1, ciphertext = ?2 WHERE id = ?3",
                     params![sealed.nonce, sealed.ciphertext, id],
                 )?;
+                if let (Some(nonce), Some(ciphertext)) = (summary_nonce, summary) {
+                    let sealed = summaries::reseal(
+                        &old_summary,
+                        &new_summary,
+                        &crypto::Sealed { nonce, ciphertext },
+                        &aad,
+                        &aad,
+                    )?;
+                    tx.execute(
+                        "UPDATE revisions SET summary_nonce = ?1, summary = ?2 WHERE id = ?3",
+                        params![sealed.nonce, sealed.ciphertext, id],
+                    )?;
+                }
             }
             // Attachments, one at a time: there may be many photos.
             let mut statement =
@@ -700,7 +826,10 @@ impl Vault {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             for (id, record_id, kind, media_type) in attachments {
-                let (old, new) = (kind_key(&old, &kind, collection), kind_key(&new, &kind, collection));
+                let (old, new) = (
+                    kind_key(&old, kind_of(&kind)?, collection, self.summaries),
+                    kind_key(&new, kind_of(&kind)?, collection, self.summaries),
+                );
                 let aad =
                     super::attachments::aad(&parse_id(&id)?, &parse_id(&record_id)?, &kind, collection, &media_type);
                 let (nonce, ciphertext): (Vec<u8>, Vec<u8>) = tx.query_row(
@@ -755,6 +884,7 @@ impl Vault {
                     collection,
                     &new,
                     role,
+                    self.held(role),
                 )?;
             }
             tx.execute(
@@ -851,7 +981,16 @@ fn rekey_person(
             .ok_or_else(|| Error::Corrupt("a collection is not sealed to the organization".into()))?
             .key;
         let role = parse_role(&role)?;
-        insert_grant(&tx, &vault_id, &person, &keys.public, &collection, key, role)?;
+        insert_grant(
+            &tx,
+            &vault_id,
+            &person,
+            &keys.public,
+            &collection,
+            key,
+            role,
+            held_in(conn, role)?,
+        )?;
     }
     let old = keyring.user(&person)?.clone();
     let mut user = new_user(&vault_id, person, old.name, &keys, password, database_key);
@@ -931,20 +1070,32 @@ pub(super) fn organization_collections(
                 name,
                 owner: owner.as_deref().map(parse_id).transpose()?,
                 role: Role::Admin,
+                held: Held::Collection,
                 key,
             })
         })
         .collect()
 }
 
-/// What a record of `kind` in a collection is encrypted with: batch sheets under the batch key,
-/// which operators hold, and everything else under the collection's.
-fn kind_key(collection_key: &Key, kind: &str, collection: &Uuid) -> Key {
-    if kind == "batch" {
-        super::batch_key(collection_key, collection)
-    } else {
-        collection_key.clone()
-    }
+/// Which key a grant of a role holds, from the roles kept in the database, for when no vault is
+/// open to ask (Vault::held).
+fn held_in(conn: &Connection, role: Role) -> Result<Held> {
+    Ok(match role {
+        Role::Operator => Held::Batch,
+        Role::Custom(id) => {
+            let may: Option<String> = conn
+                .query_row("SELECT may FROM roles WHERE id = ?1", params![id.to_string()], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if may.is_some_and(|may| may.split(',').any(|part| part == "chemistry")) {
+                Held::Collection
+            } else {
+                Held::Summary
+            }
+        }
+        _ => Held::Collection,
+    })
 }
 
 pub(super) fn people(keyring: &Keyring) -> Vec<Person> {
@@ -1113,6 +1264,7 @@ fn create_collection(conn: &Connection, name: &str, owner: Option<Uuid>) -> Resu
     Ok((id, crypto::random_key()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_grant(
     conn: &Connection,
     vault_id: &Uuid,
@@ -1121,14 +1273,16 @@ fn insert_grant(
     collection: &Uuid,
     key: &Key,
     role: Role,
+    held: Held,
 ) -> Result<()> {
-    // A batch operator gets the batch key only (super::batch_key).
-    let key = if role == Role::Operator {
-        super::batch_key(key, collection)
-    } else {
-        key.clone()
+    // A batch operator gets the batch key only, and a role that reads without chemistry the
+    // summary key only, each made from the collection's `key`.
+    let key = match held {
+        Held::Collection => key.clone(),
+        Held::Batch => super::batch_key(key, collection),
+        Held::Summary => summary_key(key, collection),
     };
-    let sealed = crypto::seal_key(public_key, &key, &grant_info(vault_id, collection, person, role));
+    let sealed = crypto::seal_key(public_key, &key, &grant_info(vault_id, collection, person, held));
     conn.execute(
         "INSERT INTO grants (user_id, collection_id, enc, ciphertext, role) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
