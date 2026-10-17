@@ -850,3 +850,31 @@ table.facts th {
   display: block;
   font-size: 0.8rem;
 }
+
+/* Comparing the unity formula with a limit formula. */
+.limits {
+  margin-top: 1rem;
+}
+
+.limits select {
+  width: 100%;
+}
+
+.limit-table td.range {
+  color: var(--muted);
+  padding-left: 0.5rem;
+}
+
+.limit-table tr.outside th,
+.limit-table tr.outside td {
+  color: var(--danger, #b42318);
+  font-weight: 600;
+}
+
+.cost {
+  margin-top: 1rem;
+}
+
+input.short {
+  width: 5rem;
+}

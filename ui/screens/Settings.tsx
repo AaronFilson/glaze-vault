@@ -45,7 +45,9 @@ export function Settings({
   onClose,
   access,
   onShared,
-  onTeamChanged
+  onTeamChanged,
+  limitFormulas,
+  prices
 }: {
   settings: VaultSettings;
   onSettings: (settings: VaultSettings) => Promise<void>;
@@ -70,6 +72,10 @@ export function Settings({
   onShared: (organizationWords: string[]) => void;
   /** People or collections changed: reads this person's access again. */
   onTeamChanged: () => void;
+  /** The person's own limit formulas (Limits.tsx). */
+  limitFormulas?: React.ReactNode;
+  /** The price list (Prices.tsx). */
+  prices?: React.ReactNode;
 }) {
   const [shrunkTo, setShrunkTo] = useState<string | null>(null);
   // In a team's vault, backups and switching vaults change everyone's, so they are for admins.
@@ -109,6 +115,8 @@ export function Settings({
           )}
         </Section>
       )}
+      {limitFormulas && <Section title="Limit formulas">{limitFormulas}</Section>}
+      {prices && <Section title="Prices">{prices}</Section>}
       <AutoLock settings={settings} onSettings={onSettings} />
       {admin && <Backups settings={settings} onSettings={onSettings} lastBackup={lastBackup} backUp={backUp} />}
       {admin && <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />}

@@ -621,6 +621,36 @@ export const scenarios: Scenario[] = [
         'expect "Firings (1)"'
       );
     }
+  },
+  {
+    name: 'Cost a recipe, compare it with a limit formula, and blend two recipes',
+    async run(app) {
+      await app.run(
+        'click "Settings"',
+        'type "Priced material 1" "EPK"',
+        'type "Price 1" "0.5"',
+        'type "Priced material 2" "Silica"',
+        'type "Price 2" "0.3"',
+        'click "Save prices"',
+        'expect "Prices saved." 10000',
+        'click "Back to recipes"',
+        'click "Iron slip"',
+        // 60 EPK at 0.5 and 40 silica at 0.3 in 105 parts: 0.40 a kilogram.
+        'expect "Costs $0.400 per kg dry"',
+        'expect "without Red Iron Oxide"',
+        'select "Compare with" "Cone 6 (Digitalfire)"',
+        'expect "outside Cone 6 (Digitalfire)"',
+        'select "Compare with" "No limit formula"',
+        'click "Line blend…"',
+        'select "Second recipe" "Leach 4321"',
+        'select "Steps" "3"',
+        'expect "| Silica |"',
+        'click "Save Iron slip 50 · Leach 4321 50 as a recipe"',
+        'expect "Saved as recipes: Iron slip 50 · Leach 4321 50." 10000',
+        'click "Done"',
+        'expect "[button \\"Iron slip 50 · Leach 4321 50\\""'
+      );
+    }
   }
 ];
 

@@ -19,3 +19,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0012](0012-teams-on-one-computer.md)    | A team on one computer: growing a vault, people, roles and collections | 2026-10-16 |
 | [0013](0013-recipe-details-and-additions.md) | Recipe details, additions, and finding recipes                   | 2026-10-16 |
 | [0014](0014-firing-log-and-photos.md)    | The firing log, and photos kept as attachments                         | 2026-10-16 |
+| [0015](0015-chemistry-tools.md)          | Chemistry tools: line blends, limit formulas and costs                 | 2026-10-16 |

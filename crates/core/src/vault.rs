@@ -83,6 +83,10 @@ pub enum Kind {
     /// A firing of a recipe in the firing log: how it was fired, what came out, measurements and
     /// photos (ADR 14).
     Firing,
+    /// A set of limits for a unity formula, to check recipes against (ADR 15).
+    Limits,
+    /// What materials cost, to cost recipes (ADR 15).
+    Prices,
 }
 
 impl Kind {
@@ -92,13 +96,22 @@ impl Kind {
             Kind::Material => "material",
             Kind::Batch => "batch",
             Kind::Firing => "firing",
+            Kind::Limits => "limits",
+            Kind::Prices => "prices",
         }
     }
 
     fn parse(text: &str) -> Option<Kind> {
-        [Kind::Recipe, Kind::Material, Kind::Batch, Kind::Firing]
-            .into_iter()
-            .find(|kind| kind.as_str() == text)
+        [
+            Kind::Recipe,
+            Kind::Material,
+            Kind::Batch,
+            Kind::Firing,
+            Kind::Limits,
+            Kind::Prices,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == text)
     }
 }
 

@@ -3,6 +3,8 @@
 import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core';
 import type { BatchSheet } from './batch';
 import type { Firing } from './firing';
+import type { LimitsContent } from './limits';
+import type { PricesContent } from './prices';
 import type { MaterialContent, RecipeContent } from './chemistry';
 
 /** Calls to the core not answered yet, by when they were made; the development tools show any
@@ -127,7 +129,7 @@ export interface RestoreResult {
   recoveryWords: string[] | null;
 }
 
-export type Kind = 'recipe' | 'material' | 'batch' | 'firing';
+export type Kind = 'recipe' | 'material' | 'batch' | 'firing' | 'limits' | 'prices';
 
 /** A file kept with a record, such as a firing's photo. */
 export interface Attachment {
@@ -199,6 +201,8 @@ export const api = {
   materials: () => invoke<MaterialHead[]>('list_records', { kind: 'material' }),
   batchSheets: () => invoke<BatchSheet[]>('list_records', { kind: 'batch' }),
   firings: () => invoke<Firing[]>('list_records', { kind: 'firing' }),
+  limitSets: () => invoke<Revision<LimitsContent>[]>('list_records', { kind: 'limits' }),
+  priceLists: () => invoke<Revision<PricesContent>[]>('list_records', { kind: 'prices' }),
   /** Asks for a photo and returns its bytes; empty if cancelled. */
   choosePhoto: () => invoke<ArrayBuffer>('choose_photo').then((buffer) => new Uint8Array(buffer)),
   addAttachment: (kind: Kind, recordId: string, mediaType: string, bytes: Uint8Array) =>

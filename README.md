@@ -10,7 +10,8 @@ glaze chemistry. No account, no cloud, nothing for users to install but the app.
 > from coded batch sheets without the recipe, recipe details, additions on top of the base and
 > search, and a firing log with test bar results and photos. See the
 > [user guide](docs/user/README.md) and the [decision records](docs/adr/README.md) for what comes
-> next: chemistry tools, a LAN host with offline laptops, signed revisions, and the first release.
+> next: working out recipes from a target formula, a LAN host with offline laptops, signed
+> revisions, and the first release. Line blends, limit formulas and costs are in too.
 
 | Part      | Built with                                                                         |
 | --------- | ---------------------------------------------------------------------------------- |

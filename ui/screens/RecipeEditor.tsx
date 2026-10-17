@@ -58,7 +58,8 @@ export function RecipeEditor({
   canCreate = true,
   groups,
   newIn,
-  batchSheet
+  batchSheet,
+  limits
 }: {
   recipes: RecipeHead[];
   deleted: RecipeHead[];
@@ -87,6 +88,8 @@ export function RecipeEditor({
   newIn?: React.ReactNode;
   /** Below the recipe: its batch sheet, in a team's vault. */
   batchSheet?: React.ReactNode;
+  /** Below the unity formula: comparing it with a limit formula. */
+  limits?: React.ReactNode;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -293,6 +296,7 @@ export function RecipeEditor({
 
       <aside className="analysis no-print" aria-label="Unity formula">
         <AnalysisPanel analysis={analysis} />
+        {limits}
       </aside>
     </>
   );
