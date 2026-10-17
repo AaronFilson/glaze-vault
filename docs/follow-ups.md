@@ -33,6 +33,13 @@ Work decided on but not done yet, with the reason it waits.
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
 
+## Clay bodies
+
+- The ranked list at the end of [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault):
+  first a body class and forming method on recipes, absorption and shrinkage targets as a band on
+  the vitrification chart, the lot of each clay on a firing, and body-aware blends with the
+  plastic to non-plastic ratio.
+
 ## Engineering
 
 - Nobody has installed the app on Windows or Linux yet: the end-to-end tests run the development
