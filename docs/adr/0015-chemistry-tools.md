@@ -28,8 +28,10 @@ mostly in the app.
   shows its cost per unit of dry batch, additions included, and names the materials with no
   price. In a team, whoever may read the list's collection sees prices.
 - **Not yet:** working out a recipe from a target formula. Glazecalc's chemistry can fit amounts
-  to target oxides (its `fitAmounts`), which this can use later; and triaxial blends.
-- Added after: printed batch sheets show each line's cost and the batch's, converting the batch's
+  to target oxides (its `fitAmounts`), which this can use later.
+- Added after: **triaxial blends** of three recipes, over a triangle with 2 to 6 steps along a side,
+  numbered row by row from the first recipe's corner, mixed as line blends are; a test is named
+  after the recipes with a share in it. And printed batch sheets show each line's cost and the batch's, converting the batch's
   unit to the list's; and each collection can have its own price list, a recipe being costed by
   its collection's list or else the newest the person can open.
 

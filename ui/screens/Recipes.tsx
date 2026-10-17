@@ -668,7 +668,7 @@ export function Recipes({
               })
             }
           >
-            Line blend…
+            Blend…
           </button>
         )}
         {canEdit(access, current.collectionId) && (

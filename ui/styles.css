@@ -967,3 +967,54 @@ input.short {
   align-items: center;
   gap: 0.35rem;
 }
+
+/* Blends (Blend.tsx): wide tables scroll, and a triaxial's triangle of numbered tests. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.compare-table.blend .shares {
+  display: block;
+  font-weight: 400;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.triangle-key {
+  margin: 0.5rem 0;
+  max-width: 22rem;
+}
+
+.triangle-key svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.triangle-key .triangle {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.triangle-key .point {
+  fill: var(--surface);
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.triangle-key text {
+  fill: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.triangle-key .corner {
+  font-weight: 600;
+  font-size: 12px;
+}

@@ -641,7 +641,7 @@ export const scenarios: Scenario[] = [
         'select "Compare with" "Cone 6 (Digitalfire)"',
         'expect "outside Cone 6 (Digitalfire)"',
         'select "Compare with" "No limit formula"',
-        'click "Line blend…"',
+        'click "Blend…"',
         'select "Second recipe" "Leach 4321"',
         'select "Steps" "3"',
         'expect "| Silica |"',

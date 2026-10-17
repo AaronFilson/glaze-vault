@@ -44,7 +44,6 @@ Work decided on but not done yet, with the reason it waits.
 
 - Work out a recipe from a target formula, or move one into a limit set, with Glazecalc's
   `fitAmounts`.
-- Triaxial blends.
 
 ## Engineering
 
