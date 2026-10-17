@@ -47,7 +47,7 @@ import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
 import { CollectionPicker, MoveTo } from './Team';
-import { byCollection, canEdit, defaultCollection, editableCollections, onlyWeighs } from '../team';
+import { byCollection, canEdit, defaultCollection, editableCollections, may, onlyWeighs } from '../team';
 
 const DAY = 24 * 60 * 60 * 1000;
 /** How long after the last keystroke unsaved edits are kept as a draft. */
@@ -579,7 +579,10 @@ export function Recipes({
     if (current && other) return [{ recordId: current.recordId, number: null }, { recordId: other.recordId, number: null }];
     return null;
   };
-  const canCompare = !!compareFrom();
+  // What this person may do with the recipe shown, in its collection (ADR 4).
+  const shownIn = recipe.current ? recipe.current.collectionId : newCollection;
+  const chemistry = may(access, shownIn, 'chemistry');
+  const canCompare = chemistry && !!compareFrom();
 
   const confirmText = () => {
     if (!confirming) return null;
@@ -743,7 +746,7 @@ export function Recipes({
             Firings ({count})
           </button>
         )}
-        {recipes.length > 1 && (
+        {recipes.length > 1 && may(access, current.collectionId, 'chemistry') && (
           <button
             type="button"
             onClick={() =>
@@ -787,7 +790,7 @@ export function Recipes({
       <header className="bar no-print">
         <span className="brand">Glaze Vault</span>
         <div className="bar-actions">
-          {view === 'recipes' && (
+          {view === 'recipes' && may(access, shownIn, 'print') && (
             <button type="button" aria-expanded={printing} onClick={() => setPrinting(!printing)}>
               Print…
             </button>
@@ -1131,6 +1134,7 @@ export function Recipes({
           canCreate={mayCreate}
           groups={team && access ? byCollection(recipes, access, names) : undefined}
           newIn={picker || undefined}
+          withoutChemistry={!chemistry}
           limits={
             <>
               <CostLine lines={shownRecipe.lines} list={prices} />
@@ -1150,7 +1154,7 @@ export function Recipes({
           batchSheet={
             <>
               {firingsPart()}
-              {batchSheetPart()}
+              {chemistry && batchSheetPart()}
               {movePart()}
             </>
           }

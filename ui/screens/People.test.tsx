@@ -2,8 +2,8 @@
 import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Access, CustomRole, Team } from '../api';
-import { People } from './Team';
+import type { Access, Capabilities, CustomRole, Team } from '../api';
+import { ManagedPeople, People } from './Team';
 
 afterEach(() => {
   cleanup();
@@ -15,7 +15,7 @@ const ALL = ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] as con
 const ACCESS: Access = {
   team: true,
   me: { id: 'ana', name: 'Ana', admin: true, mustSetPassword: false },
-  collections: [{ id: 'shared', name: 'Shared', owner: null, role: 'admin', changes: [...ALL] }]
+  collections: [{ id: 'shared', name: 'Shared', owner: null, role: 'admin', changes: [...ALL] , export: true, print: true, chemistry: true, manage: true }]
 };
 
 describe('roles an admin makes', () => {
@@ -38,7 +38,7 @@ describe('roles an admin makes', () => {
         case 'custom_roles':
           return roles;
         case 'create_role': {
-          const role = { id: 'r1', name: a.name as string, changes: a.changes as CustomRole['changes'] };
+          const role = { id: 'r1', name: a.name as string, changes: a.changes as CustomRole['changes'], ...(a.may as Capabilities) };
           roles.push(role);
           return role;
         }
@@ -55,7 +55,11 @@ describe('roles an admin makes', () => {
     fireEvent.click(within(form).getByLabelText('Prices'));
     fireEvent.click(within(form).getByRole('button', { name: 'Make role' }));
     await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Costing made. Give it to people above.'));
-    expect(calls.find((c) => c.cmd === 'create_role')?.args).toEqual({ name: 'Costing', changes: ['prices'] });
+    expect(calls.find((c) => c.cmd === 'create_role')?.args).toEqual({
+      name: 'Costing',
+      changes: ['prices'],
+      may: { export: true, print: true, chemistry: true, manage: false }
+    });
     // The form is empty again, for the next.
     expect((screen.getByLabelText('New role') as HTMLInputElement).value).toBe('');
 
@@ -127,5 +131,65 @@ describe('removing an admin', () => {
     fireEvent.click(screen.getByRole('button', { name: 'New organization recovery sheet…' }));
     fireEvent.click(screen.getByRole('button', { name: 'Make a new sheet' }));
     await waitFor(() => expect(onOrganizationKey).toHaveBeenCalledWith(['fresh', 'words']));
+  });
+
+  it('keeps a role without chemistry to firings, and from managing', async () => {
+    mockIPC((cmd) => (cmd === 'team' ? { people: [], grants: [] } : cmd === 'custom_roles' ? [] : null));
+    render(<People access={ACCESS} onChanged={() => {}} onShrunk={() => {}} onOrganizationKey={() => {}} />);
+    const editor = (await screen.findByLabelText('New role')).closest('form')!;
+    const box = (name: string) => within(editor).getByLabelText(name) as HTMLInputElement;
+    fireEvent.click(box('Recipes'));
+    fireEvent.click(box('Manages people on its collections'));
+    fireEvent.click(box('Reads recipes’ chemistry'));
+    expect([box('Recipes').checked, box('Recipes').disabled]).toEqual([false, true]);
+    expect(box('Firings').disabled).toBe(false);
+    expect([box('Manages people on its collections').checked, box('Manages people on its collections').disabled]).toEqual([
+      false,
+      true
+    ]);
+  });
+});
+
+describe('a manager who is not an admin', () => {
+  it('gives the people on their collections any role but an admin’s or a manager’s', async () => {
+    const lead = { id: 'lead', name: 'Lead', changes: ['recipe'], export: true, print: true, chemistry: true, manage: true };
+    const sales = { id: 'sales', name: 'Sales', changes: ['firing'], export: true, print: true, chemistry: false, manage: false };
+    const calls: { cmd: string; args: Record<string, unknown> }[] = [];
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
+      if (cmd === 'custom_roles') return [lead, sales];
+      if (cmd === 'team') {
+        return {
+          people: [
+            { id: 'ana', name: 'Ana', admin: true, mustSetPassword: false },
+            { id: 'cleo', name: 'Cleo', admin: false, mustSetPassword: false },
+            { id: 'ben', name: 'Ben', admin: false, mustSetPassword: false },
+            { id: 'dan', name: 'Dan', admin: false, mustSetPassword: false }
+          ],
+          grants: [
+            { person: 'cleo', collection: 'shared', role: 'role:lead' },
+            { person: 'dan', collection: 'shared', role: 'role:lead' }
+          ]
+        };
+      }
+      return null;
+    });
+    const access: Access = {
+      team: true,
+      me: { id: 'cleo', name: 'Cleo', admin: false, mustSetPassword: false },
+      collections: [{ ...ACCESS.collections[0], role: 'role:lead', manage: true }]
+    };
+    render(<ManagedPeople access={access} onChanged={() => {}} />);
+    const ben = (await screen.findByLabelText('Ben in Shared')) as HTMLSelectElement;
+    const offered = [...ben.options].map((o) => o.textContent);
+    expect(offered).toContain('Sales: changes firings, without chemistry');
+    expect(offered.some((o) => o?.startsWith('Lead'))).toBe(false);
+    // Another manager's role, Ana the admin and Cleo herself are not hers to change.
+    expect(screen.queryByLabelText('Dan in Shared')).toBeNull();
+    expect(screen.getByText('Lead: changes recipes, manages')).toBeTruthy();
+    expect(screen.queryByText('Ana')).toBeNull();
+    fireEvent.change(ben, { target: { value: 'role:sales' } });
+    await waitFor(() => expect(calls.some((c) => c.cmd === 'set_role')).toBe(true));
+    expect(calls.find((c) => c.cmd === 'set_role')!.args).toEqual({ person: 'ben', collection: 'shared', role: 'role:sales' });
   });
 });

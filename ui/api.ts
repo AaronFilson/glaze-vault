@@ -31,8 +31,17 @@ export interface VaultStatus {
  * role, or "role:" and the id of one an admin made. */
 export type Role = 'operator' | 'chemist' | 'tester' | 'formulator' | 'admin' | `role:${string}`;
 
-/** A role an admin made: it reads everything in its collections, and changes these kinds. */
-export interface CustomRole {
+/** What a role admins make may do besides changing records. Without chemistry it reads recipes'
+ * names and details and firings, and may change only firings; managing needs chemistry. */
+export interface Capabilities {
+  export: boolean;
+  print: boolean;
+  chemistry: boolean;
+  manage: boolean;
+}
+
+/** A role an admin made: it changes these kinds, and may do what its capabilities say. */
+export interface CustomRole extends Capabilities {
   id: string;
   name: string;
   changes: Kind[];
@@ -54,6 +63,12 @@ export interface Collection {
   role: Role;
   /** The kinds of record this person may make and change here, as the core decides. */
   changes: Kind[];
+  /** What else they may do here. Without chemistry, recipes come with no lines or notes. */
+  export: boolean;
+  print: boolean;
+  chemistry: boolean;
+  /** Gives and takes away roles here; an admin manages every collection. */
+  manage: boolean;
 }
 
 /** Who unlocked the vault, whether it is a team's, and what they can open. */
@@ -172,6 +187,17 @@ export interface CommandError {
   message: string;
 }
 
+/**
+ * A recipe as the screens expect it. Someone who reads a collection without its chemistry gets
+ * its recipes with no lines or notes (docs/adr/0004-roles-and-collections.md); they are shown as
+ * empty, and the screens say why.
+ */
+function filled<Content>(revision: Revision<Content>): Revision<Content> {
+  const content = revision.content as Partial<RecipeContent>;
+  if (Array.isArray(content.lines) && typeof content.notes === 'string') return revision;
+  return { ...revision, content: { ...content, lines: content.lines ?? [], notes: content.notes ?? '' } as Content };
+}
+
 export const api = {
   status: () => invoke<VaultStatus>('vault_status'),
   /** Makes the vault, leaves it unlocked, and returns the 24 recovery words. */
@@ -206,14 +232,16 @@ export const api = {
   goBackToOnePerson: () => invoke<string>('go_back_to_one_person'),
   createCollection: (name: string) => invoke<Collection>('create_collection', { name }),
   customRoles: () => invoke<CustomRole[]>('custom_roles'),
-  createRole: (name: string, changes: Kind[]) => invoke<CustomRole>('create_role', { name, changes }),
-  changeRole: (id: string, name: string, changes: Kind[]) => invoke<void>('change_role', { id, name, changes }),
+  createRole: (name: string, changes: Kind[], may: Capabilities) =>
+    invoke<CustomRole>('create_role', { name, changes, may }),
+  changeRole: (id: string, name: string, changes: Kind[], may: Capabilities) =>
+    invoke<void>('change_role', { id, name, changes, may }),
   /** Refused while anyone has the role. */
   deleteRole: (id: string) => invoke<void>('delete_role', { id }),
   renameCollection: (collection: string, name: string) => invoke<void>('rename_collection', { collection, name }),
   lock: () => invoke<void>('lock'),
   changePassword: (current: string, newPassword: string) => invoke<void>('change_password', { current, newPassword }),
-  recipes: () => invoke<RecipeHead[]>('list_records', { kind: 'recipe' }),
+  recipes: () => invoke<RecipeHead[]>('list_records', { kind: 'recipe' }).then((list) => list.map(filled)),
   /** A new record goes into `collection`, when one is named. */
   saveRecipe: (parent: string | null, content: RecipeContent, collection: string | null = null) =>
     invoke<RecipeHead>('save_record', { kind: 'recipe', parent, collection, content }),
@@ -238,11 +266,14 @@ export const api = {
     invoke<Revision<Content>[]>('save_records', { kind, collection, revisions }),
   /** Every revision of a record, newest first. */
   history: <Content>(kind: Kind, recordId: string) =>
-    invoke<Revision<Content>[]>('record_history', { kind, recordId }),
+    invoke<Revision<Content>[]>('record_history', { kind, recordId }).then((list) =>
+      kind === 'recipe' ? list.map(filled) : list
+    ),
   /** Deletes a record by its newest revision; returns the revision that deleted it. */
   deleteRecord: <Content>(kind: Kind, newest: string) => invoke<Revision<Content>>('delete_record', { kind, newest }),
   /** The deleted records, newest first. */
-  deletedRecords: <Content>(kind: Kind) => invoke<Revision<Content>[]>('deleted_records', { kind }),
+  deletedRecords: <Content>(kind: Kind) =>
+    invoke<Revision<Content>[]>('deleted_records', { kind }).then((list) => (kind === 'recipe' ? list.map(filled) : list)),
   /** Moves records, with all their revisions and attachments, to another collection, all or none. */
   moveRecords: (records: [Kind, string][], to: string) => invoke<void>('move_records', { records, to }),
   /** Removes every revision of a deleted record; returns how many there were. */

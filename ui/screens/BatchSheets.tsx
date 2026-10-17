@@ -14,7 +14,7 @@ import {
   type CodePair
 } from '../batch';
 import { amountOf, sameName } from '../chemistry';
-import { byCollection, canEdit } from '../team';
+import { byCollection, canEdit, may } from '../team';
 import { ConfirmNotice } from './Deleted';
 import { BatchTable } from './PrintView';
 
@@ -123,9 +123,11 @@ export function BatchSheets({
               </ConfirmNotice>
             )}
             <div className="row">
-              <button type="button" className="primary" disabled={!ready} onClick={() => onPrint(amount, unit)}>
-                Print
-              </button>
+              {may(access, current.collectionId, 'print') && (
+                <button type="button" className="primary" disabled={!ready} onClick={() => onPrint(amount, unit)}>
+                  Print
+                </button>
+              )}
               {canEdit(access, current.collectionId, 'batch') && (
                 <button type="button" className="link danger end" onClick={() => setConfirming(true)}>
                   Delete…

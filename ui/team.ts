@@ -1,7 +1,7 @@
 // What the screens need to know about a team's vault (docs/adr/0012-teams-on-one-computer.md):
 // which collection a record is in, what to call it, and whether this person may change it. The
 // core decides; these only keep the screens from offering what it would refuse.
-import type { Access, Collection, Kind } from './api';
+import type { Access, Capabilities, Collection, Kind } from './api';
 
 /** A collection's name as the lists show it. Private collections have no name of their own. */
 export function collectionLabel(collection: Collection, access: Access, names: Record<string, string>): string {
@@ -16,6 +16,14 @@ export function canEdit(access: Access | null, collectionId: string | null | und
   if (!access?.team) return true;
   const collection = access.collections.find((c) => c.id === collectionId);
   return !!collection && collection.changes.includes(kind);
+}
+
+/** Whether this person may export, print, read chemistry or manage people in a collection.
+ * Always, in a one-person vault. */
+export function may(access: Access | null, collectionId: string | null | undefined, what: keyof Capabilities): boolean {
+  if (!access?.team) return true;
+  const collection = access.collections.find((c) => c.id === collectionId);
+  return !!collection && collection[what];
 }
 
 /** The collections new records of a kind can go into. */

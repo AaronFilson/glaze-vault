@@ -41,7 +41,7 @@ const spar: MaterialHead = {
 const ONE_PERSON: Access = {
   team: false,
   me: { id: 'me', name: '', admin: false, mustSetPassword: false },
-  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] }]
+  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: true }]
 };
 
 /** A record the fake core refuses to save. */
@@ -855,4 +855,29 @@ it('says why a file cannot be imported', async () => {
   await user.click(await screen.findByRole('button', { name: 'Settings' }));
   await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
   expect((await screen.findByRole('alert')).textContent).toMatch(/a column for each oxide/);
+});
+
+describe('a role without chemistry', () => {
+  it('sees a recipe’s name and details, and no lines, unity formula, comparing or printing', async () => {
+    const sales: Access = {
+      team: true,
+      me: { id: 'ben', name: 'Ben', admin: false, mustSetPassword: false },
+      collections: [
+        { id: 'shared', name: 'Shared', owner: null, role: 'role:sales', changes: ['firing'], export: false, print: false, chemistry: false, manage: false }
+      ]
+    };
+    // The core sends the summary alone.
+    const summary = { ...shino, collectionId: 'shared', content: { name: 'Shino', cone: '10' } } as unknown as RecipeHead;
+    fakeCore({ access: sales, recipes: [summary] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    expect(screen.getByText(/not its materials, amounts or notes/)).toBeTruthy();
+    expect((screen.getByLabelText('Cone') as HTMLInputElement).value).toBe('10');
+    expect(screen.queryByLabelText('Material 1')).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Unity formula' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Print…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Compare…' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Log a firing…' })).toBeTruthy();
+  });
 });

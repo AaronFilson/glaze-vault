@@ -1,5 +1,15 @@
 import { useEffect, useId, useState } from 'react';
-import { api, errorText, MIN_PASSWORD_CHARS, type Access, type CustomRole, type Kind, type Role, type Team } from '../api';
+import {
+  api,
+  errorText,
+  MIN_PASSWORD_CHARS,
+  type Access,
+  type Capabilities,
+  type CustomRole,
+  type Kind,
+  type Role,
+  type Team
+} from '../api';
 import { collectionLabel, editableCollections } from '../team';
 
 /** Where a new recipe or material is saved, in a team's vault. */
@@ -197,10 +207,30 @@ export const CHANGEABLE: { kind: Kind; label: string }[] = [
   { kind: 'prices', label: 'Prices' }
 ];
 
-/** "Costing: changes prices", "Reviewer: reads". */
+/** What else a role admins make may do, in the order shown. Managing and every kind but firings
+ * need chemistry. */
+const CAPABILITIES: { key: keyof Capabilities; label: string }[] = [
+  { key: 'chemistry', label: 'Reads recipes’ chemistry' },
+  { key: 'export', label: 'Exports' },
+  { key: 'print', label: 'Prints' },
+  { key: 'manage', label: 'Manages people on its collections' }
+];
+
+/** What a new role may do until the admin changes it: as the built-in roles do. */
+const NEW_ROLE_MAY: Capabilities = { export: true, print: true, chemistry: true, manage: false };
+
+const mayOf = (role: CustomRole): Capabilities => ({
+  export: role.export,
+  print: role.print,
+  chemistry: role.chemistry,
+  manage: role.manage
+});
+
+/** "Costing: changes prices", "Reviewer: reads", "Sales: changes firings, without chemistry". */
 function customLabel(role: CustomRole): string {
   const kinds = CHANGEABLE.filter((c) => role.changes.includes(c.kind)).map((c) => c.label.toLowerCase());
-  return `${role.name}: ${kinds.length ? `changes ${kinds.join(', ')}` : 'reads'}`;
+  const also = [!role.chemistry && 'without chemistry', role.manage && 'manages'].filter(Boolean);
+  return `${role.name}: ${kinds.length ? `changes ${kinds.join(', ')}` : 'reads'}${also.length ? `, ${also.join(', ')}` : ''}`;
 }
 
 /** Settings for a team's admin: people, what each may do in each collection, and collections. */
@@ -461,9 +491,11 @@ export function People({
 
       <h3>Roles</h3>
       <p className="hint">
-        Besides the roles above, you can make your own. Each reads everything in the collections it is given on, as a
-        chemist does, and changes what you tick. A change to a role applies to everyone who has it, from their next
-        sign-in.
+        Besides the roles above, you can make your own. Each changes what you tick. With <strong>Reads recipes’
+        chemistry</strong> it reads everything in the collections it is given on, as a chemist does; without it, only
+        recipes’ names and details, and firings with their photos, and it can change nothing but firings. A role that
+        <strong>Manages people</strong> gives and takes away the other roles on its collections. A change to a role
+        applies to everyone who has it, from their next sign-in.
       </p>
       <ul className="plain-list">
         {roles.map((role) => (
@@ -471,7 +503,7 @@ export function People({
             key={role.id}
             role={role}
             busy={busy}
-            onSave={(name, changes) => change(() => api.changeRole(role.id, name, changes), `${name} saved.`)}
+            onSave={(name, changes, may) => change(() => api.changeRole(role.id, name, changes, may), `${name} saved.`)}
             onDelete={() => change(() => api.deleteRole(role.id), `${role.name} deleted.`)}
           />
         ))}
@@ -479,7 +511,9 @@ export function People({
           key={`new-${roles.length}`}
           role={null}
           busy={busy}
-          onSave={(name, changes) => change(() => api.createRole(name, changes), `${name} made. Give it to people above.`)}
+          onSave={(name, changes, may) =>
+            change(() => api.createRole(name, changes, may), `${name} made. Give it to people above.`)
+          }
         />
       </ul>
 
@@ -575,6 +609,106 @@ export function People({
   );
 }
 
+/**
+ * Settings for someone who manages collections but is not an admin: the people on them, and the
+ * roles a manager may give, which are any but an admin's or another manager's. Adding people to
+ * the vault, and everything else, stays with admins.
+ */
+export function ManagedPeople({ access, onChanged }: { access: Access; onChanged: () => void }) {
+  const [team, setTeam] = useState<Team | null>(null);
+  const [roles, setRoles] = useState<CustomRole[]>([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = () =>
+    Promise.all([api.team(), api.customRoles()])
+      .then(([team, roles]) => {
+        setTeam(team);
+        setRoles(roles);
+      })
+      .catch((e) => setError(errorText(e)));
+  useEffect(() => {
+    void load();
+  }, []);
+
+  if (!team) return error ? <p role="alert" className="error">{error}</p> : null;
+  const managed = access.collections.filter((c) => c.manage && !c.owner);
+  const roleOf = (person: string, collection: string) =>
+    team.grants.find((g) => g.person === person && g.collection === collection)?.role ?? '';
+  const managing = (role: string) => role === 'admin' || roles.some((r) => `role:${r.id}` === role && r.manage);
+  const offered = [
+    ...ROLES,
+    ...roles.filter((r) => !r.manage).map((r) => ({ role: `role:${r.id}` as Role, label: customLabel(r) }))
+  ];
+  const labelOf = (role: string) => {
+    const custom = roles.find((r) => `role:${r.id}` === role);
+    return custom ? customLabel(custom) : role === 'admin' ? 'Admin' : (ROLES.find((r) => r.role === role)?.label ?? role);
+  };
+  const people = team.people.filter((p) => p.id !== access.me.id && !p.admin);
+
+  return (
+    <>
+      <p>
+        You are signed in as <strong>{access.me.name}</strong>, and you manage{' '}
+        {managed.map((c) => c.name || 'Shared').join(', ')}: you can give people roles there, other than an admin’s
+        or a manager’s. Taking a role away gives the collection a new key. An admin adds people to the vault.
+      </p>
+      <table className="compare-table people">
+        <caption>People</caption>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            {managed.map((collection) => (
+              <th key={collection.id} scope="col">
+                {collection.name}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {people.map((person) => (
+            <tr key={person.id}>
+              <th scope="row">{person.name}</th>
+              {managed.map((collection) => {
+                const role = roleOf(person.id, collection.id);
+                return (
+                  <td key={collection.id}>
+                    {managing(role) ? (
+                      <span className="hint">{labelOf(role)}</span>
+                    ) : (
+                      <select
+                        aria-label={`${person.name} in ${collection.name}`}
+                        value={role}
+                        disabled={busy}
+                        onChange={(e) => {
+                          setBusy(true);
+                          setError('');
+                          api
+                            .setRole(person.id, collection.id, (e.target.value || null) as Role | null)
+                            .then(load)
+                            .then(onChanged)
+                            .catch((err) => setError(errorText(err)))
+                            .finally(() => setBusy(false));
+                        }}
+                      >
+                        {offered.map(({ role, label }) => (
+                          <option key={role} value={role}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {error && <p role="alert" className="error">{error}</p>}
+    </>
+  );
+}
+
 /** A role an admin made, to rename or change, or a new one to make. */
 function RoleEditor({
   role,
@@ -584,24 +718,40 @@ function RoleEditor({
 }: {
   role: CustomRole | null;
   busy: boolean;
-  onSave: (name: string, changes: Kind[]) => Promise<boolean>;
+  onSave: (name: string, changes: Kind[], may: Capabilities) => Promise<boolean>;
   onDelete?: () => void;
 }) {
   const [name, setName] = useState(role?.name ?? '');
   const [changes, setChanges] = useState<Kind[]>(role?.changes ?? []);
+  const [may, setMay] = useState<Capabilities>(role ? mayOf(role) : NEW_ROLE_MAY);
   const id = useId();
   const changed =
-    !role || name.trim() !== role.name || changes.length !== role.changes.length || changes.some((k) => !role.changes.includes(k));
+    !role ||
+    name.trim() !== role.name ||
+    changes.length !== role.changes.length ||
+    changes.some((k) => !role.changes.includes(k)) ||
+    CAPABILITIES.some(({ key }) => may[key] !== role[key]);
+  /** Without chemistry, a role changes nothing but firings, and manages nothing. */
+  const allowed = (kind: Kind) => may.chemistry || kind === 'firing';
+  const setCapability = (key: keyof Capabilities, on: boolean) => {
+    const next = { ...may, [key]: on };
+    if (!next.chemistry) {
+      next.manage = false;
+      setChanges(changes.filter((k) => k === 'firing'));
+    }
+    setMay(next);
+  };
   return (
     <li>
       <form
         className="role-editor"
         onSubmit={(e) => {
           e.preventDefault();
-          void onSave(name.trim(), changes).then((done) => {
+          void onSave(name.trim(), changes, may).then((done) => {
             if (done && !role) {
               setName('');
               setChanges([]);
+              setMay(NEW_ROLE_MAY);
             }
           });
         }}
@@ -620,12 +770,32 @@ function RoleEditor({
               <input
                 type="checkbox"
                 checked={changes.includes(kind)}
+                disabled={!allowed(kind)}
                 onChange={(e) => setChanges(e.target.checked ? [...changes, kind] : changes.filter((k) => k !== kind))}
               />
               {label}
             </label>
           ))}
         </fieldset>
+        <fieldset className="plain row wrap">
+          <legend>May</legend>
+          {CAPABILITIES.map(({ key, label }) => (
+            <label key={key} className="check">
+              <input
+                type="checkbox"
+                checked={may[key]}
+                disabled={key === 'manage' && !may.chemistry}
+                onChange={(e) => setCapability(key, e.target.checked)}
+              />
+              {label}
+            </label>
+          ))}
+        </fieldset>
+        {role && role.chemistry && !may.chemistry && (
+          <p className="hint">
+            Saving gives each collection this role is on a new key, since its people held the old one.
+          </p>
+        )}
         <div className="row">
           <button type="submit" disabled={busy || !name.trim() || !changed}>
             {role ? 'Save role' : 'Make role'}

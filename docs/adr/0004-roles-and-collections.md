@@ -54,10 +54,27 @@ Built in ADR 12 and after, more simply than the capability list above:
 - **Roles admins make** read everything in their collections, as a chemist does, and change the
   kinds of record ticked: recipes, materials, batch sheets, firings, limit formulas, prices. They
   are kept in the database (schema 5) and named in grants as `role:` and their id.
-- **Keys:** a custom role's grant holds the collection's key, so changing what a role may change
-  needs no new keys. Reading batch sheets alone stays the batch operator's, whose grant holds the
-  batch key. Exporting, viewing chemistry and managing people are not separate capabilities
-  yet: whoever reads a collection may export it, and only admins manage people and collections.
+- **Capabilities** of a role admins make, besides what it changes (schema 6): **export**,
+  **print**, **chemistry** and **manage**. The built-in roles keep what they could do before:
+  all but manage (a batch operator reads no chemistry), and admins manage everything.
+  - Export and print are kept by the page, and export also by the command that writes the file
+    (refused for someone who may export from no collection). The page has the content, so these
+    are guard rails, not locks.
+  - **Without chemistry**, a grant holds the collection's **summary key**, made from its key as
+    the batch key is. Each recipe revision keeps a summary, its content without `lines` and
+    `notes`, under it, and firings and their photos are kept under it too. This is the one place
+    the core looks inside content. Such a role may change only firings and may not manage.
+    Vaults from before are changed over, all or none, by the first admin (or the one person) to
+    unlock; until then nobody can be given such a role.
+  - **Manage** lets someone give and take away roles on that collection, other than an admin's
+    or a manager's, to anyone but an admin, a manager or themselves, and rename it. They hold the
+    collection's key; taking a role away rotates it, sealing the new key to the organization's
+    public key, which every key file has. Adding people to the vault stays with admins.
+- **Keys:** a custom role's grant holds the collection's key, or its summary key without
+  chemistry. Changing what a role may change needs no new keys; taking chemistry away rotates
+  the key of every collection it is on, and giving it back seals its grants again with the
+  collection's key. Going to a narrower key in a person's grant (to the batch or summary key, or
+  from one to the other) rotates the collection's key, as it did for batch operators.
 - **The core decides** each change by the kind of record and the person's role on its
   collection, and tells the page what each collection lets the person change, so the page asks
   about that and not about role names.
