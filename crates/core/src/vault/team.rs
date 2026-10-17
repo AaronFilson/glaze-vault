@@ -272,31 +272,21 @@ impl Vault {
                         |row| row.get(0),
                     )
                     .optional()?;
-                // Someone who held the collection's key and now gets only its batch key may have
-                // kept the first, so the collection gets a new one.
-                if role == Role::Operator && previous.is_some_and(|previous| previous != Role::Operator.as_str()) {
-                    self.conn.execute(
-                        "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                        params![person.to_string(), collection.to_string()],
-                    )?;
-                    self.rotate_collection_key(&collection)?;
-                    self.load_collections()?;
-                }
-                let collection = self.readable(&collection)?;
                 let tx = self.conn.unchecked_transaction()?;
                 tx.execute(
                     "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                    params![person.to_string(), collection.id.to_string()],
+                    params![person.to_string(), collection.to_string()],
                 )?;
-                insert_grant(
-                    &tx,
-                    &vault_id,
-                    &person,
-                    &user.public_key,
-                    &collection.id,
-                    &collection.key,
-                    role,
-                )?;
+                // Someone who held the collection's key and now gets only its batch key may have
+                // kept the first, so the collection gets a new one, in the same transaction: a
+                // failure part way leaves them with the role they had.
+                let key =
+                    if role == Role::Operator && previous.is_some_and(|previous| previous != Role::Operator.as_str()) {
+                        self.rotate_collection_key_in(&tx, &collection)?
+                    } else {
+                        self.readable(&collection)?.key.clone()
+                    };
+                insert_grant(&tx, &vault_id, &person, &user.public_key, &collection, &key, role)?;
                 tx.commit()?;
             }
             None => {
@@ -331,16 +321,19 @@ impl Vault {
             .query_map(params![person.to_string()], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
-        self.conn
-            .execute("DELETE FROM grants WHERE user_id = ?1", params![person.to_string()])?;
+        // Their grants go and their collections get new keys all at once, or not at all.
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM grants WHERE user_id = ?1", params![person.to_string()])?;
+        for collection in theirs {
+            self.rotate_collection_key_in(&tx, &parse_id(&collection)?)?;
+        }
+        tx.commit()?;
+        self.load_collections()?;
+        // Only then do they leave the key file. Until the new database key is written there, they
+        // are still listed, so removing them again finishes the job.
         let mut keyring = self.keyring.clone();
         keyring.users.retain(|user| user.id != person);
-        self.keyring = keyring;
-        self.rotate_database_key()?;
-        for collection in theirs {
-            self.rotate_collection_key(&parse_id(&collection)?)?;
-        }
-        self.load_collections()
+        self.rotate_database_key(keyring)
     }
 
     /// Gives someone who lost both their password and their recovery sheet a new one-time
@@ -461,6 +454,7 @@ impl Vault {
         if backup.header.keyring.user(&admin)?.organization_key.is_none() {
             return Err(Error::NotAllowed);
         }
+        Vault::may_replace(dir, &admin)?;
         let created_at = backup.header.created_at;
         let set_aside = super::place_backup(dir, backup, &database_key)?;
         let (mut vault, recovery) = Vault::recover_organization(dir, words, admin, new_password)?;
@@ -523,10 +517,9 @@ impl Vault {
         keyring.users.retain(|user| user.id == me);
         keyring.organization = None;
         super::user_mut(&mut keyring, &me).organization_key = None;
-        self.keyring = keyring;
         self.organization = None;
         // Writes the key file, now without the organization, with the new database key.
-        self.rotate_database_key()?;
+        self.rotate_database_key(keyring)?;
         self.load_collections()?;
         Ok(backup)
     }
@@ -542,11 +535,19 @@ impl Vault {
     /// A new key for a collection: every revision in it is encrypted again, and the key sealed to
     /// the people who keep their grants and to the organization.
     fn rotate_collection_key(&mut self, collection: &Uuid) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.rotate_collection_key_in(&tx, collection)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// As [`Vault::rotate_collection_key`], in the caller's transaction, which it must commit and
+    /// then reload the collections. Returns the new key.
+    fn rotate_collection_key_in(&self, tx: &Connection, collection: &Uuid) -> Result<Key> {
         let organization = self.admin()?.public.clone();
         let vault_id = self.keyring.vault_id;
         let old = self.readable(collection)?.key.clone();
         let new = crypto::random_key();
-        let tx = self.conn.unchecked_transaction()?;
         {
             let mut statement = tx.prepare(
                 "SELECT id, record_id, kind, number, parent_id, deleted, nonce, ciphertext
@@ -656,7 +657,7 @@ impl Vault {
                 let user = self.keyring.user(&person)?;
                 let role = Role::parse(&role).ok_or_else(|| Error::Corrupt(format!("unknown role {role}")))?;
                 insert_grant(
-                    &tx,
+                    tx,
                     &vault_id,
                     &person,
                     &user_public_key(user, &self.keys, &self.user_id),
@@ -669,19 +670,18 @@ impl Vault {
                 "DELETE FROM organization_grants WHERE collection_id = ?1",
                 params![collection.to_string()],
             )?;
-            insert_organization_grant(&tx, &vault_id, &organization, collection, &new)?;
+            insert_organization_grant(tx, &vault_id, &organization, collection, &new)?;
         }
-        tx.commit()?;
-        Ok(())
+        Ok(new)
     }
 
-    /// A new database key, sealed to everyone left and to the organization, and SQLCipher encrypts
-    /// the whole file again. The key file keeps the old key until the database has changed, so a
-    /// crash part way leaves a vault that opens with one or the other.
-    fn rotate_database_key(&mut self) -> Result<()> {
+    /// A new database key, sealed to everyone in `keyring` and to the organization, and SQLCipher
+    /// encrypts the whole file again. `keyring` becomes this vault's only once it is written. The
+    /// key file keeps the old key until the database has changed, so a crash part way leaves a
+    /// vault that opens with one or the other, and the next unlock finishes the change.
+    fn rotate_database_key(&mut self, mut keyring: Keyring) -> Result<()> {
         let vault_id = self.keyring.vault_id;
         let new = crypto::random_key();
-        let mut keyring = self.keyring.clone();
         for user in &mut keyring.users {
             let public = user_public_key(user, &self.keys, &self.user_id);
             let sealed = crypto::seal_key(&public, &new, &keyring::database_key_info(&vault_id, &user.id));
@@ -1352,6 +1352,65 @@ mod tests {
         let (restored, _, _) =
             Vault::restore_by_organization(again.path(), &path, &words, ana_id, "new admin password").unwrap();
         assert_eq!(names(&restored, Kind::Recipe), ["Shino"]);
+    }
+
+    #[test]
+    fn only_an_admin_here_restores_over_a_teams_vault() {
+        let (dir, mut ana, organization_sheet) = team();
+        let ana_id = ana.me().id;
+        let files = tempfile::tempdir().unwrap();
+        let team_backup = files.path().join("team.gvbackup");
+        ana.back_up(&team_backup).unwrap();
+        ana.add_person("Ben", ONE_TIME, &[(shared(&ana), Role::Chemist)])
+            .unwrap();
+        drop(ana);
+        // Ben's own vault, elsewhere, whose password he knows.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let (mut bens, _) = Vault::create(elsewhere.path(), BENS).unwrap();
+        let bens_backup = files.path().join("bens.gvbackup");
+        bens.back_up(&bens_backup).unwrap();
+        drop(bens);
+
+        assert!(matches!(
+            Vault::restore(dir.path(), &bens_backup, None, &Credential::Password(BENS)),
+            Err(Error::NotAnAdminHere)
+        ));
+        assert_eq!(Vault::people_in(dir.path()).unwrap().len(), 2);
+        assert!(Vault::set_aside(dir.path()).unwrap().is_empty());
+
+        let (restored, set_aside) =
+            Vault::restore(dir.path(), &team_backup, Some(ana_id), &Credential::Password(PASSWORD)).unwrap();
+        assert!(set_aside.is_some());
+        drop(restored);
+        let words = organization_sheet.words().join(" ");
+        Vault::restore_by_organization(dir.path(), &team_backup, &words, ana_id, "new admin password").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removing_someone_can_be_finished_after_it_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut ana, _) = team();
+        let ben = ana
+            .add_person("Ben", ONE_TIME, &[(shared(&ana), Role::Chemist)])
+            .unwrap();
+        // The key file cannot be written, so the database key cannot change.
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = ana.remove_person(ben.id);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(failed.is_err());
+        // Ben is still listed, so nothing written later drops him while the database key stays.
+        assert!(ana.people().unwrap().iter().any(|p| p.id == ben.id));
+        assert!(Vault::people_in(dir.path()).unwrap().iter().any(|p| p.id == ben.id));
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
+
+        ana.remove_person(ben.id).unwrap();
+        assert!(ana.people().unwrap().iter().all(|p| p.id != ben.id));
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
+        assert!(matches!(
+            Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME),
+            Err(Error::NoSuchPerson)
+        ));
     }
 
     #[test]

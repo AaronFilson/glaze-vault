@@ -55,7 +55,9 @@ decides the steps people take and what is built first.
   needed from them. When every admin is locked out, the organization recovery key does the same
   for an admin of their choosing.
 - **Backups and restoring:** only admins back up, since a backup holds every collection. A team's
-  backup restores with an admin's password, or the organization recovery key.
+  backup restores with an admin's password, or the organization recovery key. A team's vault on
+  disk is replaced only by one of its own admins: a restore checks the vault already there, and
+  switching to a set-aside vault needs an admin signed in to it.
 - **Formats:** the key file gains an organization section and per-person fields (format 2), written
   only when a vault grows, so a one-person vault's files stay as they are. The database gains
   collection names, owners and roles (schema 3).

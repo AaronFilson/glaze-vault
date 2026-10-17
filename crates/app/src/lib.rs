@@ -568,12 +568,11 @@ fn set_aside_vaults(state: State<AppState>) -> CommandResult<Vec<SetAside>> {
 #[tauri::command(async)]
 fn bring_back_vault(state: State<AppState>, name: String) -> CommandResult<Restored> {
     let mut vault = state.vault.lock().unwrap();
-    // Switching replaces everyone's vault, so in a team only an admin may.
-    if let Some(open) = vault.as_ref()
-        && open.is_team()
-        && !open.me().admin
-    {
-        return Err(Error::NotAllowed.into());
+    // Switching replaces everyone's vault, so in a team only an admin may, signed in. The vault on
+    // disk is what counts, since a locked one is not open to ask.
+    let admin = vault.as_ref().is_some_and(|open| open.me().admin);
+    if !admin && !Vault::people_in(&state.dir).unwrap_or_default().is_empty() {
+        return Err(Error::NotAnAdminHere.into());
     }
     vault.take();
     let set_aside = Vault::bring_back(&state.dir, &name)?;

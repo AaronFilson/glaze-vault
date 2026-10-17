@@ -404,6 +404,7 @@ impl Vault {
         if keyring.organization.is_some() && user.organization_key.is_none() {
             return Err(Error::NotAllowed);
         }
+        Vault::may_replace(dir, &user.id)?;
         let keys = open_private_key(&keyring, user, credential)?;
         let database_key = crypto::open_key(
             &keys,
@@ -420,6 +421,25 @@ impl Vault {
         }
         vault.record_restored(created_at, path)?;
         Ok((vault, set_aside))
+    }
+
+    /// A team's vault holds everyone's work, so only one of its admins may restore over it.
+    /// `person` has shown who they are to the backup; they must also be an admin of the vault in
+    /// `dir`, which their id from another vault is not. A one-person vault, or a key file that does
+    /// not read and so opens for nobody, may be replaced by anyone who can open the backup.
+    fn may_replace(dir: &Path, person: &Uuid) -> Result<()> {
+        let Ok(here) = read_keyring(dir) else {
+            return Ok(());
+        };
+        if here.organization.is_some()
+            && here
+                .user(person)
+                .ok()
+                .is_none_or(|user| user.organization_key.is_none())
+        {
+            return Err(Error::NotAnAdminHere);
+        }
+        Ok(())
     }
 
     /// The vault is now what the backup holds, so the backup is its latest, though the copy

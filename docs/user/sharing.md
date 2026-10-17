@@ -131,4 +131,6 @@ You can share the vault again at any time; your private collection is kept.
 
 Only admins back up a shared vault, since a backup holds every collection, and only an admin
 restores one: **Restore from a backup** asks which admin is restoring, and takes their password,
-their recovery key, or the organization's recovery key. See [Backups](backups.md).
+their recovery key, or the organization's recovery key. While a shared vault is on the computer,
+no other backup can replace it except by one of its admins, and only a signed-in admin can switch
+to a vault a restore set aside. See [Backups](backups.md).
