@@ -3,7 +3,8 @@
 // here from what was measured; only the measurements are kept.
 import type { Revision } from './api';
 import { amountOf } from './chemistry';
-import type { Atmosphere, Surface, Transparency } from './recipeFields';
+import { coneNumber, type Atmosphere, type Surface, type Transparency } from './recipeFields';
+import { hasSlipReadings, type SlipReadings } from './slip';
 
 export const FLAWS = [
   { value: 'crazed', label: 'Crazed' },
@@ -57,6 +58,8 @@ export interface FiringContent {
   color?: string;
   flaws?: Flaw[];
   bar?: BarReadings;
+  /** The slip or glaze as it was applied. */
+  slip?: SlipReadings;
   notes: string;
   photos: Photo[];
 }
@@ -143,6 +146,7 @@ export function firingMatches(content: FiringContent, search: string): boolean {
     content.surface,
     content.color,
     ...(content.flaws ?? []),
+    content.slip?.gel,
     content.notes,
     ...content.photos.map((photo) => photo.caption)
   ]
@@ -179,10 +183,41 @@ export function tidyFiring(content: FiringContent): FiringContent {
     transparency: content.transparency,
     color: text(content.color),
     flaws: content.flaws?.length ? FLAWS.map((f) => f.value).filter((f) => content.flaws!.includes(f)) : undefined,
-    bar: hasReadings(content.bar) ? content.bar : undefined
+    bar: hasReadings(content.bar) ? content.bar : undefined,
+    slip: hasSlipReadings(content.slip) ? content.slip : undefined
   };
   for (const [key, value] of Object.entries(optional)) {
     if (value !== undefined) (tidy as unknown as Record<string, unknown>)[key] = value;
   }
   return tidy;
+}
+
+/** One cone on a vitrification chart: the average of the firings at that cone that measured each. */
+export interface VitrificationPoint {
+  cone: string;
+  /** How many firings at this cone had either result. */
+  firings: number;
+  absorption?: number;
+  shrinkage?: number;
+}
+
+/** Absorption and total shrinkage against cone, across a recipe's firings, lowest cone first.
+ * Firings without a cone, or without either result, are left out. */
+export function vitrification(firings: Firing[]): VitrificationPoint[] {
+  const byCone = new Map<string, { cone: string; absorption: number[]; shrinkage: number[]; firings: number }>();
+  for (const firing of firings) {
+    const cone = firing.content.cone?.trim();
+    const results = barResults(firing.content.bar);
+    if (!cone || (results.absorption === undefined && results.totalShrinkage === undefined)) continue;
+    const key = cone.toLowerCase().replace(/^\^/, '');
+    const point = byCone.get(key) ?? { cone: key, absorption: [], shrinkage: [], firings: 0 };
+    point.firings += 1;
+    if (results.absorption !== undefined) point.absorption.push(results.absorption);
+    if (results.totalShrinkage !== undefined) point.shrinkage.push(results.totalShrinkage);
+    byCone.set(key, point);
+  }
+  const mean = (values: number[]) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : undefined);
+  return [...byCone.values()]
+    .sort((a, b) => coneNumber(a.cone) - coneNumber(b.cone) || a.cone.localeCompare(b.cone))
+    .map((p) => ({ cone: p.cone, firings: p.firings, absorption: mean(p.absorption), shrinkage: mean(p.shrinkage) }));
 }

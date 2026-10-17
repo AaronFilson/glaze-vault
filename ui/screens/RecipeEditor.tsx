@@ -14,6 +14,7 @@ import {
   TRANSPARENCIES,
   type RecipeDetails
 } from '../recipeFields';
+import { isSlip, waterPer100 } from '../slip';
 import type { Editor } from '../useEditor';
 import { AnalysisPanel } from './AnalysisPanel';
 import { DeletedList, DeletedNotice } from './Deleted';
@@ -347,7 +348,8 @@ const choices = <Value extends string>(options: { value: Value; label: string }[
   </>
 );
 
-/** A recipe's optional details: what it is, how it is fired, how it looks, and tags. */
+/** A recipe's optional details: what it is, how it is fired, how it looks, tags, and for a slip or
+ * glaze the gravity and viscosity it is mixed to. */
 function DetailsFields({
   shown,
   onChange
@@ -361,6 +363,8 @@ function DetailsFields({
   const typed = parseTags(tagText);
   const tagsShown =
     typed.length === tags.length && typed.every((tag, i) => tag === tags[i]) ? tagText : tags.join(', ');
+  const mixed = !!shown.gravity || !!shown.viscosity || shown.type === 'glaze' || isSlip(shown.type);
+  const water = waterPer100(shown.gravity ?? '');
   const select = <Value extends string>(
     id: string,
     label: string,
@@ -415,6 +419,35 @@ function DetailsFields({
           }}
         />
       </div>
+      {mixed && (
+        <>
+          <div className="detail narrow">
+            <label htmlFor="recipe-gravity">Specific gravity</label>
+            <input
+              id="recipe-gravity"
+              inputMode="decimal"
+              value={shown.gravity ?? ''}
+              placeholder="1.78"
+              aria-describedby={water === null ? undefined : 'recipe-water'}
+              onChange={(e) => onChange({ gravity: e.target.value || undefined })}
+            />
+            {water !== null && (
+              <span id="recipe-water" className="hint">
+                About {Math.round(water)} g water per 100 g dry
+              </span>
+            )}
+          </div>
+          <div className="detail narrow">
+            <label htmlFor="recipe-viscosity">Ford cup #4, s</label>
+            <input
+              id="recipe-viscosity"
+              inputMode="decimal"
+              value={shown.viscosity ?? ''}
+              onChange={(e) => onChange({ viscosity: e.target.value || undefined })}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

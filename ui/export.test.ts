@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import type { MaterialHead, RecipeHead } from './api';
-import { csvField, exportCsv, exportFileName, exportInsightXml, exportJson, exportMaterialsCsv } from './export';
+import { csvField, exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJson, exportMaterialsCsv } from './export';
+import type { Firing } from './firing';
 import { readImport } from './importFormats';
 
 const recipe = (name: string, lines: [string, string][], notes = ''): RecipeHead => ({
@@ -35,15 +36,15 @@ describe('exportCsv', () => {
     const csv = exportCsv([recipe('Leach 4321', [['Custer Feldspar', '40'], ['Silica', '60']], 'Cone 10, reduction')]);
     expect(csv.startsWith('﻿')).toBe(true);
     expect(csv.slice(1).split('\r\n')).toEqual([
-      'Recipe,Material,Amount,Percent,Added,Type,Cone,Atmosphere,Surface,Transparency,Color,Tags,Notes,Revision,Saved',
-      'Leach 4321,Custer Feldspar,40,40.00,,,,,,,,,"Cone 10, reduction",3,2026-10-14T12:00:00.000Z',
-      'Leach 4321,Silica,60,60.00,,,,,,,,,,,',
+      'Recipe,Material,Amount,Percent,Added,Type,Cone,Atmosphere,Surface,Transparency,Color,Tags,Gravity,Viscosity,Notes,Revision,Saved',
+      'Leach 4321,Custer Feldspar,40,40.00,,,,,,,,,,,"Cone 10, reduction",3,2026-10-14T12:00:00.000Z',
+      'Leach 4321,Silica,60,60.00,,,,,,,,,,,,,',
       ''
     ]);
   });
 
   it('keeps a recipe with no materials', () => {
-    expect(exportCsv([recipe('Empty', [])]).split('\r\n')[1]).toBe('Empty,,,,,,,,,,,,,3,2026-10-14T12:00:00.000Z');
+    expect(exportCsv([recipe('Empty', [])]).split('\r\n')[1]).toBe('Empty,,,,,,,,,,,,,,,3,2026-10-14T12:00:00.000Z');
   });
 
   it('writes details on the first row, and additions as a percent of the base', () => {
@@ -51,8 +52,8 @@ describe('exportCsv', () => {
     body.content.lines[2].addition = true;
     Object.assign(body.content, { type: 'clay body', cone: '6', atmosphere: 'reduction', color: 'Toasty', tags: ['throwing', 'R&D'] });
     const rows = exportCsv([body]).slice(1).split('\r\n');
-    expect(rows[1]).toBe('Stoneware,Ball clay,60,60.00,,Clay body,6,Reduction,,,Toasty,"throwing, R&D",,3,2026-10-14T12:00:00.000Z');
-    expect(rows[3]).toBe('Stoneware,Grog,10,10.00,yes,,,,,,,,,,');
+    expect(rows[1]).toBe('Stoneware,Ball clay,60,60.00,,Clay body,6,Reduction,,,Toasty,"throwing, R&D",,,,3,2026-10-14T12:00:00.000Z');
+    expect(rows[3]).toBe('Stoneware,Grog,10,10.00,yes,,,,,,,,,,,,');
     // And back again.
     expect(readImport('recipes.csv', exportCsv([body])).recipes[0]).toEqual({
       name: 'Stoneware',
@@ -68,6 +69,43 @@ describe('exportCsv', () => {
       color: 'Toasty',
       tags: ['throwing', 'R&D']
     });
+  });
+});
+
+describe('exportFiringsCsv', () => {
+  const firing = (firedOn: string, more: Partial<Firing['content']> = {}): Firing => ({
+    recordId: 'f-' + firedOn,
+    revisionId: 'fv-' + firedOn,
+    number: 2,
+    savedAt: Date.UTC(2026, 9, 16, 9),
+    content: { recipe: 'r-1', recipeNumber: 4, recipeName: 'Shino', firedOn, notes: '', photos: [], ...more }
+  });
+
+  it('writes a firing a row, oldest first, with what the bar shows', () => {
+    const rows = exportFiringsCsv([
+      firing('2026-10-16', {
+        cone: '10',
+        atmosphere: 'reduction',
+        peak: '1300',
+        flaws: ['crazed', 'pinholed'],
+        bar: { mark: '100', dry: '94', fired: '88', firedWeight: '50', soakedWeight: '51', suspendedWeight: '30' },
+        slip: { gravity: '1.45', viscosity: '', gel: 'none' },
+        photos: [
+          { id: 'a', mediaType: 'image/jpeg', caption: 'Front' },
+          { id: 'b', mediaType: 'image/jpeg', caption: '' }
+        ],
+        notes: 'Thick, by the rim'
+      }),
+      firing('2026-09-01')
+    ])
+      .slice(1)
+      .split('\r\n');
+    expect(rows[0].split(',').slice(0, 3)).toEqual(['Recipe', 'Recipe revision', 'Fired on']);
+    expect(rows[1]).toBe('Shino,4,2026-09-01,,,,,,,,,,,,,,,,,,,,,,,,,,,2,2026-10-16T09:00:00.000Z');
+    expect(rows[2]).toBe(
+      'Shino,4,2026-10-16,10,Reduction,,1300 °C,,,,,"Crazed, Pinholed",100,94,88,50,51,30,' +
+        '6.00,6.38,12.00,2.00,4.76,2.381,1.45,,none,Front; Photo 2,"Thick, by the rim",2,2026-10-16T09:00:00.000Z'
+    );
   });
 });
 

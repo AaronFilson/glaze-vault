@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
+  type DraftPart,
   api,
   errorText,
   type Access,
@@ -34,7 +35,7 @@ import type { PricesContent } from '../prices';
 import { CostLine, PriceList } from './Prices';
 import { Compare, type Side } from './Compare';
 import { FiringLog, type FiringEditing } from './FiringLog';
-import { newFiring, type Firing } from '../firing';
+import { newFiring, sameFiring, type Firing, type FiringContent } from '../firing';
 import { ConfirmNotice } from './Deleted';
 import { Import } from './Import';
 import type { ImportPlan } from '../importFormats';
@@ -115,7 +116,7 @@ export function Recipes({
   const [comparing, setComparing] = useState<[Side, Side] | null>(null);
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
-  const [kept, setKept] = useState({ recipe: false, material: false });
+  const [kept, setKept] = useState({ recipe: false, material: false, firing: false });
   const [newWords, setNewWords] = useState<string[] | null>(null);
   const [organizationWords, setOrganizationWords] = useState<string[] | null>(null);
   // Who is signed in and what they can open; in a team's vault, names for other people's
@@ -207,19 +208,39 @@ export function Recipes({
       draftKept.current = !!draft;
       const keptRecipe = draft?.recipe && restorePart(draft.recipe, heads, sameRecipe);
       const keptMaterial = draft?.material && restorePart(draft.material, ownMaterials, sameMaterial);
+      const keptFiring = draft?.firing && restorePart(draft.firing, allFirings, sameFiring);
       if (keptRecipe) recipe.show(keptRecipe.current, keptRecipe.content);
       if (keptMaterial) material.show(keptMaterial.current, keptMaterial.content);
+      if (keptFiring) setFiring({ current: keptFiring.current, draft: keptFiring.content });
       if (keptMaterial && !keptRecipe) setView('materials');
-      setKept({ recipe: !!keptRecipe, material: !!keptMaterial });
+      else if (keptFiring && !keptRecipe) setView('firings');
+      setKept({ recipe: !!keptRecipe, material: !!keptMaterial, firing: !!keptFiring });
       setLoaded(true);
     })().catch((e) => setError(errorText(e)));
     // Once, on opening.
   }, []);
 
+  // A firing being logged or changed, as a draft. A new one counts from when it is opened.
+  const firingChanged = !!firing && (!firing.current || !sameFiring(firing.current.content, firing.draft));
+  const firingPart: DraftPart<FiringContent> | undefined =
+    firing && firingChanged
+      ? { recordId: firing.current?.recordId ?? null, revisionId: firing.current?.revisionId ?? null, content: firing.draft }
+      : undefined;
+  // Opening another firing, or saving this one, ends what was kept from last time.
+  const editFiring = (next: FiringEditing | null) => {
+    if (!next || next.current !== firing?.current) setKept((k) => ({ ...k, firing: false }));
+    setFiring(next);
+  };
+  // For locking, which may run after the recipe's and material's changes are saved or discarded.
+  const firingPartRef = useRef(firingPart);
+  firingPartRef.current = firingPart;
+
   // Keeps unsaved edits as an encrypted draft a moment after the last change, and forgets the
   // draft as soon as nothing is unsaved.
   const unsaved: Draft | null =
-    recipe.part || material.part ? { recipe: recipe.part, material: material.part } : null;
+    recipe.part || material.part || firingPart
+      ? { recipe: recipe.part, material: material.part, firing: firingPart }
+      : null;
   const unsavedJson = JSON.stringify(unsaved);
   useEffect(() => {
     if (!loaded) return;
@@ -366,9 +387,13 @@ export function Recipes({
     if (problems.length) setMaterialError(problems.join(' '));
   };
 
+  // A firing being edited is kept for next time rather than asked about: its editor may not be
+  // on the screen to save it from.
   const lock = () =>
     leave('all', async () => {
-      await api.lock();
+      const firing = firingPartRef.current;
+      if (firing) await writeDraft(() => api.lockWithDraft({ firing }));
+      else await api.lock();
       onLocked('manual');
     });
 
@@ -620,7 +645,7 @@ export function Recipes({
     const count = firings.filter((f) => f.content.recipe === current.recordId).length;
     const show = (editing: FiringEditing | null) => {
       setFiringsOf(current.recordId);
-      if (editing) setFiring(editing);
+      if (editing) editFiring(editing);
       setView('firings');
     };
     return (
@@ -744,6 +769,17 @@ export function Recipes({
             }}
           />
         )}
+        {kept.firing && firingChanged && firing && (
+          <KeptNotice
+            name={firing.draft.recipeName ? `the firing of ${firing.draft.recipeName}` : 'a firing'}
+            plain
+            onShow={view === 'firings' ? undefined : () => setView('firings')}
+            onDiscard={() => {
+              editFiring(firing.current ? { current: firing.current, draft: firing.current.content } : null);
+              setKept((k) => ({ ...k, firing: false }));
+            }}
+          />
+        )}
         {printing && view === 'recipes' && (
           <PrintOptions job={printJob} onPrint={print} onCancel={() => setPrinting(false)} />
         )}
@@ -796,6 +832,7 @@ export function Recipes({
           backUp={backUp}
           recipes={recipes}
           materials={materials}
+          firings={firings}
           status={status}
           update={update}
           onUpdate={(found) => {
@@ -898,7 +935,7 @@ export function Recipes({
           recipes={recipes}
           access={access}
           editing={firing}
-          onEdit={setFiring}
+          onEdit={editFiring}
           forRecipe={firingsOf}
           onForRecipe={setFiringsOf}
           onSaved={(saved) => setFirings((list) => [saved, ...list.filter((f) => f.recordId !== saved.recordId)])}
@@ -1005,12 +1042,23 @@ export function Recipes({
   );
 }
 
-function KeptNotice({ name, onShow, onDiscard }: { name: string; onShow?: () => void; onDiscard: () => void }) {
+function KeptNotice({
+  name,
+  plain = false,
+  onShow,
+  onDiscard
+}: {
+  name: string;
+  /** The name is a phrase, not a record's name to show in bold. */
+  plain?: boolean;
+  onShow?: () => void;
+  onDiscard: () => void;
+}) {
   return (
     <div className="notice" role="status">
       <p>
-        These are your unsaved changes to <strong>{name || 'Untitled'}</strong> from last time. Save them, or discard
-        them.
+        These are your unsaved changes to {plain ? name : <strong>{name || 'Untitled'}</strong>} from last time. Save
+        them, or discard them.
       </p>
       <div className="row">
         {onShow && (

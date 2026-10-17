@@ -15,7 +15,13 @@ Fill in what you know; only the recipe and the day are needed:
   schedule, such as `100/hr to 600, 300/hr to cone 6, 10 min hold`.
 - **Result:** the surface, how transparent it is, the colour in your words, and any flaws:
   crazed, shivered, crawled, pinholed, blistered, ran, bloated, warped.
+- **Slip or glaze as applied:** its specific gravity, its seconds through a Ford cup #4, and how it
+  gels standing. It opens by itself for a slip, or for a recipe that has targets for these (see
+  [Recipes](recipes.md)), and shows the targets beside what you measured.
 - **Notes,** then **Save**.
+
+What you type is kept, encrypted, if the vault locks before you save, as for recipes: unlocking
+brings it back. **Lock** keeps it too, without asking.
 
 **Firings (3)** below a recipe shows its firings. In the firing log, **Search** finds firings by
 recipe, cone, atmosphere, kiln, colour, flaws, notes and captions.
@@ -39,6 +45,14 @@ measurements. It opens by itself for a recipe whose type is a clay body or slip.
 | Porosity | water taken up, as a percentage of the bar's volume |
 | Bulk density | fired weight over volume, in g/cm³ |
 
+## Vitrification
+
+With a recipe's firings shown, and test bars measured at two cones or more, a chart above them
+shows absorption and total shrinkage against cone, averaged at each cone. As a body nears
+maturity its absorption falls toward zero and its shrinkage levels off; past it, the bar may
+bloat and shrink less. Point at a cone, or tab to it, for its numbers; **As a table** has them
+all.
+
 ## Photos
 
 Choose **Add photo…** and pick a photo: JPEG, PNG or WebP, and HEIC (iPhone photos) on a Mac. A new
@@ -47,6 +61,12 @@ which is plenty to see crazing and keeps the vault small. Give each a caption, a
 
 **Remove** takes a photo off the firing; earlier revisions still have it until the firing is
 deleted.
+
+## Exporting the log
+
+**Settings → Export → Export firing log as CSV…** saves every firing you can open as a
+spreadsheet, a row each, oldest first: how it was fired, what came out, the bar's readings and
+results, and the slip as applied. Photos are listed by caption. The file is not encrypted.
 
 ## Deleting a firing
 

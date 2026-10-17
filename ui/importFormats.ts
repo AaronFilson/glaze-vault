@@ -86,7 +86,9 @@ function readJson(text: string): ImportPlan {
       surface: str(r.surface),
       transparency: str(r.transparency),
       color: str(r.color),
-      tags: Array.isArray(r.tags) ? r.tags.map(str).join(', ') : str(r.tags)
+      tags: Array.isArray(r.tags) ? r.tags.map(str).join(', ') : str(r.tags),
+      gravity: str(r.gravity),
+      viscosity: str(r.viscosity)
     }),
     lines: (Array.isArray(r.lines) ? r.lines : []).map((l: Record<string, unknown>) => ({
       material: str(l.material),
@@ -365,7 +367,9 @@ function readCsv(text: string): ImportPlan {
         surface: at(row, column('surface')),
         transparency: at(row, column('transparency')),
         color: at(row, column('color', 'colour')),
-        tags: at(row, column('tags'))
+        tags: at(row, column('tags')),
+        gravity: at(row, column('gravity', 'specific gravity', 'sg')),
+        viscosity: at(row, column('viscosity'))
       });
     const recipes: RecipeContent[] = [];
     let last: string | null = null;
@@ -476,7 +480,9 @@ function readDetails(text: { [Field in keyof RecipeDetails]?: string }): RecipeD
     surface: optionNamed(SURFACES, text.surface ?? ''),
     transparency: optionNamed(TRANSPARENCIES, text.transparency ?? ''),
     color: text.color,
-    tags: parseTags(text.tags ?? '')
+    tags: parseTags(text.tags ?? ''),
+    gravity: tidy(text.gravity ?? ''),
+    viscosity: tidy(text.viscosity ?? '')
   });
 }
 

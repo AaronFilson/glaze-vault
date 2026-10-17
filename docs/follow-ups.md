@@ -36,11 +36,9 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Firing log ([ADR 14](adr/0014-firing-log-and-photos.md))
 
-- Keep unsaved edits to a firing as a draft when the vault locks, as recipes are.
-- A vitrification chart: absorption and shrinkage against cone across a recipe's firings.
-- Slips: specific gravity, viscosity (Ford cup seconds) and gel, measured and target.
-- Export the log as CSV, with the bar's results.
 - A role for someone who logs firings without changing recipes.
+- The solids' density for the water a gravity takes is 2.6 g/cm³ for every recipe; a recipe's own,
+  worked out from its materials, would be closer.
 
 ## Chemistry tools ([ADR 15](adr/0015-chemistry-tools.md))
 

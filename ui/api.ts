@@ -2,7 +2,7 @@
 // what these return.
 import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core';
 import type { BatchSheet } from './batch';
-import type { Firing } from './firing';
+import type { Firing, FiringContent } from './firing';
 import type { LimitsContent } from './limits';
 import type { PricesContent } from './prices';
 import type { MaterialContent, RecipeContent } from './chemistry';
@@ -115,6 +115,7 @@ export interface DraftPart<Content> {
 export interface Draft {
   recipe?: DraftPart<RecipeContent>;
   material?: DraftPart<MaterialContent>;
+  firing?: DraftPart<FiringContent>;
 }
 
 export type RestoreWith =

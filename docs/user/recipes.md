@@ -25,6 +25,10 @@ Under the name are details you can fill in or leave empty, in any recipe:
 - **Atmosphere:** oxidation, neutral, reduction, salt or soda, wood, or raku.
 - **Surface** and **Transparency**, and the **Color** in your own words.
 - **Tags:** any words you sort recipes by, separated by commas: `production, celadon, R&D`.
+- For a glaze or slip, the **Specific gravity** it is mixed to and its **Ford cup #4** seconds. With
+  a gravity, the editor says about how much water that takes per 100 g of dry materials, taking
+  the materials' density as 2.6 g/cm³. [Firings](firing-log.md) show these beside what was
+  measured.
 
 They are kept with each revision, printed with the recipe, and go with it in exports.
 
