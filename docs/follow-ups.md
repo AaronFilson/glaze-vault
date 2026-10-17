@@ -42,6 +42,13 @@ Work decided on but not done yet, with the reason it waits.
 - Export the log as CSV, with the bar's results.
 - A role for someone who logs firings without changing recipes.
 
+## Chemistry tools ([ADR 15](adr/0015-chemistry-tools.md))
+
+- Work out a recipe from a target formula, or move one into a limit set, with Glazecalc's
+  `fitAmounts`.
+- Triaxial blends.
+- Costs on printed batch sheets, and price lists per collection.
+
 ## Engineering
 
 - Nobody has installed the app on Windows or Linux yet: the end-to-end tests run the development
