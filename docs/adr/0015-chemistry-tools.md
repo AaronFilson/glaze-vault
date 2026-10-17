@@ -40,6 +40,14 @@ mostly in the app.
   after the recipes with a share in it. And printed batch sheets show each line's cost and the batch's, converting the batch's
   unit to the list's; and each collection can have its own price list, a recipe being costed by
   its collection's list or else the newest the person can open.
+- Added after, from [the clay body research](../research/clay-bodies.md): **a body's chemistry.**
+  A recipe typed as a clay body, slip, engobe, casting slip or terra sigillata shows fired oxide
+  weight percent, a formula with Al₂O₃ = 1, KNaO and all fluxes in mole percent and Fe₂O₃ + TiO₂,
+  with a note that calculated expansion leaves free quartz and cristobalite out; its unity
+  formula is folded below. A person's materials can have a **class** (ball clay, kaolin, grog
+  and so on) and optional **data-sheet values**, kept as text like other fields. A slip's water
+  per 100 dry is worked out with its solids' density by volume, each material's from its data
+  sheet, its class, a short table of typical standard ones, or 2.6 g/cm³.
 
 ## Consequences
 

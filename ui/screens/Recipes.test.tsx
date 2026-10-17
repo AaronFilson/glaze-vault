@@ -459,6 +459,23 @@ describe('your materials', () => {
     });
   });
 
+  it('keep a class and a data sheet', async () => {
+    const core = fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'Grolleg' } });
+    await user.selectOptions(screen.getByLabelText('Class'), 'kaolin');
+    fireEvent.change(screen.getByLabelText(/^Absorption/), { target: { value: '12' } });
+    fireEvent.change(screen.getByLabelText(/^Fired at cone/), { target: { value: '10' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args.content).toMatchObject({
+      class: 'kaolin',
+      sheet: { absorption: '12', cone: '10' }
+    });
+  });
+
   it('take a new name into the recipes that use them', async () => {
     const usesSpar = { ...shino, content: { ...shino.content, lines: [{ material: 'spar lot 7', amount: '50' }] } };
     const core = fakeCore({ recipes: [usesSpar], materials: [spar] });

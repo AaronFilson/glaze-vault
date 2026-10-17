@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { RecipeHead } from '../api';
+import { isBody } from '../body';
 import type { Analysis, MaterialLibrary, RecipeContent, RecipeLine } from '../chemistry';
+import { recipeDensity } from '../materialData';
 import {
   ATMOSPHERES,
   matchesSearch,
@@ -186,7 +188,7 @@ export function RecipeEditor({
             placeholder="Untitled"
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
           />
-          <DetailsFields shown={shown} onChange={(change) => setDraft({ ...draft, ...change })} />
+          <DetailsFields shown={shown} library={library} onChange={(change) => setDraft({ ...draft, ...change })} />
 
           <table className="lines">
             <thead>
@@ -295,8 +297,8 @@ export function RecipeEditor({
         {current && <RevisionHistory kind="recipe" current={current} viewing={viewing} onView={editor.setViewing} />}
       </main>
 
-      <aside className="analysis no-print" aria-label="Unity formula">
-        <AnalysisPanel analysis={analysis} />
+      <aside className="analysis no-print" aria-label={isBody(shown.type) ? 'Chemistry' : 'Unity formula'}>
+        <AnalysisPanel analysis={analysis} body={isBody(shown.type)} />
         {limits}
       </aside>
     </>
@@ -352,9 +354,11 @@ const choices = <Value extends string>(options: { value: Value; label: string }[
  * glaze the gravity and viscosity it is mixed to. */
 function DetailsFields({
   shown,
+  library,
   onChange
 }: {
   shown: RecipeContent;
+  library: MaterialLibrary;
   onChange: (change: Partial<RecipeDetails>) => void;
 }) {
   // Tags are typed as text, so a comma can be typed before the next tag.
@@ -364,7 +368,8 @@ function DetailsFields({
   const tagsShown =
     typed.length === tags.length && typed.every((tag, i) => tag === tags[i]) ? tagText : tags.join(', ');
   const mixed = !!shown.gravity || !!shown.viscosity || shown.type === 'glaze' || isSlip(shown.type);
-  const water = waterPer100(shown.gravity ?? '');
+  const solids = recipeDensity(shown.lines, library.own);
+  const water = waterPer100(shown.gravity ?? '', solids.density);
   const select = <Value extends string>(
     id: string,
     label: string,
@@ -433,7 +438,8 @@ function DetailsFields({
             />
             {water !== null && (
               <span id="recipe-water" className="hint">
-                About {Math.round(water)} g water per 100 g dry
+                About {Math.round(water)} g water per 100 g dry, with solids of {solids.density.toFixed(2)} g/cm³
+                {solids.worked ? ' from its materials' : ''}
               </span>
             )}
           </div>

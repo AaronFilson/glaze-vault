@@ -11,6 +11,7 @@ import {
   type OxideGroup,
   type UmfResult
 } from '@glazecalc/chemistry';
+import type { DataSheet, MaterialClass } from './materialData';
 import type { RecipeDetails } from './recipeFields';
 import additivesNdjson from '../vendor/glazecalc/data/additives.ndjson?raw';
 import materialsNdjson from '../vendor/glazecalc/data/materials.ndjson?raw';
@@ -69,6 +70,10 @@ export interface MaterialContent {
   loi: string;
   formula?: FormulaLine[];
   notes: string;
+  /** What it is, as a body formulator sorts materials: ball clay, kaolin, grog. */
+  class?: MaterialClass;
+  /** Its data sheet's physical values. */
+  sheet?: DataSheet;
 }
 
 /** Every oxide the chemistry knows, in the order of its columns. */
@@ -146,6 +151,8 @@ export interface MaterialLibrary {
   /** For the material list: every name, and whether it is the person's own. */
   names: { name: string; yours: boolean }[];
   resolve: (name: string) => Resolved;
+  /** The person's own materials it was made from. */
+  own: MaterialContent[];
 }
 
 const hasOxides = (material: StandardMaterial) =>
@@ -201,7 +208,7 @@ export function materialLibrary(custom: MaterialContent[]): MaterialLibrary {
     ...[...yours.values()].map((material) => ({ name: material.name.trim(), yours: true })),
     ...STANDARD_NAMES.filter((name) => !yours.has(normalize(name))).map((name) => ({ name, yours: false }))
   ].sort((a, b) => a.name.localeCompare(b.name));
-  return { names, resolve };
+  return { names, resolve, own: custom };
 }
 
 export const STANDARD_LIBRARY = materialLibrary([]);

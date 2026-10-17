@@ -34,11 +34,6 @@ Work decided on but not done yet, with the reason it waits.
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
 
-## Firing log ([ADR 14](adr/0014-firing-log-and-photos.md))
-
-- The solids' density for the water a gravity takes is 2.6 g/cm³ for every recipe; a recipe's own,
-  worked out from its materials, would be closer.
-
 ## Chemistry tools ([ADR 15](adr/0015-chemistry-tools.md))
 
 - Fitting could choose materials itself from the whole library, with Glazecalc's
