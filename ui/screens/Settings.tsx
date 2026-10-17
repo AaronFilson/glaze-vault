@@ -123,7 +123,9 @@ export function Settings({
       <AutoLock settings={settings} onSettings={onSettings} />
       {admin && <Backups settings={settings} onSettings={onSettings} lastBackup={lastBackup} backUp={backUp} />}
       {admin && <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />}
-      {(!team || editableCollections(access).length > 0) && <Import onImport={onImport} />}
+      {(!team || editableCollections(access, 'recipe').length > 0 || editableCollections(access, 'material').length > 0) && (
+        <Import onImport={onImport} />
+      )}
       <Export recipes={recipes} materials={materials} firings={firings} version={status.version} />
       <ChangePassword />
       <RecoveryKey onNewRecoveryKey={onNewRecoveryKey} />

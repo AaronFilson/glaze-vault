@@ -39,7 +39,7 @@ export function PriceLists({
   const [chosen, setChosen] = useState<string | null>(
     () =>
       lists.find((l) => readable.some((c) => c.id === l.collectionId))?.collectionId ??
-      editableCollections(access).find((c) => !c.owner)?.id ??
+      editableCollections(access, 'prices').find((c) => !c.owner)?.id ??
       readable[0]?.id ??
       null
   );
@@ -48,7 +48,7 @@ export function PriceLists({
     return <PriceList list={list} library={library} canEdit collection={null} onSaved={onSaved} />;
   }
   const list = lists.find((l) => l.collectionId === chosen) ?? null;
-  const editable = canEdit(access, chosen);
+  const editable = canEdit(access, chosen, 'prices');
   return (
     <>
       <div className="row">

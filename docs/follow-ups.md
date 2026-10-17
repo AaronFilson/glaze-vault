@@ -29,7 +29,8 @@ Work decided on but not done yet, with the reason it waits.
 
 - Removing an admin, or taking admin away: needs a new organization key, sealed to the admins
   left, every collection key sealed to it again, and a new organization recovery sheet.
-- Roles that admins can change.
+- Capabilities that are not about changing a kind of record, such as exporting, or reading
+  recipes without their chemistry, for roles admins make (ADR 4).
 - Moving a material to another collection, as recipes move.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
@@ -37,7 +38,6 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Firing log ([ADR 14](adr/0014-firing-log-and-photos.md))
 
-- A role for someone who logs firings without changing recipes.
 - The solids' density for the water a gravity takes is 2.6 g/cm³ for every recipe; a recipe's own,
   worked out from its materials, would be closer.
 

@@ -1022,3 +1022,13 @@ input.short {
 .fit-button {
   margin-top: 0.5rem;
 }
+
+.role-editor {
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+
+.role-editor fieldset legend {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}

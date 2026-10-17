@@ -609,7 +609,7 @@ export function Recipes({
   /** Below a saved recipe someone may change, in a team's vault: its batch sheet. */
   const batchSheetPart = () => {
     const current = recipe.current;
-    if (!team || !current || recipe.viewing || !canEdit(access, current.collectionId)) return null;
+    if (!team || !current || recipe.viewing || !canEdit(access, current.collectionId, 'batch')) return null;
     const made = sheets.find((s) => s.content.recipe === current.recordId) ?? null;
     if (makingSheet) {
       return (
@@ -711,7 +711,7 @@ export function Recipes({
             Blend…
           </button>
         )}
-        {canEdit(access, current.collectionId) && (
+        {canEdit(access, current.collectionId, 'firing') && (
           <button
             type="button"
             onClick={() =>
@@ -910,7 +910,7 @@ export function Recipes({
           limitFormulas={
             <LimitSets
               own={ownLimits}
-              canCreate={mayCreate}
+              canCreate={!team || editableCollections(access, 'limits').length > 0}
               collection={team ? newCollection : null}
               onSaved={(saved) =>
                 setOwnLimits((list) => [saved, ...list.filter((l) => l.recordId !== saved.recordId)])
@@ -1042,8 +1042,8 @@ export function Recipes({
           onErase={() => setConfirming({ action: 'erase', kind: 'material' })}
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
-          readOnly={!canEdit(access, material.current ? material.current.collectionId : newCollection)}
-          canCreate={mayCreate}
+          readOnly={!canEdit(access, material.current ? material.current.collectionId : newCollection, 'material')}
+          canCreate={!team || editableCollections(access, 'material').length > 0}
           newIn={picker || undefined}
         />
       ) : (

@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { api, errorText, MIN_PASSWORD_CHARS, type Access, type Role, type Team } from '../api';
+import { api, errorText, MIN_PASSWORD_CHARS, type Access, type CustomRole, type Kind, type Role, type Team } from '../api';
 import { collectionLabel, editableCollections } from '../team';
 
 /** Where a new recipe or material is saved, in a team's vault. */
@@ -174,8 +174,25 @@ const ROLES: { role: Role | ''; label: string }[] = [
   { role: '', label: 'No access' },
   { role: 'operator', label: 'Batch operator: weighs' },
   { role: 'chemist', label: 'Chemist: reads' },
+  { role: 'tester', label: 'Tester: logs firings' },
   { role: 'formulator', label: 'Formulator: changes' }
 ];
+
+/** What a role an admin makes can be allowed to change, in the order shown. */
+export const CHANGEABLE: { kind: Kind; label: string }[] = [
+  { kind: 'recipe', label: 'Recipes' },
+  { kind: 'material', label: 'Materials' },
+  { kind: 'batch', label: 'Batch sheets' },
+  { kind: 'firing', label: 'Firings' },
+  { kind: 'limits', label: 'Limit formulas' },
+  { kind: 'prices', label: 'Prices' }
+];
+
+/** "Costing: changes prices", "Reviewer: reads". */
+function customLabel(role: CustomRole): string {
+  const kinds = CHANGEABLE.filter((c) => role.changes.includes(c.kind)).map((c) => c.label.toLowerCase());
+  return `${role.name}: ${kinds.length ? `changes ${kinds.join(', ')}` : 'reads'}`;
+}
 
 /** Settings for a team's admin: people, what each may do in each collection, and collections. */
 export function People({
@@ -190,6 +207,7 @@ export function People({
 }) {
   const [shrinking, setShrinking] = useState(false);
   const [team, setTeam] = useState<Team | null>(null);
+  const [roles, setRoles] = useState<CustomRole[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [asking, setAsking] = useState<{ person: string; action: 'remove' | 'reset' | 'admin' } | null>(null);
@@ -199,9 +217,11 @@ export function People({
   const [busy, setBusy] = useState(false);
 
   const load = () =>
-    api
-      .team()
-      .then(setTeam)
+    Promise.all([api.team(), api.customRoles()])
+      .then(([team, roles]) => {
+        setTeam(team);
+        setRoles(roles);
+      })
       .catch((e) => setError(errorText(e)));
   useEffect(() => {
     void load();
@@ -277,11 +297,13 @@ export function People({
                         )
                       }
                     >
-                      {ROLES.map(({ role, label }) => (
-                        <option key={role} value={role}>
-                          {label}
-                        </option>
-                      ))}
+                      {[...ROLES, ...roles.map((r) => ({ role: `role:${r.id}` as Role, label: customLabel(r) }))].map(
+                        ({ role, label }) => (
+                          <option key={role} value={role}>
+                            {label}
+                          </option>
+                        )
+                      )}
                     </select>
                   )}
                 </td>
@@ -409,6 +431,30 @@ export function People({
         </button>
       </form>
 
+      <h3>Roles</h3>
+      <p className="hint">
+        Besides the roles above, you can make your own. Each reads everything in the collections it is given on, as a
+        chemist does, and changes what you tick. A change to a role applies to everyone who has it, from their next
+        sign-in.
+      </p>
+      <ul className="plain-list">
+        {roles.map((role) => (
+          <RoleEditor
+            key={role.id}
+            role={role}
+            busy={busy}
+            onSave={(name, changes) => change(() => api.changeRole(role.id, name, changes), `${name} saved.`)}
+            onDelete={() => change(() => api.deleteRole(role.id), `${role.name} deleted.`)}
+          />
+        ))}
+        <RoleEditor
+          key={`new-${roles.length}`}
+          role={null}
+          busy={busy}
+          onSave={(name, changes) => change(() => api.createRole(name, changes), `${name} made. Give it to people above.`)}
+        />
+      </ul>
+
       <h3>Going back to one person</h3>
       <p>
         Makes this vault yours alone again. Everyone else is removed; what was in their private collections stays,
@@ -459,6 +505,72 @@ export function People({
       {message && <p className="hint" role="status">{message}</p>}
       {error && <p role="alert" className="error">{error}</p>}
     </>
+  );
+}
+
+/** A role an admin made, to rename or change, or a new one to make. */
+function RoleEditor({
+  role,
+  busy,
+  onSave,
+  onDelete
+}: {
+  role: CustomRole | null;
+  busy: boolean;
+  onSave: (name: string, changes: Kind[]) => Promise<boolean>;
+  onDelete?: () => void;
+}) {
+  const [name, setName] = useState(role?.name ?? '');
+  const [changes, setChanges] = useState<Kind[]>(role?.changes ?? []);
+  const id = useId();
+  const changed =
+    !role || name.trim() !== role.name || changes.length !== role.changes.length || changes.some((k) => !role.changes.includes(k));
+  return (
+    <li>
+      <form
+        className="role-editor"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void onSave(name.trim(), changes).then((done) => {
+            if (done && !role) {
+              setName('');
+              setChanges([]);
+            }
+          });
+        }}
+      >
+        <label htmlFor={`${id}-name`}>{role ? 'Role' : 'New role'}</label>
+        <input
+          id={`${id}-name`}
+          value={name}
+          placeholder={role ? undefined : 'Such as Costing, or Glaze tester'}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <fieldset className="plain row wrap">
+          <legend>Changes</legend>
+          {CHANGEABLE.map(({ kind, label }) => (
+            <label key={kind} className="check">
+              <input
+                type="checkbox"
+                checked={changes.includes(kind)}
+                onChange={(e) => setChanges(e.target.checked ? [...changes, kind] : changes.filter((k) => k !== kind))}
+              />
+              {label}
+            </label>
+          ))}
+        </fieldset>
+        <div className="row">
+          <button type="submit" disabled={busy || !name.trim() || !changed}>
+            {role ? 'Save role' : 'Make role'}
+          </button>
+          {role && onDelete && (
+            <button type="button" className="link danger" disabled={busy} onClick={onDelete}>
+              Delete
+            </button>
+          )}
+        </div>
+      </form>
+    </li>
   );
 }
 

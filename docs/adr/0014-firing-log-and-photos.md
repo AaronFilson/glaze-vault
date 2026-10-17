@@ -40,6 +40,8 @@ are far larger than anything the vault kept before.
 - Firings are deleted and erased in one step, photos and all, so a mistaken photo does not linger.
 - Unsaved edits to a firing are kept in the draft with recipes and materials (ADR 8). Locking by
   hand keeps them without asking, since the firing's editor may not be on screen to save from.
+- A **Tester** reads a collection and logs its firings, photos too, without changing recipes
+  (ADR 4).
 - Added after: a vitrification chart (absorption and total shrinkage against cone, averaged per
   cone, on one percent axis, with a table of the same numbers); the slip as applied (specific
   gravity, Ford cup seconds, gel) against a recipe's targets; and the log as CSV.

@@ -2,7 +2,7 @@
 //! people, collections and what each person may do in them.
 
 use super::{
-    KEYRING_FILE, OpenCollection, Vault, check_password, grant_info, now_ms, parse_id, parse_role, revision_aad,
+    KEYRING_FILE, Kind, OpenCollection, Vault, check_password, grant_info, now_ms, parse_id, parse_role, revision_aad,
 };
 use crate::access::Role;
 use crate::crypto::{self, Key, KeyPair, PasswordKdf, SealedBox};
@@ -38,6 +38,8 @@ pub struct Collection {
     /// The person whose private collection it is.
     pub owner: Option<Uuid>,
     pub role: Role,
+    /// The kinds of record this person may make and change here.
+    pub changes: Vec<Kind>,
 }
 
 /// One person's role on one collection, for the people screen.
@@ -84,6 +86,10 @@ impl Vault {
                 name: c.name.clone(),
                 owner: c.owner,
                 role: c.role,
+                changes: Kind::ALL
+                    .into_iter()
+                    .filter(|&kind| self.may_change(c.role, kind))
+                    .collect(),
             })
             .collect()
     }
@@ -208,6 +214,7 @@ impl Vault {
         )?;
         insert_organization_grant(&tx, &vault_id, &organization_public, &private.0, &private.1)?;
         for (collection, role) in roles {
+            self.known_role(*role)?;
             let collection = self.readable(collection)?;
             insert_grant(
                 &tx,
@@ -266,6 +273,7 @@ impl Vault {
         let vault_id = self.keyring.vault_id;
         match role {
             Some(role) => {
+                self.known_role(role)?;
                 let previous: Option<String> = self
                     .conn
                     .query_row(
@@ -283,7 +291,7 @@ impl Vault {
                 // kept the first, so the collection gets a new one, in the same transaction: a
                 // failure part way leaves them with the role they had.
                 let key =
-                    if role == Role::Operator && previous.is_some_and(|previous| previous != Role::Operator.as_str()) {
+                    if role == Role::Operator && previous.is_some_and(|previous| previous != Role::Operator.code()) {
                         self.rotate_collection_key_in(&tx, &collection)?
                     } else {
                         self.readable(&collection)?.key.clone()
@@ -394,6 +402,7 @@ impl Vault {
             name,
             owner: None,
             role: Role::Admin,
+            changes: Kind::ALL.to_vec(),
         })
     }
 
@@ -965,7 +974,7 @@ fn insert_grant(
             collection.to_string(),
             sealed.enc,
             sealed.ciphertext,
-            role.as_str()
+            role.code()
         ],
     )?;
     Ok(())

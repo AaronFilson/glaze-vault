@@ -50,7 +50,10 @@ impl Vault {
             .optional()?
             .ok_or(Error::NotFound)?;
         let collection_id = parse_id(&collection_id)?;
-        let key = self.editable(&collection_id)?.key_for(kind).ok_or(Error::NotAllowed)?;
+        let key = self
+            .editable(&collection_id, kind)?
+            .key_for(kind)
+            .ok_or(Error::NotAllowed)?;
         let attachment = Attachment {
             id: Uuid::new_v4(),
             record_id,

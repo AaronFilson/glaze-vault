@@ -30,7 +30,8 @@ decides the steps people take and what is built first.
 - **Roles** are fixed sets of capabilities for now: Chemist (view recipes, materials and their
   chemistry), Formulator (also make, change and delete them) and Admin (everything, on every
   collection, including people, collections and backups). An admin gives a person a role on a
-  collection, which seals its key to them. Roles editable by admins come later.
+  collection, which seals its key to them. Since then, a Tester role and roles admins make
+  (ADR 4).
 - **Batch operator** is a fourth role, for weighing out. A formulator makes a recipe's **batch
   sheet**: its lines with each material named by an in-house code (M-104) instead, a name, and
   notes for the weighing. The sheet is its own record, of kind `batch`, in the recipe's

@@ -126,7 +126,7 @@ export function BatchSheets({
               <button type="button" className="primary" disabled={!ready} onClick={() => onPrint(amount, unit)}>
                 Print
               </button>
-              {canEdit(access, current.collectionId) && (
+              {canEdit(access, current.collectionId, 'batch') && (
                 <button type="button" className="link danger end" onClick={() => setConfirming(true)}>
                   Delete…
                 </button>

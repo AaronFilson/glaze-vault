@@ -10,10 +10,10 @@ const ACCESS: Access = {
   team: true,
   me: { id: 'ben', name: 'Ben', admin: false, mustSetPassword: false },
   collections: [
-    { id: 'shared', name: 'Shared', owner: null, role: 'formulator' },
-    { id: 'production', name: 'Production', owner: null, role: 'formulator' },
-    { id: 'archive', name: 'Archive', owner: null, role: 'chemist' },
-    { id: 'mine', name: '', owner: 'ben', role: 'admin' }
+    { id: 'shared', name: 'Shared', owner: null, role: 'formulator', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] },
+    { id: 'production', name: 'Production', owner: null, role: 'formulator', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] },
+    { id: 'archive', name: 'Archive', owner: null, role: 'chemist', changes: [] },
+    { id: 'mine', name: '', owner: 'ben', role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] }
   ]
 };
 

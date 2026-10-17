@@ -57,11 +57,22 @@ Then give them a role on each shared collection, in the table:
 | No access | Nothing in that collection. |
 | Batch operator: weighs | Its batch sheets, and nothing else: no recipes, materials or chemistry. |
 | Chemist: reads | Read its recipes and materials, and their chemistry. |
+| Tester: logs firings | Read as a chemist does, and log firings with their photos. |
 | Formulator: changes | Also make, change, delete and erase them. |
 | Admin | Everything, in every collection, and people, collections and backups. |
 
 Someone who can only read a recipe sees it with its fields greyed out, and no **Save** or
 **Delete…**.
+
+### Your own roles
+
+Under **Roles**, below the people, an admin can make roles of their own: a name, and what it
+changes, out of recipes, materials, batch sheets, firings, limit formulas and prices. Each reads
+everything in its collections, as a chemist does. *Costing* might change only prices; *Glaze
+tester* firings and limit formulas. Give it to people in the table like any other role.
+
+Changing a role changes it for everyone who has it, from their next sign-in. A role can be
+deleted once nobody has it.
 
 ## Batch sheets
 

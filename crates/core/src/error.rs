@@ -42,6 +42,12 @@ pub enum Error {
     AlreadyATeam,
     #[error("The vault on this computer is shared with others, so only one of its admins can replace it.")]
     NotAnAdminHere,
+    #[error("That role is not in this vault.")]
+    NoSuchRole,
+    #[error("There is already a role with that name.")]
+    RoleNameTaken,
+    #[error("Some people have that role. Give them another before deleting it.")]
+    RoleInUse,
     #[error("An admin cannot be removed in this version: it needs a new organization key, which comes later.")]
     RemovingAdmin,
     #[error("The vault's files do not match each other: {0}")]
@@ -77,6 +83,9 @@ impl Error {
             Error::NotATeam => "not-a-team",
             Error::AlreadyATeam => "already-a-team",
             Error::NotAnAdminHere => "not-an-admin-here",
+            Error::NoSuchRole => "no-such-role",
+            Error::RoleNameTaken => "role-name-taken",
+            Error::RoleInUse => "role-in-use",
             Error::RemovingAdmin => "removing-admin",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",

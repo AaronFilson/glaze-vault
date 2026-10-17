@@ -44,3 +44,21 @@ general policy engine.
   the app. That shows up in signature checks and is refused by the host on sync, but it is
   detected, not prevented.
 - Removing a grant means re-encrypting that collection (ADR 3).
+
+## Built
+
+Built in ADR 12 and after, more simply than the capability list above:
+
+- **Built-in roles:** Batch operator, Chemist, Tester (reads, and logs firings), Formulator and
+  Admin.
+- **Roles admins make** read everything in their collections, as a chemist does, and change the
+  kinds of record ticked: recipes, materials, batch sheets, firings, limit formulas, prices. They
+  are kept in the database (schema 5) and named in grants as `role:` and their id.
+- **Keys:** a custom role's grant holds the collection's key, so changing what a role may change
+  needs no new keys. Reading batch sheets alone stays the batch operator's, whose grant holds the
+  batch key. Exporting, viewing chemistry and managing people are not separate capabilities
+  yet: whoever reads a collection may export it, and only admins manage people and collections.
+- **The core decides** each change by the kind of record and the person's role on its
+  collection, and tells the page what each collection lets the person change, so the page asks
+  about that and not about role names.
+

@@ -3,8 +3,8 @@
 //! page never chooses where files are written.
 
 use glaze_vault_core::{
-    Attachment, BACKUP_EXTENSION, Collection, Credential, Error, Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, Person,
-    Revision, Role, SetAside, Settings, Vault,
+    Attachment, BACKUP_EXTENSION, Collection, Credential, CustomRole, Error, Grant, Kind, LastBackup,
+    MAX_ATTACHMENT_BYTES, Person, Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -235,6 +235,27 @@ fn create_collection(state: State<AppState>, name: String) -> CommandResult<Coll
 #[tauri::command(async)]
 fn rename_collection(state: State<AppState>, collection: Uuid, name: String) -> CommandResult<()> {
     with_vault(&state, |vault| vault.rename_collection(collection, &name))
+}
+
+/// The roles admins have made, which anyone signed in sees named on their collections.
+#[tauri::command(async)]
+fn custom_roles(state: State<AppState>) -> CommandResult<Vec<CustomRole>> {
+    with_vault(&state, |vault| Ok(vault.custom_roles()))
+}
+
+#[tauri::command(async)]
+fn create_role(state: State<AppState>, name: String, changes: Vec<Kind>) -> CommandResult<CustomRole> {
+    with_vault(&state, |vault| vault.create_role(&name, &changes))
+}
+
+#[tauri::command(async)]
+fn change_role(state: State<AppState>, id: Uuid, name: String, changes: Vec<Kind>) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.change_role(id, &name, &changes))
+}
+
+#[tauri::command(async)]
+fn delete_role(state: State<AppState>, id: Uuid) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.delete_role(id))
 }
 
 /// Dropping the vault wipes its keys from memory.
@@ -891,6 +912,10 @@ pub fn run() {
             go_back_to_one_person,
             create_collection,
             rename_collection,
+            custom_roles,
+            create_role,
+            change_role,
+            delete_role,
             list_records,
             save_record,
             save_records,

@@ -41,7 +41,7 @@ const spar: MaterialHead = {
 const ONE_PERSON: Access = {
   team: false,
   me: { id: 'me', name: '', admin: false, mustSetPassword: false },
-  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin' }]
+  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] }]
 };
 
 /** A record the fake core refuses to save. */

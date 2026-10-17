@@ -81,7 +81,7 @@ export function FiringLog({
     .filter((f) => firingMatches(f.content, search))
     .sort((a, b) => b.content.firedOn.localeCompare(a.content.firedOn) || b.savedAt - a.savedAt);
   const team = !!access?.team;
-  const mayLog = !team || editableCollections(access).length > 0;
+  const mayLog = !team || editableCollections(access, 'firing').length > 0;
   // A recipe's firings at two cones or more make a curve.
   const curve = forRecipe ? vitrification(firings.filter((f) => f.content.recipe === forRecipe)) : [];
 
@@ -89,7 +89,7 @@ export function FiringLog({
   const leave = (action: () => void) => (changed ? setPending(() => action) : action());
   const startNew = () =>
     leave(() => {
-      const recipe = recipes.find((r) => r.recordId === forRecipe && canEdit(access, r.collectionId));
+      const recipe = recipes.find((r) => r.recordId === forRecipe && canEdit(access, r.collectionId, 'firing'));
       onEdit({
         current: null,
         draft: newFiring(recipe ? { recordId: recipe.recordId, number: recipe.number, name: recipe.content.name } : null, new Date())
@@ -249,7 +249,7 @@ function FiringEditor({
   const [error, setError] = useState('');
   const recipe = recipes.find((r) => r.recordId === draft.recipe) ?? null;
   const collection = current?.collectionId ?? recipe?.collectionId ?? null;
-  const readOnly = !canEdit(access, collection);
+  const readOnly = !canEdit(access, collection, 'firing');
   const set = (change: Partial<FiringContent>) => onEdit({ current, draft: { ...draft, ...change } });
   const bar = draft.bar ?? EMPTY_BAR;
   const slip = draft.slip ?? EMPTY_SLIP;
@@ -374,7 +374,7 @@ function FiringEditor({
             >
               <option value="">Choose a recipe</option>
               {recipes
-                .filter((r) => canEdit(access, r.collectionId))
+                .filter((r) => canEdit(access, r.collectionId, 'firing'))
                 .map((r) => (
                   <option key={r.recordId} value={r.recordId}>
                     {r.content.name || 'Untitled'}

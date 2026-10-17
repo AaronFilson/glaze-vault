@@ -31,8 +31,8 @@ impl Vault {
             if from == to {
                 continue;
             }
-            let old = self.editable(&from)?.key_for(kind).ok_or(Error::NotAllowed)?;
-            let new = self.editable(&to)?.key_for(kind).ok_or(Error::NotAllowed)?;
+            let old = self.editable(&from, kind)?.key_for(kind).ok_or(Error::NotAllowed)?;
+            let new = self.editable(&to, kind)?.key_for(kind).ok_or(Error::NotAllowed)?;
 
             let mut statement = tx.prepare(
                 "SELECT id, number, parent_id, deleted, nonce, ciphertext FROM revisions
