@@ -32,7 +32,8 @@ import { Blend } from './Blend';
 import { LimitSets, LimitsPanel, limitSets, savedLimitChoice } from './Limits';
 import type { LimitsContent } from '../limits';
 import type { PricesContent } from '../prices';
-import { CostLine, PriceList } from './Prices';
+import { CostLine, PriceLists } from './Prices';
+import { priceListFor } from '../prices';
 import { Compare, type Side } from './Compare';
 import { FiringLog, type FiringEditing } from './FiringLog';
 import { newFiring, sameFiring, type Firing, type FiringContent } from '../firing';
@@ -106,8 +107,8 @@ export function Recipes({
   // People's own limit formulas, and the set the unity formula is compared with (ADR 15).
   const [ownLimits, setOwnLimits] = useState<Revision<LimitsContent>[]>([]);
   const [limitChoice, setLimitChoice] = useState(savedLimitChoice);
-  // The price list: the newest the person can open.
-  const [priceList, setPriceList] = useState<Revision<PricesContent> | null>(null);
+  // The price lists the person can open, newest first: a recipe is costed by its collection's.
+  const [priceLists, setPriceLists] = useState<Revision<PricesContent>[]>([]);
   // Batch sheets (ADR 12): the one open, and whether the open recipe's is being made.
   const [sheets, setSheets] = useState<BatchSheet[]>([]);
   const [sheet, setSheet] = useState<BatchSheet | null>(null);
@@ -166,7 +167,7 @@ export function Recipes({
       api.priceLists()
     ])
       .then(([, heads, ownMaterials, batchSheets, allFirings, limits, priceLists]) => {
-        setPriceList(priceLists[0] ?? null);
+        setPriceLists(priceLists);
         setRecipes(heads);
         setMaterials(ownMaterials);
         setSheets(batchSheets);
@@ -194,7 +195,7 @@ export function Recipes({
         api.priceLists()
       ]);
       setOwnLimits(limits);
-      setPriceList(priceLists[0] ?? null);
+      setPriceLists(priceLists);
       setRecipes(heads);
       setSheets(batchSheets);
       setFirings(allFirings);
@@ -266,6 +267,8 @@ export function Recipes({
 
   const library = useMemo(() => materialLibrary(materials.map((m) => m.content)), [materials]);
   const shownRecipe = recipe.viewing?.content ?? recipe.draft;
+  const prices =
+    priceListFor(priceLists, (recipe.viewing ?? recipe.current)?.collectionId ?? newCollection)?.content ?? null;
   const analysis = useMemo(() => analyse(shownRecipe.lines, library), [shownRecipe.lines, library]);
 
   useIdleLock(settings?.autoLock && !newWords ? settings.autoLockMinutes : null, async () => {
@@ -876,12 +879,12 @@ export function Recipes({
             />
           }
           prices={
-            <PriceList
-              list={priceList}
+            <PriceLists
+              lists={priceLists}
+              access={access}
+              names={names}
               library={library}
-              canEdit={priceList ? canEdit(access, priceList.collectionId) : mayCreate}
-              collection={team ? newCollection : null}
-              onSaved={setPriceList}
+              onSaved={(saved) => setPriceLists((lists) => [saved, ...lists.filter((l) => l.recordId !== saved.recordId)])}
             />
           }
         />
@@ -1009,7 +1012,7 @@ export function Recipes({
           newIn={picker || undefined}
           limits={
             <>
-              <CostLine lines={shownRecipe.lines} list={priceList?.content ?? null} />
+              <CostLine lines={shownRecipe.lines} list={prices} />
               <LimitsPanel
                 sets={limitSets(ownLimits)}
                 chosen={limitChoice}
@@ -1036,6 +1039,7 @@ export function Recipes({
           saved={recipe.viewing ?? recipe.current}
           changed={!recipe.viewing && recipe.changed}
           analysis={analysis}
+          prices={prices}
         />
       )}
     </div>

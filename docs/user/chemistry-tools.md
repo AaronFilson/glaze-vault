@@ -35,4 +35,9 @@ prices are per kilogram or per pound, then type each material and what it costs 
 **Save prices**.
 
 Each recipe then shows, below its unity formula, what a kilogram or pound of its dry batch costs,
-additions included. Materials with no price are left out, and named.
+additions included. Materials with no price are left out, and named. A printed batch sheet
+(**Print…** › **A batch sheet for weighing out**) has a cost column and the batch's total.
+
+In a [shared vault](sharing.md), each collection can have prices of its own: choose it under
+**Prices for**. A recipe is costed by its own collection's prices, or, where that has none, by
+the newest list you can open. Batch operators do not see prices.

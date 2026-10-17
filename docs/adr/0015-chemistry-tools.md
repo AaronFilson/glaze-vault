@@ -28,11 +28,12 @@ mostly in the app.
   shows its cost per unit of dry batch, additions included, and names the materials with no
   price. In a team, whoever may read the list's collection sees prices.
 - **Not yet:** working out a recipe from a target formula. Glazecalc's chemistry can fit amounts
-  to target oxides (its `fitAmounts`), which this can use later; triaxial blends; and costs on
-  printed batch sheets.
+  to target oxides (its `fitAmounts`), which this can use later; and triaxial blends.
+- Added after: printed batch sheets show each line's cost and the batch's, converting the batch's
+  unit to the list's; and each collection can have its own price list, a recipe being costed by
+  its collection's list or else the newest the person can open.
 
 ## Consequences
 
 - The built-in set is one source's view; the guide says where it is from and to check others.
-- A price list is per vault for now: the newest the person can open. Different prices per
-  collection, and price histories, wait until someone needs them.
+- Price histories wait until someone needs them; a list's revisions keep its earlier prices.
