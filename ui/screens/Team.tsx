@@ -7,19 +7,22 @@ export function CollectionPicker({
   access,
   names,
   value,
-  onChange
+  onChange,
+  kind = 'recipe'
 }: {
   access: Access;
   names: Record<string, string>;
   value: string | null;
   onChange: (collection: string) => void;
+  /** What is being made, for the collections it can go into. */
+  kind?: Kind;
 }) {
   const id = useId();
   return (
     <div className="row">
       <label htmlFor={id}>Save in</label>
       <select id={id} value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
-        {editableCollections(access).map((collection) => (
+        {editableCollections(access, kind).map((collection) => (
           <option key={collection.id} value={collection.id}>
             {collectionLabel(collection, access, names)}
           </option>
@@ -35,6 +38,7 @@ export function MoveTo({
   access,
   names,
   from,
+  kinds,
   name,
   along,
   onMove
@@ -43,13 +47,15 @@ export function MoveTo({
   names: Record<string, string>;
   /** The collection it is in. */
   from: string;
+  /** The kinds of record that move, which this person must be able to change in both. */
+  kinds: Kind[];
   name: string;
   /** What goes with it, such as "its 3 firings" and "its batch sheet". */
   along: string[];
   onMove: (to: string) => Promise<void>;
 }) {
   const id = useId();
-  const others = editableCollections(access).filter((c) => c.id !== from);
+  const others = access.collections.filter((c) => c.id !== from && kinds.every((kind) => c.changes.includes(kind)));
   const [to, setTo] = useState(others[0]?.id ?? '');
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -209,6 +215,7 @@ export function People({
   onOrganizationKey: (words: string[]) => void;
 }) {
   const [shrinking, setShrinking] = useState(false);
+  const [replacingSheet, setReplacingSheet] = useState(false);
   const [team, setTeam] = useState<Team | null>(null);
   const [roles, setRoles] = useState<CustomRole[]>([]);
   const [error, setError] = useState('');
@@ -351,12 +358,19 @@ export function People({
             const { person, action } = asking;
             const name = nameOf(person);
             // Taking admin away gives the organization a new recovery sheet, shown even if
-            // removing them afterwards does not work.
+            // removing them afterwards does not work. Once it is done, trying again only removes.
             let words: string[] | null = null;
+            if (action === 'remove-admin') {
+              const demoted = await change(async () => {
+                words = await api.takeAdminAway(person);
+              });
+              if (!demoted) return;
+              setAsking({ person, action: 'remove' });
+            }
             const done = await change(
               async () => {
-                if (action === 'unadmin' || action === 'remove-admin') words = await api.takeAdminAway(person);
-                if (action === 'remove' || action === 'remove-admin') await api.removePerson(person);
+                if (action === 'unadmin') words = await api.takeAdminAway(person);
+                else if (action === 'remove' || action === 'remove-admin') await api.removePerson(person);
                 else if (action === 'reset') await api.resetPerson(person, password);
                 else if (action === 'admin') await api.makeAdmin(person);
               },
@@ -471,19 +485,39 @@ export function People({
         If the organization recovery sheet is lost, make a new one to print and keep safe. The old sheet stops working.
       </p>
       <div className="row">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            let words: string[] | null = null;
-            void change(async () => {
-              words = await api.newOrganizationRecoveryKey();
-            }).then(() => words && onOrganizationKey(words));
-          }}
-        >
+        <button type="button" disabled={busy} onClick={() => setReplacingSheet(true)}>
           New organization recovery sheet…
         </button>
       </div>
+      {replacingSheet && (
+        <div className="notice warning" role="alertdialog" aria-label="New organization recovery sheet">
+          <p>
+            Make a new organization recovery sheet? The one you have stops working at once, so print the new one and
+            keep it safe before you leave the next screen.
+          </p>
+          <div className="row">
+            <button
+              type="button"
+              className="danger"
+              disabled={busy}
+              onClick={() => {
+                let words: string[] | null = null;
+                void change(async () => {
+                  words = await api.newOrganizationRecoveryKey();
+                }).then(() => {
+                  setReplacingSheet(false);
+                  if (words) onOrganizationKey(words);
+                });
+              }}
+            >
+              Make a new sheet
+            </button>
+            <button type="button" autoFocus onClick={() => setReplacingSheet(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <h3>Going back to one person</h3>
       <p>

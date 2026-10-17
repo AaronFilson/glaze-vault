@@ -23,11 +23,11 @@ export function editableCollections(access: Access | null, kind: Kind = 'recipe'
   return (access?.collections ?? []).filter((c) => c.changes.includes(kind));
 }
 
-/** Where a new record goes unless the person chooses: the first shared collection they may change,
- * else their private one. */
-export function defaultCollection(access: Access | null): string | null {
+/** Where a new record of a kind goes unless the person chooses: the first shared collection they
+ * may change it in, else their private one. */
+export function defaultCollection(access: Access | null, kind: Kind = 'recipe'): string | null {
   if (!access?.team) return null;
-  const editable = editableCollections(access);
+  const editable = editableCollections(access, kind);
   return (editable.find((c) => !c.owner) ?? editable.find((c) => c.owner === access.me.id) ?? editable[0])?.id ?? null;
 }
 

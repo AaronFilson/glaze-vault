@@ -349,7 +349,7 @@ export function Recipes({
       const saved = await api.saveMaterial(
         material.current?.revisionId ?? null,
         { ...material.draft, name },
-        material.current ? null : newCollection
+        material.current ? null : newIn('material')
       );
       material.show(saved);
       setMaterials((list) => [saved, ...list.filter((m) => m.recordId !== saved.recordId)]);
@@ -545,6 +545,10 @@ export function Recipes({
   const picker = team && access && (
     <CollectionPicker access={access} names={names} value={newCollection} onChange={setNewCollection} />
   );
+  /** Where a new record of a kind goes: the collection chosen, if this person may make that kind
+   * there, else the first where they may. */
+  const newIn = (kind: Kind) =>
+    !team || canEdit(access, newCollection, kind) ? newCollection : defaultCollection(access, kind);
   const reminderDays = settings?.backupReminderDays ?? 0;
   const backupDue =
     // In a team's vault only admins back up.
@@ -646,19 +650,26 @@ export function Recipes({
    * with its firings and batch sheets. */
   const movePart = () => {
     const current = recipe.current;
-    if (!team || !access || !current || recipe.viewing || !canEdit(access, current.collectionId)) return null;
+    if (!team || !access || !current || recipe.viewing) return null;
     const ownFirings = firings.filter((f) => f.content.recipe === current.recordId);
     const ownSheets = sheets.filter((s) => s.content.recipe === current.recordId);
+    const kinds: Kind[] = [
+      'recipe',
+      ...(ownFirings.length ? (['firing'] as const) : []),
+      ...(ownSheets.length ? (['batch'] as const) : [])
+    ];
+    if (!kinds.every((kind) => canEdit(access, current.collectionId, kind))) return null;
     const along = [
       ownFirings.length ? (ownFirings.length === 1 ? 'its firing' : `its ${ownFirings.length} firings`) : '',
       ownSheets.length ? 'its batch sheet' : ''
     ].filter(Boolean);
     return (
       <MoveTo
-        key={current.recordId}
+        key={`${current.recordId} ${current.collectionId}`}
         access={access}
         names={names}
         from={current.collectionId!}
+        kinds={kinds}
         name={current.content.name}
         along={along}
         onMove={async (to) => {
@@ -911,7 +922,7 @@ export function Recipes({
             <LimitSets
               own={ownLimits}
               canCreate={!team || editableCollections(access, 'limits').length > 0}
-              collection={team ? newCollection : null}
+              collection={team ? newIn('limits') : null}
               onSaved={(saved) =>
                 setOwnLimits((list) => [saved, ...list.filter((l) => l.recordId !== saved.recordId)])
               }
@@ -1042,9 +1053,20 @@ export function Recipes({
           onErase={() => setConfirming({ action: 'erase', kind: 'material' })}
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
-          readOnly={!canEdit(access, material.current ? material.current.collectionId : newCollection, 'material')}
+          readOnly={!canEdit(access, material.current ? material.current.collectionId : newIn('material'), 'material')}
           canCreate={!team || editableCollections(access, 'material').length > 0}
-          newIn={picker || undefined}
+          newIn={
+            (team && access && (
+              <CollectionPicker
+                access={access}
+                names={names}
+                kind="material"
+                value={newIn('material')}
+                onChange={setNewCollection}
+              />
+            )) ||
+            undefined
+          }
         />
       ) : (
         <RecipeEditor

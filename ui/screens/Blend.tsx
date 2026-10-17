@@ -31,7 +31,7 @@ export function Blend({
   const [mode, setMode] = useState<Mode>('line');
   const [first, setFirst] = useState(start);
   const [second, setSecond] = useState(others[0] ?? '');
-  const [third, setThird] = useState(others[1] ?? others[0] ?? '');
+  const [third, setThird] = useState(others[1] ?? '');
   const [steps, setSteps] = useState('5');
   const [divisions, setDivisions] = useState('4');
   const [testSize, setTestSize] = useState('100');
@@ -40,7 +40,8 @@ export function Blend({
   const picked = (mode === 'line' ? [first, second] : [first, second, third]).map((id) =>
     recipes.find((r) => r.recordId === id)
   );
-  const ready = picked.every(Boolean);
+  // Each recipe once: a blend of a recipe with itself shows nothing.
+  const ready = picked.every(Boolean) && new Set(picked).size === picked.length;
   const [a, b, c] = picked;
   const recipeNames = picked.map((r) => r?.content.name ?? '');
   const blend = useMemo<BlendStep[]>(() => {
@@ -112,8 +113,14 @@ export function Blend({
             Line blend of two recipes
           </label>
           <label className="check">
-            <input type="radio" name="blend-mode" checked={mode === 'triaxial'} onChange={() => setMode('triaxial')} />
-            Triaxial of three
+            <input
+              type="radio"
+              name="blend-mode"
+              checked={mode === 'triaxial'}
+              disabled={recipes.length < 3}
+              onChange={() => setMode('triaxial')}
+            />
+            Triaxial of three{recipes.length < 3 && <span className="hint"> (needs three recipes)</span>}
           </label>
         </fieldset>
         <p className="hint">
@@ -155,7 +162,7 @@ export function Blend({
           </div>
         </div>
         {!ready || !blend.length ? (
-          <p className="hint">Choose {mode === 'line' ? 'two' : 'three'} recipes.</p>
+          <p className="hint">Choose {mode === 'line' ? 'two' : 'three'} different recipes.</p>
         ) : (
           <>
             {mode === 'triaxial' && <TriangleKey steps={blend} names={recipeNames} />}

@@ -33,6 +33,9 @@ describe('fitting on screen', () => {
     expect(screen.getByRole('status').textContent).toBe('Within Cone 6 (Digitalfire).');
     fireEvent.click(screen.getByRole('button', { name: 'Use these amounts' }));
     const lines = onUse.mock.calls[0][0];
+    // Another target, and what was fitted to the last one goes.
+    fireEvent.click(screen.getByLabelText('A unity formula I give'));
+    expect(screen.queryByRole('button', { name: 'Use these amounts' })).toBeNull();
     expect(lines.find((l) => l.material === 'Red Iron Oxide')).toEqual({ material: 'Red Iron Oxide', amount: '2', addition: true });
     expect(Number(lines.find((l) => l.material === 'Talc')?.amount)).toBeGreaterThan(0);
     expect(Number(lines.find((l) => l.material === 'Whiting')!.amount)).toBeLessThan(35);

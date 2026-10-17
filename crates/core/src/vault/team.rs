@@ -386,6 +386,9 @@ impl Vault {
     /// file; if that is not reached, the next unlock finishes it (finish_organization_change).
     pub fn take_admin_away(&mut self, person: Uuid) -> Result<RecoveryKey> {
         self.admin()?;
+        // One that stopped before goes into the key file first, so its admin is not counted as
+        // one still, nor its organization key lost under this one.
+        self.finish_organization_change()?;
         if person == self.user_id {
             return Err(Error::NotAllowed);
         }
@@ -434,6 +437,9 @@ impl Vault {
     /// A new organization recovery key, when its sheet is lost: the organization's private key is
     /// encrypted again under it, and the old sheet stops working. For an admin.
     pub fn new_organization_recovery_key(&mut self) -> Result<RecoveryKey> {
+        self.admin()?;
+        // The key it encrypts must be the one the key file names.
+        self.finish_organization_change()?;
         let organization = self.admin()?;
         let vault_id = self.keyring.vault_id;
         let recovery = RecoveryKey::generate();
@@ -447,6 +453,14 @@ impl Vault {
         keyring.write(&self.dir.join(KEYRING_FILE))?;
         self.keyring = keyring;
         Ok(recovery)
+    }
+
+    /// Finishes a change of organization key in this session's key file, if one is waiting.
+    fn finish_organization_change(&mut self) -> Result<()> {
+        let mut keyring = self.keyring.clone();
+        finish_organization_change(&self.conn, &mut keyring, &self.dir)?;
+        self.keyring = keyring;
+        Ok(())
     }
 
     /// Makes a collection to share, which only admins can open until they give others roles on it.
@@ -490,11 +504,18 @@ impl Vault {
     ) -> Result<(Vault, RecoveryKey)> {
         check_password(new_password)?;
         let mut keyring = super::read_keyring(dir)?;
-        let (organization, database_key) = open_by_organization_recovery(&keyring, words)?;
+        let (mut organization, database_key) = open_by_organization_recovery(&keyring, words)?;
+        let conn = crate::store::open(&dir.join(super::DATABASE_FILE), &database_key)?;
+        // A change of organization key that stopped part way is finished first, and then only
+        // the new organization's sheet opens it.
+        let before = keyring.organization.as_ref().map(|o| o.public_key.clone());
+        finish_organization_change(&conn, &mut keyring, dir)?;
+        if keyring.organization.as_ref().map(|o| o.public_key.clone()) != before {
+            organization = open_by_organization_recovery(&keyring, words)?.0;
+        }
         if keyring.user(&admin)?.organization_key.is_none() {
             return Err(Error::NotAllowed);
         }
-        let conn = crate::store::open(&dir.join(super::DATABASE_FILE), &database_key)?;
         rekey_person(
             &conn,
             &mut keyring,
@@ -1654,6 +1675,67 @@ mod tests {
         let sheet = ana.new_organization_recovery_key().unwrap();
         drop(ana);
         Vault::recover_organization(dir.path(), &sheet.words().join(" "), ana_id, "anas new password").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn after_a_change_of_organization_key_stopped_the_next_one_builds_on_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut ana, old_sheet) = team();
+        let ana_id = ana.me().id;
+        let ben = ana.add_person("Ben", ONE_TIME, &[]).unwrap();
+        let cara = ana.add_person("Cara", ONE_TIME, &[]).unwrap();
+        ana.make_admin(ben.id).unwrap();
+        ana.make_admin(cara.id).unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = ana.take_admin_away(ben.id);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(failed.is_err());
+
+        // In the same session: Ben's change goes into the key file before Cara's starts, so he
+        // does not get the newest organization key back.
+        ana.take_admin_away(cara.id).unwrap();
+        let admins: Vec<Uuid> = ana.people().unwrap().iter().filter(|p| p.admin).map(|p| p.id).collect();
+        assert_eq!(admins, [ana_id]);
+        // And a new sheet made now opens the organization the key file names.
+        let sheet = ana.new_organization_recovery_key().unwrap();
+        drop(ana);
+        assert!(matches!(
+            Vault::recover_organization(dir.path(), &old_sheet.words().join(" "), ana_id, "anas new password"),
+            Err(Error::WrongRecoveryKey)
+        ));
+        let (ana, _) =
+            Vault::recover_organization(dir.path(), &sheet.words().join(" "), ana_id, "anas new password").unwrap();
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_old_organization_sheet_does_not_open_a_change_that_stopped() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut ana, old_sheet) = team();
+        let ana_id = ana.me().id;
+        let ben = ana.add_person("Ben", ONE_TIME, &[]).unwrap();
+        ana.make_admin(ben.id).unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        assert!(ana.take_admin_away(ben.id).is_err());
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        drop(ana);
+        // Nobody has unlocked since: recovering finishes the change, and the old sheet is refused.
+        assert!(matches!(
+            Vault::recover_organization(dir.path(), &old_sheet.words().join(" "), ana_id, "anas new password"),
+            Err(Error::WrongRecoveryKey)
+        ));
+        let ana = Vault::unlock_as(dir.path(), Some(ana_id), PASSWORD).unwrap();
+        assert!(
+            !Vault::people_in(dir.path())
+                .unwrap()
+                .iter()
+                .find(|p| p.id == ben.id)
+                .unwrap()
+                .admin
+        );
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
     }
 
     #[test]

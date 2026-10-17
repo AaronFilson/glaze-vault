@@ -41,6 +41,11 @@ export function Fit({
   );
   const [trying, setTrying] = useState('');
   const [fitted, setFitted] = useState<Fitted | null>(null);
+  /** A new target: what was fitted to the last one goes. */
+  const aim = (next: 'limits' | 'formula') => {
+    setGoal(next);
+    setFitted(null);
+  };
   const [problem, setProblem] = useState('');
   const [saved, setSaved] = useState(false);
   const set = sets.find((s) => s.id === setId) ?? null;
@@ -102,7 +107,7 @@ export function Fit({
       <h2 className="section-heading">Target</h2>
       <fieldset className="plain">
         <label className="check">
-          <input type="radio" name="fit-goal" checked={goal === 'limits'} disabled={!sets.length} onChange={() => setGoal('limits')} />
+          <input type="radio" name="fit-goal" checked={goal === 'limits'} disabled={!sets.length} onChange={() => aim('limits')} />
           Move it into a limit formula
         </label>
         {goal === 'limits' && (
@@ -125,7 +130,7 @@ export function Fit({
           </div>
         )}
         <label className="check">
-          <input type="radio" name="fit-goal" checked={goal === 'formula'} onChange={() => setGoal('formula')} />
+          <input type="radio" name="fit-goal" checked={goal === 'formula'} onChange={() => aim('formula')} />
           A unity formula I give
         </label>
       </fieldset>

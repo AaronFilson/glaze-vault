@@ -20,7 +20,7 @@ const ACCESS: Access = {
 describe('moving a recipe to another collection', () => {
   it('offers only collections this person may change, and asks first', async () => {
     const onMove = vi.fn(async () => {});
-    render(<MoveTo access={ACCESS} names={{}} from="shared" name="Shino" along={['its 2 firings', 'its batch sheet']} onMove={onMove} />);
+    render(<MoveTo access={ACCESS} names={{}} from="shared" kinds={['recipe']} name="Shino" along={['its 2 firings', 'its batch sheet']} onMove={onMove} />);
     const to = screen.getByLabelText('Move to') as HTMLSelectElement;
     expect([...to.options].map((o) => o.textContent)).toEqual(['Production', 'Private']);
     fireEvent.click(screen.getByRole('button', { name: 'Move…' }));
@@ -34,7 +34,7 @@ describe('moving a recipe to another collection', () => {
 
   it('shows nothing with nowhere else to move it', () => {
     const one: Access = { ...ACCESS, collections: ACCESS.collections.slice(0, 1) };
-    const { container } = render(<MoveTo access={one} names={{}} from="shared" name="Shino" along={[]} onMove={async () => {}} />);
+    const { container } = render(<MoveTo access={one} names={{}} from="shared" kinds={['recipe']} name="Shino" along={[]} onMove={async () => {}} />);
     expect(container.textContent).toBe('');
   });
 });

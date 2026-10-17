@@ -22,6 +22,16 @@ const recipes = [
 ];
 
 describe('a triaxial blend', () => {
+  it('needs three different recipes', () => {
+    render(<Blend recipes={recipes.slice(0, 2)} library={STANDARD_LIBRARY} initial="a" canSave onSave={async () => {}} onClose={() => {}} />);
+    expect((screen.getByRole('radio', { name: /Triaxial of three/ }) as HTMLInputElement).disabled).toBe(true);
+    cleanup();
+    render(<Blend recipes={recipes} library={STANDARD_LIBRARY} initial="a" canSave onSave={async () => {}} onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText('Triaxial of three'));
+    fireEvent.change(screen.getByLabelText('Third recipe'), { target: { value: 'b' } });
+    expect(screen.getByText('Choose three different recipes.')).toBeTruthy();
+  });
+
   it('numbers its points on a triangle, and saves one as a recipe', async () => {
     const onSave = vi.fn<(content: RecipeContent) => Promise<void>>(async () => {});
     render(<Blend recipes={recipes} library={STANDARD_LIBRARY} initial="a" canSave onSave={onSave} onClose={() => {}} />);

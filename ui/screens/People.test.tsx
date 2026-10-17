@@ -104,5 +104,28 @@ describe('removing an admin', () => {
     await waitFor(() => expect(onOrganizationKey).toHaveBeenCalledWith(['new', 'organization', 'words']));
     expect(order.filter((c) => c === 'take_admin_away' || c === 'remove_person')).toEqual(['take_admin_away', 'remove_person']);
     expect(screen.getByRole('alert').textContent).toBe('The disk is full.');
+    // Trying again only removes: admin is already taken away.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Cy' }));
+    await waitFor(() => expect(order.filter((c) => c === 'remove_person')).toHaveLength(2));
+    expect(order.filter((c) => c === 'take_admin_away')).toHaveLength(1);
+  });
+
+  it('asks before replacing the organization sheet', async () => {
+    const order: string[] = [];
+    mockIPC((cmd) => {
+      order.push(cmd);
+      if (cmd === 'team') return { people: [{ id: 'ana', name: 'Ana', admin: true, mustSetPassword: false }], grants: [] };
+      if (cmd === 'custom_roles') return [];
+      if (cmd === 'new_organization_recovery_key') return ['fresh', 'words'];
+      return null;
+    });
+    const onOrganizationKey = vi.fn();
+    render(<People access={ACCESS} onChanged={() => {}} onShrunk={() => {}} onOrganizationKey={onOrganizationKey} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'New organization recovery sheet…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(order).not.toContain('new_organization_recovery_key');
+    fireEvent.click(screen.getByRole('button', { name: 'New organization recovery sheet…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Make a new sheet' }));
+    await waitFor(() => expect(onOrganizationKey).toHaveBeenCalledWith(['fresh', 'words']));
   });
 });
