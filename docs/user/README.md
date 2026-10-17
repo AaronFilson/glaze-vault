@@ -15,16 +15,18 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 3. [Your recovery key](recovery-key.md): what it is, where to keep it, and how to use it
 4. [Recipes and their chemistry](recipes.md)
 5. [Your own materials](materials.md): your supplier's analyses, stains and additives
-6. [Printing](printing.md): a recipe, or a batch sheet for weighing out
-7. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
-8. [Importing](importing.md): recipes and materials from other programs and spreadsheets
-9. [Settings](settings.md): locking by itself, your password, updates
-10. [How your recipes are protected](security.md)
+6. [The firing log](firing-log.md): how each firing went, a test bar's shrinkage and
+   absorption, and photos
+7. [Blends, limits and costs](chemistry-tools.md): line blends, limit formulas, what a recipe costs
+8. [Printing](printing.md): a recipe, or a batch sheet for weighing out
+9. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
+10. [Importing](importing.md): recipes and materials from other programs and spreadsheets
+11. [Sharing a vault with others](sharing.md): people, roles and collections
+12. [Settings](settings.md): locking by itself, your password, updates
+13. [How your recipes are protected](security.md)
 
 ## Coming later
 
-- **Teams:** an administrator, other people with their own passwords, roles such as batch
-  operator or formulator, and shared and private collections of recipes. A vault for one person
-  can become a team's vault, and go back to one person, at any time.
+- **More for teams:** a record of who did what, which comes with other computers on your network.
 - **Other computers on your network,** and laptops that take a copy of their part of the vault
   where there is no network, then bring their changes back.

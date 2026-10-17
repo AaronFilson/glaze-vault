@@ -18,10 +18,23 @@ describe('compareLines', () => {
       { material: 'Rutile', amount: 'some' }
     ];
     expect(compareLines(a, b)).toEqual([
-      { material: 'Custer Spar', a: 40, b: 40 },
-      { material: 'Silica', a: 30, b: 40 },
-      { material: 'Whiting', a: 30, b: null },
-      { material: 'Kaolin', a: null, b: 20 }
+      { material: 'Custer Spar', a: 40, b: 40, addition: false },
+      { material: 'Silica', a: 30, b: 40, addition: false },
+      { material: 'Whiting', a: 30, b: null, addition: false },
+      { material: 'Kaolin', a: null, b: 20, addition: false }
+    ]);
+  });
+
+  it('gives additions as a percent of the base', () => {
+    const a = [
+      { material: 'Ball clay', amount: '50' },
+      { material: 'Silica', amount: '50' }
+    ];
+    const b = [...a, { material: 'Grog', amount: '10', addition: true }];
+    expect(compareLines(a, b)).toEqual([
+      { material: 'Ball clay', a: 50, b: 50, addition: false },
+      { material: 'Silica', a: 50, b: 50, addition: false },
+      { material: 'Grog', a: null, b: 10, addition: true }
     ]);
   });
 });

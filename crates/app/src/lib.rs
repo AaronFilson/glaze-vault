@@ -2,7 +2,10 @@
 //! (docs/adr/0001-tauri-rust-react.md). File dialogs open from here, not from the page, so the
 //! page never chooses where files are written.
 
-use glaze_vault_core::{BACKUP_EXTENSION, Credential, Error, Kind, LastBackup, Revision, SetAside, Settings, Vault};
+use glaze_vault_core::{
+    Attachment, BACKUP_EXTENSION, Collection, Credential, Error, Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, Person,
+    Revision, Role, SetAside, Settings, Vault,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,6 +77,8 @@ struct VaultStatus {
     unlocked: bool,
     version: String,
     updates_configured: bool,
+    /// A team's people, for the lock screen to choose from; empty for a one-person vault.
+    people: Vec<Person>,
 }
 
 // Commands that derive keys from a password take a moment, so every command runs off the main
@@ -86,6 +91,7 @@ fn vault_status(app: AppHandle, state: State<AppState>) -> VaultStatus {
         unlocked: state.vault.lock().unwrap().is_some(),
         version: app.package_info().version.to_string(),
         updates_configured: state.updates_configured,
+        people: Vault::people_in(&state.dir).unwrap_or_default(),
     }
 }
 
@@ -97,20 +103,138 @@ fn create_vault(state: State<AppState>, password: String) -> CommandResult<Vec<S
     Ok(recovery.words())
 }
 
+/// Unlocks as `person`, who a team's vault needs; a one-person vault's is found without.
 #[tauri::command(async)]
-fn unlock(state: State<AppState>, password: String) -> CommandResult<()> {
+fn unlock(state: State<AppState>, person: Option<Uuid>, password: String) -> CommandResult<()> {
     let password = Zeroizing::new(password);
-    let vault = Vault::unlock(&state.dir, &password)?;
+    let vault = Vault::unlock_as(&state.dir, person, &password)?;
     *state.vault.lock().unwrap() = Some(vault);
     Ok(())
 }
 
 #[tauri::command(async)]
-fn recover(state: State<AppState>, words: String, new_password: String) -> CommandResult<()> {
+fn recover(state: State<AppState>, person: Option<Uuid>, words: String, new_password: String) -> CommandResult<()> {
     let (words, new_password) = (Zeroizing::new(words), Zeroizing::new(new_password));
-    let vault = Vault::recover(&state.dir, &words, &new_password)?;
+    let vault = Vault::recover_as(&state.dir, person, &words, &new_password)?;
     *state.vault.lock().unwrap() = Some(vault);
     Ok(())
+}
+
+/// With the organization's recovery key: gives an admin a new password, and returns their new
+/// recovery key to show once (ADR 12).
+#[tauri::command(async)]
+fn recover_organization(
+    state: State<AppState>,
+    admin: Uuid,
+    words: String,
+    new_password: String,
+) -> CommandResult<Vec<String>> {
+    let (words, new_password) = (Zeroizing::new(words), Zeroizing::new(new_password));
+    let (vault, recovery) = Vault::recover_organization(&state.dir, &words, admin, &new_password)?;
+    *state.vault.lock().unwrap() = Some(vault);
+    Ok(recovery.words())
+}
+
+/// Who unlocked the vault, whether it is a team's, and the collections they can open.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Access {
+    team: bool,
+    me: Person,
+    collections: Vec<Collection>,
+}
+
+#[tauri::command(async)]
+fn my_access(state: State<AppState>) -> CommandResult<Access> {
+    with_vault(&state, |vault| {
+        Ok(Access {
+            team: vault.is_team(),
+            me: vault.me(),
+            collections: vault.collections(),
+        })
+    })
+}
+
+/// Everyone in a team's vault and their roles, for an admin.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Team {
+    people: Vec<Person>,
+    grants: Vec<Grant>,
+}
+
+#[tauri::command(async)]
+fn team(state: State<AppState>) -> CommandResult<Team> {
+    with_vault(&state, |vault| {
+        Ok(Team {
+            people: vault.people()?,
+            grants: vault.grants()?,
+        })
+    })
+}
+
+/// Makes this vault a team's, with this person as admin. Returns the organization's recovery key.
+#[tauri::command(async)]
+fn grow_into_team(state: State<AppState>, name: String) -> CommandResult<Vec<String>> {
+    with_vault(&state, |vault| Ok(vault.grow_into_team(&name)?.words()))
+}
+
+#[tauri::command(async)]
+fn add_person(
+    state: State<AppState>,
+    name: String,
+    one_time_password: String,
+    roles: Vec<(Uuid, Role)>,
+) -> CommandResult<Person> {
+    let one_time_password = Zeroizing::new(one_time_password);
+    with_vault(&state, |vault| vault.add_person(&name, &one_time_password, &roles))
+}
+
+/// At a first sign-in: sets the password the person chose, and returns their recovery key.
+#[tauri::command(async)]
+fn set_own_password(state: State<AppState>, new_password: String) -> CommandResult<Vec<String>> {
+    let new_password = Zeroizing::new(new_password);
+    with_vault(&state, |vault| Ok(vault.set_own_password(&new_password)?.words()))
+}
+
+/// Gives a person a role on a collection, or takes it away with none.
+#[tauri::command(async)]
+fn set_role(state: State<AppState>, person: Uuid, collection: Uuid, role: Option<Role>) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.set_role(person, collection, role))
+}
+
+#[tauri::command(async)]
+fn remove_person(state: State<AppState>, person: Uuid) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.remove_person(person))
+}
+
+#[tauri::command(async)]
+fn reset_person(state: State<AppState>, person: Uuid, one_time_password: String) -> CommandResult<()> {
+    let one_time_password = Zeroizing::new(one_time_password);
+    with_vault(&state, |vault| vault.reset_person(person, &one_time_password))
+}
+
+#[tauri::command(async)]
+fn make_admin(state: State<AppState>, person: Uuid) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.make_admin(person))
+}
+
+/// Makes a team's vault this admin's alone again (ADR 6). Returns where the backup made first is.
+#[tauri::command(async)]
+fn go_back_to_one_person(state: State<AppState>) -> CommandResult<String> {
+    with_vault(&state, |vault| {
+        Ok(vault.go_back_to_one_person()?.to_string_lossy().into_owned())
+    })
+}
+
+#[tauri::command(async)]
+fn create_collection(state: State<AppState>, name: String) -> CommandResult<Collection> {
+    with_vault(&state, |vault| vault.create_collection(&name))
+}
+
+#[tauri::command(async)]
+fn rename_collection(state: State<AppState>, collection: Uuid, name: String) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.rename_collection(collection, &name))
 }
 
 /// Dropping the vault wipes its keys from memory.
@@ -137,13 +261,29 @@ fn list_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revisio
 }
 
 #[tauri::command(async)]
+/// Saves a revision after `parent`, or a new record, into `collection` when one is named.
 fn save_record(
     state: State<AppState>,
     kind: Kind,
     parent: Option<Uuid>,
+    collection: Option<Uuid>,
     content: serde_json::Value,
 ) -> CommandResult<Revision> {
-    with_vault(&state, |vault| vault.save(kind, parent, &content))
+    with_vault(&state, |vault| match (parent, collection) {
+        (None, Some(collection)) => vault.save_in(kind, collection, &content),
+        _ => vault.save(kind, parent, &content),
+    })
+}
+
+/// Saves several revisions at once, all or none: for imports. New records go into `collection`.
+#[tauri::command(async)]
+fn save_records(
+    state: State<AppState>,
+    kind: Kind,
+    collection: Option<Uuid>,
+    revisions: Vec<(Option<Uuid>, serde_json::Value)>,
+) -> CommandResult<Vec<Revision>> {
+    with_vault(&state, |vault| vault.save_all(kind, collection, &revisions))
 }
 
 #[tauri::command(async)]
@@ -166,6 +306,74 @@ fn deleted_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revi
 #[tauri::command(async)]
 fn erase_record(state: State<AppState>, kind: Kind, record_id: Uuid) -> CommandResult<usize> {
     with_vault(&state, |vault| vault.erase(kind, record_id))
+}
+
+/// Asks for a photo, and hands its bytes to the page, which makes it smaller before adding it
+/// (ui/photos.ts). The bytes go as they are, not as JSON; none means the person cancelled.
+#[tauri::command(async)]
+fn choose_photo(window: WebviewWindow, state: State<AppState>) -> CommandResult<tauri::ipc::Response> {
+    if state.vault.lock().unwrap().is_none() {
+        return Err(locked());
+    }
+    let Some(path) = open_dialog(
+        &window,
+        "Choose a photo",
+        "Photos",
+        &["jpg", "jpeg", "png", "heic", "heif", "webp", "gif"],
+    )?
+    else {
+        return Ok(tauri::ipc::Response::new(Vec::new()));
+    };
+    if fs::metadata(&path).map_err(file_error)?.len() > MAX_PHOTO_BYTES {
+        return Err(CommandError::new(
+            "too-large",
+            "That photo is too large. Choose one under 80 MB.",
+        ));
+    }
+    Ok(tauri::ipc::Response::new(fs::read(&path).map_err(file_error)?))
+}
+
+/// The largest photo file the page is given to make smaller.
+const MAX_PHOTO_BYTES: u64 = 80 * 1024 * 1024;
+
+/// Adds a file to a record. The body is the file's bytes; the headers say which record (kind
+/// and record-id) and what it is (media-type).
+#[tauri::command(async)]
+fn add_attachment(state: State<AppState>, request: tauri::ipc::Request<'_>) -> CommandResult<Attachment> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(CommandError::new(
+            "bad-request",
+            "The attachment came without its bytes.",
+        ));
+    };
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err(Error::TooLarge.into());
+    }
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+            .ok_or_else(|| CommandError::new("bad-request", format!("The attachment came without {name}.")))
+    };
+    let kind: Kind = serde_json::from_value(serde_json::Value::String(header("kind")?))
+        .map_err(|_| CommandError::new("bad-request", "Unknown kind of record."))?;
+    let record_id =
+        Uuid::parse_str(&header("record-id")?).map_err(|_| CommandError::new("bad-request", "Unknown record."))?;
+    let media_type = header("media-type")?;
+    with_vault(&state, |vault| {
+        vault.add_attachment(kind, record_id, &media_type, bytes)
+    })
+}
+
+/// An attachment's bytes, as they are, not as JSON.
+#[tauri::command(async)]
+fn get_attachment(state: State<AppState>, id: Uuid) -> CommandResult<tauri::ipc::Response> {
+    // Moved out of the wiped buffer rather than copied, so there is one plaintext copy, not two.
+    // Tauri frees it once the page has it, without wiping it.
+    with_vault(&state, |vault| vault.attachment(id))
+        .map(|(_, mut bytes)| tauri::ipc::Response::new(std::mem::take(&mut *bytes)))
 }
 
 #[tauri::command(async)]
@@ -227,6 +435,8 @@ struct ChosenBackup {
     file_name: String,
     created_at: i64,
     app_version: String,
+    /// For a team's backup, the admins who can restore it.
+    admins: Vec<Person>,
 }
 
 /// Asks for a backup file to restore, and says when it was made.
@@ -247,6 +457,7 @@ fn choose_backup(window: WebviewWindow) -> CommandResult<Option<ChosenBackup>> {
         path: path.to_string_lossy().into_owned(),
         created_at: info.created_at,
         app_version: info.app_version,
+        admins: info.admins,
     }))
 }
 
@@ -255,38 +466,55 @@ fn choose_backup(window: WebviewWindow) -> CommandResult<Option<ChosenBackup>> {
 struct Restored {
     /// Where the vault that was replaced was moved to, if there was one.
     set_aside: Option<String>,
+    /// After restoring with the organization's recovery key, the admin's new recovery key.
+    recovery_words: Option<Vec<String>>,
 }
 
+/// Restores a backup as `person` (an admin, for a team's), with their password or recovery key, or
+/// with the organization's recovery key when `organization` is set.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 fn restore_backup(
     state: State<AppState>,
     path: String,
+    person: Option<Uuid>,
     password: Option<String>,
     words: Option<String>,
     new_password: Option<String>,
+    organization: Option<bool>,
 ) -> CommandResult<Restored> {
     let (password, words, new_password) = (
         password.map(Zeroizing::new),
         words.map(Zeroizing::new),
         new_password.map(Zeroizing::new),
     );
+    let bad_request = || CommandError::new("bad-request", "Give a password, or a recovery key and a new password.");
+    // The vault's files are about to be moved, so it must not be open.
+    let mut vault = state.vault.lock().unwrap();
+    if organization.unwrap_or(false) {
+        let (Some(words), Some(new_password), Some(admin)) = (&words, &new_password, person) else {
+            return Err(bad_request());
+        };
+        vault.take();
+        let (restored, set_aside, recovery) =
+            Vault::restore_by_organization(&state.dir, Path::new(&path), words, admin, new_password)?;
+        *vault = Some(restored);
+        return Ok(Restored {
+            set_aside: set_aside.map(|dir| dir.to_string_lossy().into_owned()),
+            recovery_words: Some(recovery.words()),
+        });
+    }
     let credential = match (&password, &words, &new_password) {
         (Some(password), None, None) => Credential::Password(password),
         (None, Some(words), Some(new_password)) => Credential::RecoveryKey { words, new_password },
-        _ => {
-            return Err(CommandError::new(
-                "bad-request",
-                "Give a password, or a recovery key and a new password.",
-            ));
-        }
+        _ => return Err(bad_request()),
     };
-    // The vault's files are about to be moved, so it must not be open.
-    let mut vault = state.vault.lock().unwrap();
     vault.take();
-    let (restored, set_aside) = Vault::restore(&state.dir, Path::new(&path), &credential)?;
+    let (restored, set_aside) = Vault::restore(&state.dir, Path::new(&path), person, &credential)?;
     *vault = Some(restored);
     Ok(Restored {
         set_aside: set_aside.map(|dir| dir.to_string_lossy().into_owned()),
+        recovery_words: None,
     })
 }
 
@@ -343,10 +571,17 @@ fn set_aside_vaults(state: State<AppState>) -> CommandResult<Vec<SetAside>> {
 #[tauri::command(async)]
 fn bring_back_vault(state: State<AppState>, name: String) -> CommandResult<Restored> {
     let mut vault = state.vault.lock().unwrap();
+    // Switching replaces everyone's vault, so in a team only an admin may, signed in. The vault on
+    // disk is what counts, since a locked one is not open to ask.
+    let admin = vault.as_ref().is_some_and(|open| open.me().admin);
+    if !admin && !Vault::people_in(&state.dir).unwrap_or_default().is_empty() {
+        return Err(Error::NotAnAdminHere.into());
+    }
     vault.take();
     let set_aside = Vault::bring_back(&state.dir, &name)?;
     Ok(Restored {
         set_aside: set_aside.map(|dir| dir.to_string_lossy().into_owned()),
+        recovery_words: None,
     })
 }
 
@@ -365,7 +600,8 @@ fn save_export(
     let (kind, extension) = match Path::new(&suggested_name).extension().and_then(|e| e.to_str()) {
         Some("csv") => ("CSV spreadsheet", "csv"),
         Some("json") => ("JSON", "json"),
-        _ => return Err(CommandError::new("bad-request", "Exports are CSV or JSON.")),
+        Some("xml") => ("Insight XML", "xml"),
+        _ => return Err(CommandError::new("bad-request", "Exports are CSV, JSON or XML.")),
     };
     let Some(path) = save_dialog(&window, &suggested_name, kind, extension)? else {
         return Ok(None);
@@ -580,6 +816,16 @@ fn dev_drive() -> CommandResult<Option<String>> {
     Ok(Some(script))
 }
 
+/// Development builds only: answers after `ms`. The page's own timers nearly stop while its
+/// window is hidden or the display sleeps (WebKit throttles them, and macOS before 14 cannot turn
+/// that off), but answers from the core still come, so the dev tools wait with this.
+#[cfg(debug_assertions)]
+#[tauri::command]
+async fn dev_wait(ms: u64) {
+    let _ =
+        tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(ms))).await;
+}
+
 /// Whether this build has an updater public key. Builds without one (anyone's own build before
 /// docs/releasing.md has been followed) leave the updater out rather than fail to start.
 fn updater_configured(config: &tauri::Config) -> bool {
@@ -625,12 +871,29 @@ pub fn run() {
             lock,
             change_password,
             new_recovery_key,
+            recover_organization,
+            my_access,
+            team,
+            grow_into_team,
+            add_person,
+            set_own_password,
+            set_role,
+            remove_person,
+            reset_person,
+            make_admin,
+            go_back_to_one_person,
+            create_collection,
+            rename_collection,
             list_records,
             save_record,
+            save_records,
             record_history,
             delete_record,
             deleted_records,
             erase_record,
+            choose_photo,
+            add_attachment,
+            get_attachment,
             get_settings,
             set_settings,
             lock_with_draft,
@@ -654,7 +917,9 @@ pub fn run() {
             #[cfg(debug_assertions)]
             dev_drive,
             #[cfg(debug_assertions)]
-            dev_pick
+            dev_pick,
+            #[cfg(debug_assertions)]
+            dev_wait
         ])
         .run(context)
         .expect("error while running Glaze Vault");

@@ -729,3 +729,152 @@ button.link.danger {
 .import-warnings summary {
   cursor: pointer;
 }
+
+/* A recipe's optional details, in a grid under its name. */
+.details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.25rem 0.75rem;
+  margin: 0.75rem 0 0;
+}
+
+.details .detail label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.details .detail input,
+.details .detail select {
+  width: 100%;
+}
+
+.details .wide {
+  grid-column: span 2;
+}
+
+table.lines td.added {
+  width: 3.5rem;
+  text-align: center;
+}
+
+/* Searching and sorting the recipe list. */
+.find {
+  display: flex;
+  gap: 0.35rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.find input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The firing log. */
+.section-heading {
+  font-size: 0.95rem;
+  margin: 1.25rem 0 0.25rem;
+}
+
+fieldset.flaws {
+  border: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+fieldset.flaws legend {
+  font-size: 0.85rem;
+  color: var(--muted);
+  padding: 0;
+  margin-bottom: 0.25rem;
+}
+
+details.bar {
+  margin: 1rem 0;
+}
+
+table.facts th {
+  text-align: left;
+  font-weight: 400;
+  padding-right: 1.5rem;
+}
+
+.row.tight {
+  gap: 0.25rem;
+  flex-wrap: nowrap;
+}
+
+.photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.photos figure {
+  margin: 0;
+}
+
+.photos img,
+.photo-loading {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--surface, #eee);
+  display: block;
+}
+
+.photo-loading {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.photos figcaption {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.photos figcaption input {
+  flex: 1;
+  min-width: 0;
+}
+
+.list-note {
+  display: block;
+  font-size: 0.8rem;
+}
+
+/* Comparing the unity formula with a limit formula. */
+.limits {
+  margin-top: 1rem;
+}
+
+.limits select {
+  width: 100%;
+}
+
+.limit-table td.range {
+  color: var(--muted);
+  padding-left: 0.5rem;
+}
+
+.limit-table tr.outside th,
+.limit-table tr.outside td {
+  color: var(--danger, #b42318);
+  font-weight: 600;
+}
+
+.cost {
+  margin-top: 1rem;
+}
+
+input.short {
+  width: 5rem;
+}

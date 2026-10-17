@@ -1,6 +1,8 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import type { MaterialHead, RecipeHead } from './api';
-import { csvField, exportCsv, exportFileName, exportJson, exportMaterialsCsv } from './export';
+import { csvField, exportCsv, exportFileName, exportInsightXml, exportJson, exportMaterialsCsv } from './export';
+import { readImport } from './importFormats';
 
 const recipe = (name: string, lines: [string, string][], notes = ''): RecipeHead => ({
   recordId: 'r-' + name,
@@ -33,15 +35,39 @@ describe('exportCsv', () => {
     const csv = exportCsv([recipe('Leach 4321', [['Custer Feldspar', '40'], ['Silica', '60']], 'Cone 10, reduction')]);
     expect(csv.startsWith('﻿')).toBe(true);
     expect(csv.slice(1).split('\r\n')).toEqual([
-      'Recipe,Material,Amount,Percent,Notes,Revision,Saved',
-      'Leach 4321,Custer Feldspar,40,40.00,"Cone 10, reduction",3,2026-10-14T12:00:00.000Z',
-      'Leach 4321,Silica,60,60.00,,,',
+      'Recipe,Material,Amount,Percent,Added,Type,Cone,Atmosphere,Surface,Transparency,Color,Tags,Notes,Revision,Saved',
+      'Leach 4321,Custer Feldspar,40,40.00,,,,,,,,,"Cone 10, reduction",3,2026-10-14T12:00:00.000Z',
+      'Leach 4321,Silica,60,60.00,,,,,,,,,,,',
       ''
     ]);
   });
 
   it('keeps a recipe with no materials', () => {
-    expect(exportCsv([recipe('Empty', [])]).split('\r\n')[1]).toBe('Empty,,,,,3,2026-10-14T12:00:00.000Z');
+    expect(exportCsv([recipe('Empty', [])]).split('\r\n')[1]).toBe('Empty,,,,,,,,,,,,,3,2026-10-14T12:00:00.000Z');
+  });
+
+  it('writes details on the first row, and additions as a percent of the base', () => {
+    const body = recipe('Stoneware', [['Ball clay', '60'], ['Silica', '40'], ['Grog', '10']]);
+    body.content.lines[2].addition = true;
+    Object.assign(body.content, { type: 'clay body', cone: '6', atmosphere: 'reduction', color: 'Toasty', tags: ['throwing', 'R&D'] });
+    const rows = exportCsv([body]).slice(1).split('\r\n');
+    expect(rows[1]).toBe('Stoneware,Ball clay,60,60.00,,Clay body,6,Reduction,,,Toasty,"throwing, R&D",,3,2026-10-14T12:00:00.000Z');
+    expect(rows[3]).toBe('Stoneware,Grog,10,10.00,yes,,,,,,,,,,');
+    // And back again.
+    expect(readImport('recipes.csv', exportCsv([body])).recipes[0]).toEqual({
+      name: 'Stoneware',
+      lines: [
+        { material: 'Ball clay', amount: '60' },
+        { material: 'Silica', amount: '40' },
+        { material: 'Grog', amount: '10', addition: true }
+      ],
+      notes: '',
+      type: 'clay body',
+      cone: '6',
+      atmosphere: 'reduction',
+      color: 'Toasty',
+      tags: ['throwing', 'R&D']
+    });
   });
 });
 
@@ -122,4 +148,32 @@ describe('exportMaterialsCsv', () => {
 it('names files by the local date', () => {
   expect(exportFileName('csv', new Date(2026, 0, 5, 23, 30))).toBe('Glaze Vault recipes 2026-01-05.csv');
   expect(exportFileName('csv', new Date(2026, 0, 5), 'materials')).toBe('Glaze Vault materials 2026-01-05.csv');
+});
+
+describe('Insight XML', () => {
+  it('reads back as the same recipes, dated', () => {
+    const shino = recipe('Shino & "Carbon" <trap>', [['Nepheline Syenite', '50'], ['Spodumene', ' 30.5 '], ['', '']], 'Thick.\nCone 10');
+    const empty = recipe('Nothing yet', []);
+    const xml = exportInsightXml([shino, empty]);
+    expect(xml).toContain('<recipe name="Shino &amp; &quot;Carbon&quot; &lt;trap&gt;" keywords="" id="" date="2026-10-14" codenum="">');
+    expect(xml).toContain('<recipeline material="Spodumene" amount="30.5" unitabbr="g" conversion="1.0000" added="0"/>');
+    const plan = readImport('recipes.xml', xml);
+    expect(plan.warnings).toEqual([]);
+    expect(plan.recipes).toEqual([
+      {
+        name: 'Shino & "Carbon" <trap>',
+        lines: [
+          { material: 'Nepheline Syenite', amount: '50' },
+          { material: 'Spodumene', amount: '30.5' }
+        ],
+        notes: 'Dated 2026-10-14\nThick.\nCone 10'
+      },
+      { name: 'Nothing yet', lines: [{ material: '', amount: '' }], notes: 'Dated 2026-10-14' }
+    ]);
+  });
+
+  it('keeps line breaks in names, and leaves out what XML cannot hold', () => {
+    const xml = exportInsightXml([recipe('Two\nlines\u0001', [['Silica', '1']])]);
+    expect(readImport('r.xml', xml).recipes[0].name).toBe('Two\nlines');
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { scaleBatch, usableLines } from './batch';
+import { codeProblem, knownCodes, scaleBatch, sheetFrom, usableLines, type BatchSheetContent } from './batch';
 
 const leach = [
   { material: 'Custer Feldspar', amount: '40' },
@@ -30,12 +30,66 @@ describe('scaleBatch', () => {
       { material: 'Talc', amount: 'lots' },
       { material: 'Zinc Oxide', amount: '-2' }
     ];
-    expect(usableLines(lines)).toEqual([{ material: 'Silica', amount: 12.5 }]);
+    expect(usableLines(lines)).toEqual([{ material: 'Silica', amount: 12.5, addition: false }]);
+  });
+
+  it('weighs additions on top of the base', () => {
+    const batch = scaleBatch([...leach, { material: 'Grog', amount: '10', addition: true }], 1000)!;
+    expect(batch.lines.map((l) => l.weight)).toEqual([400, 300, 200, 100, 100]);
+    expect(batch.lines[4]).toMatchObject({ percent: 10, addition: true });
+    expect(batch.total).toBe(1100);
+    // With every line an addition there is no base, and they are all counted.
+    const all = scaleBatch([{ material: 'Grog', amount: '5', addition: true }], 100)!;
+    expect(all.lines[0].weight).toBe(100);
   });
 
   it('has nothing to scale without amounts or a size', () => {
     expect(scaleBatch([], 100)).toBeNull();
     expect(scaleBatch(leach, 0)).toBeNull();
     expect(scaleBatch(leach, NaN)).toBeNull();
+  });
+});
+
+describe('batch sheets', () => {
+  const recipe = {
+    recordId: 'leach',
+    revisionId: 'r2',
+    number: 2,
+    savedAt: 0,
+    content: { name: 'Leach 4321', lines: [...leach, { material: '', amount: '' }], notes: 'Secret' }
+  };
+  const codes = ['M-104', 'M-200', 'M-310', 'M-401'];
+
+  it('names the materials by their codes, and keeps out the notes', () => {
+    const sheet = sheetFrom(recipe, [...codes.slice(0, 3), ' M-401 '], 'Leach', 'Sieve 80 mesh');
+    expect(sheet).toEqual({
+      name: 'Leach',
+      notes: 'Sieve 80 mesh',
+      lines: codes.map((code, i) => ({ material: code, amount: leach[i].amount })),
+      recipe: 'leach',
+      recipeNumber: 2
+    });
+  });
+
+  it('finds the codes already given, from sheets and the recipes they were made from', () => {
+    const sheet: BatchSheetContent = sheetFrom(recipe, codes, 'Leach', '');
+    const known = knownCodes([{ recipe: recipe.content, sheet }]);
+    expect(known).toContainEqual({ material: 'Silica', code: 'M-200' });
+    // A sheet that no longer lines up with its recipe tells nothing.
+    expect(knownCodes([{ recipe: { ...recipe.content, lines: leach.slice(1) }, sheet }])).toEqual([]);
+  });
+
+  it('wants a code for every material, and each code for one material only', () => {
+    const materials = leach.map((l) => l.material);
+    expect(codeProblem(materials, codes, [])).toBeNull();
+    expect(codeProblem(materials, ['M-104', '', 'M-310', 'M-401'], [])).toBe('Give each material a code.');
+    expect(codeProblem(materials, ['M-104', 'm-104', 'M-310', 'M-401'], [])).toBe(
+      'm-104 is already the code for Custer Feldspar. Give each material its own.'
+    );
+    expect(codeProblem(materials, codes, [{ material: 'Talc', code: 'M-401' }])).toBe(
+      'M-401 is already the code for Talc. Give each material its own.'
+    );
+    // The same material twice in a recipe has one code.
+    expect(codeProblem(['Silica', 'silica'], ['M-200', 'M-200'], [])).toBeNull();
   });
 });

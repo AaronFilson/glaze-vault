@@ -4,10 +4,14 @@
 industrial users with proprietary recipes, built on [Glazecalc](https://github.com/AaronFilson/glazecalc)'s
 glaze chemistry. No account, no cloud, nothing for users to install but the app.
 
-> Early development. A vault for one person works: set up with a password and a 24-word recovery
-> key, unlock, recover, and write recipes with their unity formula. See the
+> Early development. A vault works for one person, or a team on one computer: recipes and their
+> unity formula, your own materials, revisions, comparing, printing, backups, import and export,
+> and people with roles on shared and private collections, including batch operators who weigh
+> from coded batch sheets without the recipe, recipe details, additions on top of the base and
+> search, and a firing log with test bar results and photos. See the
 > [user guide](docs/user/README.md) and the [decision records](docs/adr/README.md) for what comes
-> next: printing and export, teams with roles, a LAN host with offline laptops, and updates.
+> next: working out recipes from a target formula, a LAN host with offline laptops, signed
+> revisions, and the first release. Line blends, limit formulas and costs are in too.
 
 | Part      | Built with                                                                         |
 | --------- | ---------------------------------------------------------------------------------- |
@@ -15,7 +19,7 @@ glaze chemistry. No account, no cloud, nothing for users to install but the app.
 | Core      | Rust: SQLCipher (rusqlite), Argon2id, XChaCha20-Poly1305, HPKE (RFC 9180), BIP 39   |
 | UI        | React 19, TypeScript, Vite                                                         |
 | Chemistry | Glazecalc's `lib/chemistry`, copied into `vendor/glazecalc` for now ([ADR 2](docs/adr/0002-chemistry-copy.md)) |
-| Tests     | Rust unit tests, Vitest                                                            |
+| Tests     | Rust unit tests, Vitest, end-to-end tests that drive the development app            |
 
 ## Layout
 
@@ -65,12 +69,19 @@ commands. Both are only in development builds. The screen file holds what is on 
 text, so use them with a throwaway vault. Passwords and recovery words are left out unless
 `GLAZE_VAULT_SHOW_SECRETS=1` is set too, which a script needs to get past checking the recovery key.
 
+The end-to-end tests work the same way: `npm run e2e` opens the development app with a new vault
+in a temporary folder and goes from setting it up to recovering it, through recipes, materials,
+comparing, deleting, importing, exporting, backups and restoring, and changing the password and
+the recovery key ([ADR 11](docs/adr/0011-end-to-end-tests.md)). Scenarios are in
+`e2e/scenarios.ts`. `E2E_VERBOSE=1` prints what each command did, and how long the slow ones took.
+
 ## Scripts
 
     npm run dev          the app in development, with the Vite dev server on port 1420
     npm run build        installers for this system, in target/release/bundle
     npm test             UI and chemistry tests (Vitest)
-    npm run typecheck    TypeScript for the UI and the Vite config
+    npm run e2e          end-to-end tests: the development app, driven (add -- --keep to keep its files)
+    npm run typecheck    TypeScript for the UI, the Vite config and the end-to-end tests
     npm run test:core    the Rust tests (cargo test --workspace)
     npm run test:all     all of the above
 

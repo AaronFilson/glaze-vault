@@ -36,7 +36,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev xvfb
 
       - run: npm ci
 
@@ -55,6 +55,13 @@ jobs:
 
       - name: Rust tests
         run: cargo test --workspace --locked
+
+      # The development app, driven through its screen and driver files (ADR 11). Linux runners
+      # have no display, so Xvfb gives the app one.
+      - name: End-to-end tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm run e2e; else npm run e2e; fi
 
   # Unsigned installers for every push, to try on each system. Releases are built by release.yml.
   bundle:

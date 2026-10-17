@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, errorText, type UpdateInfo, type VaultStatus } from './api';
+import { api, errorText, type Person, type UpdateInfo, type VaultStatus } from './api';
+import { FirstSignIn } from './screens/FirstSignIn';
 import { Recipes, type LockReason } from './screens/Recipes';
 import { Recover } from './screens/Recover';
 import { RecoverySheet } from './screens/RecoverySheet';
@@ -11,7 +12,9 @@ type Screen =
   | { name: 'loading' }
   | { name: 'failed'; message: string }
   | { name: 'setup' }
-  | { name: 'recovery-sheet'; words: string[] }
+  /** A recovery key to show once, the organization's or a person's. */
+  | { name: 'recovery-sheet'; words: string[]; organization?: boolean }
+  | { name: 'first-sign-in'; person: Person }
   | { name: 'unlock'; notice?: string }
   | { name: 'recover' }
   | { name: 'restore'; back: 'setup' | 'unlock' }
@@ -23,12 +26,26 @@ export function App() {
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
 
+  // The people on the lock screen change as a team does, so the status is read again on locking.
+  const refreshStatus = () => api.status().then(setStatus, () => {});
+
+  /** Once unlocked: someone an admin added chooses their own password first. */
+  const opened = async () => {
+    try {
+      const access = await api.access();
+      setScreen(access.me.mustSetPassword ? { name: 'first-sign-in', person: access.me } : { name: 'open' });
+    } catch {
+      setScreen({ name: 'open' });
+    }
+  };
+
   useEffect(() => {
     api
       .status()
       .then((status) => {
         setStatus(status);
-        setScreen(status.unlocked ? { name: 'open' } : status.exists ? { name: 'unlock' } : { name: 'setup' });
+        if (status.unlocked) void opened();
+        else setScreen(status.exists ? { name: 'unlock' } : { name: 'setup' });
         // A quiet check at start: offline computers simply hear nothing.
         if (status.updatesConfigured) {
           api
@@ -40,7 +57,8 @@ export function App() {
       .catch((error) => setScreen({ name: 'failed', message: errorText(error) }));
   }, []);
 
-  const locked = (reason: LockReason) =>
+  const locked = (reason: LockReason) => {
+    void refreshStatus();
     setScreen({
       name: 'unlock',
       notice:
@@ -52,6 +70,7 @@ export function App() {
               ? 'This is the vault you switched to: unlock it with its own password. The one you had open is set aside, and you can switch back to it in Settings.'
               : undefined
     });
+  };
 
   switch (screen.name) {
     case 'loading':
@@ -71,18 +90,38 @@ export function App() {
         />
       );
     case 'recovery-sheet':
-      return <RecoverySheet words={screen.words} onDone={() => setScreen({ name: 'open' })} />;
+      return (
+        <RecoverySheet
+          words={screen.words}
+          organization={screen.organization}
+          onDone={() => setScreen({ name: 'open' })}
+        />
+      );
+    case 'first-sign-in':
+      return (
+        <FirstSignIn
+          name={screen.person.name}
+          onDone={(words) => setScreen({ name: 'recovery-sheet', words })}
+        />
+      );
     case 'unlock':
       return (
         <Unlock
+          people={status?.people ?? []}
           notice={screen.notice}
-          onUnlocked={() => setScreen({ name: 'open' })}
+          onUnlocked={() => void opened()}
           onForgot={() => setScreen({ name: 'recover' })}
           onRestore={() => setScreen({ name: 'restore', back: 'unlock' })}
         />
       );
     case 'recover':
-      return <Recover onRecovered={() => setScreen({ name: 'open' })} onBack={() => setScreen({ name: 'unlock' })} />;
+      return (
+        <Recover
+          people={status?.people ?? []}
+          onRecovered={(words) => (words ? setScreen({ name: 'recovery-sheet', words }) : void opened())}
+          onBack={() => setScreen({ name: 'unlock' })}
+        />
+      );
     case 'restore':
       return (
         <Restore
@@ -92,7 +131,17 @@ export function App() {
         />
       );
     case 'restored':
-      return <Restored result={screen.result} onDone={() => setScreen({ name: 'open' })} />;
+      return (
+        <Restored
+          result={screen.result}
+          onDone={() => {
+            void refreshStatus();
+            const words = screen.result.recoveryWords;
+            if (words) setScreen({ name: 'recovery-sheet', words });
+            else void opened();
+          }}
+        />
+      );
     case 'open':
       return status && <Recipes status={status} update={update} onUpdate={setUpdate} onLocked={locked} />;
   }

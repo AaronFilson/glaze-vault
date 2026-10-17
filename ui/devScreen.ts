@@ -139,6 +139,13 @@ export function describeScreen(root: Element = document.body, { secrets = false 
       if (alone) flush();
       return;
     }
+    if (tag === 'IMG') {
+      const image = node as HTMLImageElement;
+      // Whether it decoded: a photo that did not shows as a broken image.
+      const shown = image.complete && image.naturalWidth > 0;
+      line += ` [image ${quote(image.alt)}${shown ? '' : ' (not shown)'}] `;
+      return;
+    }
     if (tag === 'LABEL') {
       const target = (node as HTMLLabelElement).control;
       // A label for a control is said with the control.

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   api,
   errorText,
+  type Access,
   type LastBackup,
   type MaterialHead,
   type Preferences,
@@ -11,9 +12,11 @@ import {
   type UpdateInfo,
   type VaultStatus
 } from '../api';
-import { exportCsv, exportFileName, exportJson, exportMaterialsCsv } from '../export';
+import { exportCsv, exportFileName, exportInsightXml, exportJson, exportMaterialsCsv } from '../export';
 import { ImportError, readImport, type ImportPlan } from '../importFormats';
+import { editableCollections } from '../team';
 import { NewPassword } from './NewPassword';
+import { People, ShareVault } from './Team';
 
 const LOCK_MINUTES = [1, 5, 10, 15, 30, 60, 120];
 const REMINDER_DAYS: [number, string][] = [
@@ -39,7 +42,12 @@ export function Settings({
   onSwitchVault,
   switchError,
   onImport,
-  onClose
+  onClose,
+  access,
+  onShared,
+  onTeamChanged,
+  limitFormulas,
+  prices
 }: {
   settings: VaultSettings;
   onSettings: (settings: VaultSettings) => Promise<void>;
@@ -58,7 +66,21 @@ export function Settings({
   /** Shows what a file holds, to choose what to import. */
   onImport: (fileName: string, plan: ImportPlan) => void;
   onClose: () => void;
+  /** Who is signed in, and whether the vault is a team's (ADR 12). */
+  access: Access | null;
+  /** The vault was shared: shows the organization's recovery key. */
+  onShared: (organizationWords: string[]) => void;
+  /** People or collections changed: reads this person's access again. */
+  onTeamChanged: () => void;
+  /** The person's own limit formulas (Limits.tsx). */
+  limitFormulas?: React.ReactNode;
+  /** The price list (Prices.tsx). */
+  prices?: React.ReactNode;
 }) {
+  const [shrunkTo, setShrunkTo] = useState<string | null>(null);
+  // In a team's vault, backups and switching vaults change everyone's, so they are for admins.
+  const team = !!access?.team;
+  const admin = !team || !!access?.me.admin;
   return (
     <main className="settings">
       <div className="settings-head">
@@ -67,10 +89,38 @@ export function Settings({
           Back to recipes
         </button>
       </div>
+      {access && (
+        <Section title={team ? 'People' : 'Sharing'}>
+          {shrunkTo && !team && (
+            <p className="hint" role="status">
+              This vault is yours alone again. The backup made first is {shrunkTo}.
+            </p>
+          )}
+          {!team ? (
+            <ShareVault onShared={onShared} />
+          ) : access.me.admin ? (
+            <People
+              access={access}
+              onChanged={onTeamChanged}
+              onShrunk={(backup) => {
+                setShrunkTo(backup);
+                onTeamChanged();
+              }}
+            />
+          ) : (
+            <p>
+              You are signed in as <strong>{access.me.name}</strong>. An admin decides what you can see and change, and
+              backs up the vault.
+            </p>
+          )}
+        </Section>
+      )}
+      {limitFormulas && <Section title="Limit formulas">{limitFormulas}</Section>}
+      {prices && <Section title="Prices">{prices}</Section>}
       <AutoLock settings={settings} onSettings={onSettings} />
-      <Backups settings={settings} onSettings={onSettings} lastBackup={lastBackup} backUp={backUp} />
-      <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />
-      <Import onImport={onImport} />
+      {admin && <Backups settings={settings} onSettings={onSettings} lastBackup={lastBackup} backUp={backUp} />}
+      {admin && <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />}
+      {(!team || editableCollections(access).length > 0) && <Import onImport={onImport} />}
       <Export recipes={recipes} materials={materials} version={status.version} />
       <ChangePassword />
       <RecoveryKey onNewRecoveryKey={onNewRecoveryKey} />
@@ -298,7 +348,7 @@ function Export({
 }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const run = async (kind: 'csv' | 'json' | 'materials-csv') => {
+  const run = async (kind: 'csv' | 'json' | 'xml' | 'materials-csv') => {
     setMessage('');
     setError('');
     const now = new Date();
@@ -307,7 +357,9 @@ function Export({
         ? exportCsv(recipes)
         : kind === 'json'
           ? exportJson(recipes, materials, now, version)
-          : exportMaterialsCsv(materials);
+          : kind === 'xml'
+            ? exportInsightXml(recipes)
+            : exportMaterialsCsv(materials);
     const fileName =
       kind === 'materials-csv' ? exportFileName('csv', now, 'materials') : exportFileName(kind, now);
     try {
@@ -320,14 +372,17 @@ function Export({
   return (
     <Section title="Export">
       <p>
-        Saves every recipe as a spreadsheet (CSV), or everything as JSON for other programs. Your own materials have
-        a spreadsheet of their own.{' '}
+        Saves every recipe as a spreadsheet (CSV), or as Insight XML for Insight-live and Glazy, or everything as JSON
+        for other programs. Your own materials have a spreadsheet of their own.{' '}
         <strong>Exported files are not encrypted:</strong> anyone who gets the file can read your recipes. Use a
         backup to keep a safe copy.
       </p>
       <div className="row">
         <button type="button" disabled={!recipes.length} onClick={() => run('csv')}>
           Export as CSV…
+        </button>
+        <button type="button" disabled={!recipes.length} onClick={() => run('xml')}>
+          Export as Insight XML…
         </button>
         <button type="button" disabled={!recipes.length && !materials.length} onClick={() => run('json')}>
           Export as JSON…

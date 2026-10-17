@@ -1,14 +1,17 @@
 import { useMemo, useState } from 'react';
 
-/** Shows the recovery key once, offers to print it, then checks three of the words. */
+/** Shows a recovery key once, offers to print it, then checks three of the words. The
+ * organization's key, made when a vault grows into a team's, gets its own wording. */
 export function RecoverySheet({
   words,
   onDone,
-  doneLabel = 'Open my vault'
+  doneLabel = 'Open my vault',
+  organization = false
 }: {
   words: string[];
   onDone: () => void;
   doneLabel?: string;
+  organization?: boolean;
 }) {
   const [stored, setStored] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -52,11 +55,25 @@ export function RecoverySheet({
   return (
     <main className="center">
       <section className="card wide no-print">
-        <h1>Your recovery key</h1>
-        <p>
-          If you forget your password, these 24 words are the only way back into your vault. Nobody else can recover
-          it for you, so print this page or write the words down, and keep it somewhere safe away from this computer.
-        </p>
+        {organization ? (
+          <>
+            <h1>The organization's recovery key</h1>
+            <p>
+              If every admin loses their password and recovery sheet, these 24 words are the only way back into this
+              vault and everyone's recipes. Print this page or write the words down, and keep it in a safe, away from
+              this computer: anyone with it can open everything.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1>Your recovery key</h1>
+            <p>
+              If you forget your password, these 24 words are the only way back into your vault. Nobody else can
+              recover it for you, so print this page or write the words down, and keep it somewhere safe away from this
+              computer.
+            </p>
+          </>
+        )}
         <WordGrid words={words} />
         <div className="row">
           <button type="button" onClick={() => window.print()}>
@@ -73,13 +90,24 @@ export function RecoverySheet({
       </section>
 
       <section className="print-only">
-        <h1>Glaze Vault recovery sheet</h1>
+        <h1>{organization ? 'Glaze Vault organization recovery sheet' : 'Glaze Vault recovery sheet'}</h1>
         <p>Made {today}.</p>
+        {organization ? (
+          <p>
+            These 24 words open this Glaze Vault when every admin has lost their password and recovery sheet: choose{' '}
+            <em>Forgot your password?</em>, then <em>Use the organization's recovery key</em>, type the words in
+            order, and give an admin a new password.
+          </p>
+        ) : (
+          <p>
+            These 24 words open your Glaze Vault if you forget its password: choose <em>Forgot your password?</em> when
+            unlocking, type the words in order, and choose a new password. The same words keep working afterwards.
+          </p>
+        )}
         <p>
-          These 24 words open your Glaze Vault if you forget its password: choose <em>Forgot your password?</em> when
-          unlocking, type the words in order, and choose a new password. The same words keep working afterwards.
+          Anyone with this sheet can open {organization ? 'everything in the vault' : 'your vault'}. Keep it somewhere
+          safe, away from the computer.
         </p>
-        <p>Anyone with this sheet can open your vault. Keep it somewhere safe, away from the computer.</p>
         <WordGrid words={words} />
       </section>
     </main>

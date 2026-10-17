@@ -86,3 +86,45 @@ it('submits a form with Enter', async () => {
   expect(report).toEqual(['ok   type "Recipe name" "Tenmoku"', 'ok   press "Enter"']);
   expect(document.body.textContent).toContain('Tenmoku (material) submitted');
 });
+
+it('waits for text to show or to go', async () => {
+  render(<Form />);
+  expect(await runScript('type "Recipe name" "Shino"\nclick "Save"\nclick "Save" in "alertdialog"\nexpect "Shino (material)"')).toEqual([
+    'ok   type "Recipe name" "Shino"',
+    'ok   click "Save"',
+    'ok   click "Save" in "alertdialog"',
+    'ok   expect "Shino (material)"'
+  ]);
+  expect(await runScript('expect /shino \\(MATERIAL\\)/i\nexpect not "Celadon"')).toEqual([
+    'ok   expect /shino \\(MATERIAL\\)/i',
+    'ok   expect not "Celadon"'
+  ]);
+  expect(await runScript('expect not "Shino" 200')).toEqual(['FAIL expect not "Shino" 200: "Shino" is still on screen.']);
+  expect(await runScript('expect "Celadon" 200')).toEqual(['FAIL expect "Celadon" 200: "Celadon" is not on screen.']);
+  const started = Date.now();
+  expect(await runScript('timeout 300\nexpect "Celadon"')).toEqual([
+    'ok   timeout 300',
+    'FAIL expect "Celadon": "Celadon" is not on screen.'
+  ]);
+  expect(Date.now() - started).toBeLessThan(1500);
+});
+
+it('finds a control inside a fieldset by its legend', async () => {
+  render(
+    <form>
+      {['First', 'Second'].map((side) => (
+        <fieldset key={side}>
+          <legend>{side}</legend>
+          <label htmlFor={side}>Recipe</label>
+          <select id={side} defaultValue="a">
+            <option value="a">Shino</option>
+            <option value="b">Celadon</option>
+          </select>
+        </fieldset>
+      ))}
+    </form>
+  );
+  expect(await runScript('select "Recipe" "Celadon" in "Second"')).toEqual(['ok   select "Recipe" "Celadon" in "Second"']);
+  const [first, second] = [...document.querySelectorAll('select')];
+  expect([first.value, second.value]).toEqual(['a', 'b']);
+});

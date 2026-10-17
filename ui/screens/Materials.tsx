@@ -58,7 +58,10 @@ export function Materials({
   onRestore,
   onErase,
   renameInRecipes,
-  onRenameInRecipes
+  onRenameInRecipes,
+  readOnly = false,
+  canCreate = true,
+  newIn
 }: {
   materials: MaterialHead[];
   deleted: MaterialHead[];
@@ -76,6 +79,11 @@ export function Materials({
   /** Whether saving a new name changes it in the recipes that use the old one too. */
   renameInRecipes: boolean;
   onRenameInRecipes: (rename: boolean) => void;
+  /** The person may read this material but not change it (a team's vault, ADR 12). */
+  readOnly?: boolean;
+  canCreate?: boolean;
+  /** For a new material in a team's vault, where it will be saved. */
+  newIn?: React.ReactNode;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -99,9 +107,11 @@ export function Materials({
   return (
     <>
       <nav className="sidebar no-print" aria-label="Your materials">
-        <button type="button" className="primary" onClick={() => onOpen(null)}>
-          New material
-        </button>
+        {canCreate && (
+          <button type="button" className="primary" onClick={() => onOpen(null)}>
+            New material
+          </button>
+        )}
         {materials.length === 0 ? (
           <p className="hint">
             No materials of your own yet. Add one to use your supplier’s analysis, or a colorant or additive the standard
@@ -147,7 +157,13 @@ export function Materials({
             onBack={() => editor.setViewing(null)}
           />
         )}
-        <fieldset className="plain" disabled={!!viewing}>
+        {readOnly && current && !viewing && (
+          <p className="hint" role="status">
+            You can read this material, but not change it. An admin can change what you may do.
+          </p>
+        )}
+        {!current && !viewing && newIn}
+        <fieldset className="plain" disabled={!!viewing || readOnly}>
           <label htmlFor="material-name">Material name</label>
           <input
             id="material-name"
@@ -311,15 +327,17 @@ export function Materials({
         </fieldset>
 
         <div className="row">
-          <button type="button" className="primary" disabled={!changed || saving || !!viewing} onClick={onSave}>
-            {saving ? 'Saving…' : 'Save'}
-          </button>
+          {!readOnly && (
+            <button type="button" className="primary" disabled={!changed || saving || !!viewing} onClick={onSave}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          )}
           {current && !changed && !viewing && (
             <span className="hint">
               Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
             </span>
           )}
-          {current && !viewing && (
+          {current && !viewing && !readOnly && (
             <button type="button" className="link danger end" onClick={onDelete}>
               Delete…
             </button>

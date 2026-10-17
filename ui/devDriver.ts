@@ -8,25 +8,47 @@
 // One command a line; names are as the screen file shows them, in quotes:
 //
 //     click "Save"                       a button, link, checkbox, summary or list entry
-//     click "Save" in "alertdialog"      only inside a group: its kind or label in the screen file
+//     click "Save" in "alertdialog"      only inside a group: its kind or label in the screen file,
+//                                        or a fieldset's legend
 //     click "Save" #2                    the second of several with that name
 //     type "Recipe name" "Shino"         replaces a field's text
 //     select "Kind" "Frit"               chooses an option by its text
 //     check "Show password" / uncheck "Show password"
 //     press "Enter"                      a key, to the focused element; Enter submits its form
 //     pick "/tmp/recipes.glz"            the file the next open or save dialog chooses, unasked
+//     expect "Saved"                     waits for text anywhere in the screen file, or fails
+//     expect not "Unsaved" 5000          waits for it to go; a number of milliseconds waits longer
 //     wait 500                           milliseconds
+//     timeout 10000                      how long the commands after it wait, in milliseconds
 //     # a comment
 //
 // A name in slashes, such as /^Revision 1/, is a regular expression. Each command waits up to
-// two seconds for its element, so one can follow a click that changes the screen.
+// two seconds for its element, so one can follow a click that changes the screen. Expect matches
+// part of the screen file's text (devScreen.ts), passwords and recovery words left out.
 import { invoke } from '@tauri-apps/api/core';
-import { hidden, nameOf, squash } from './devScreen';
+import { describeScreen, hidden, nameOf, squash } from './devScreen';
 
 const CONTROLS = 'button, a[href], input, select, textarea, summary';
 const FIND_FOR_MS = 2000;
+/** How long commands wait for their element or text: FIND_FOR_MS, unless a script says. */
+let waitFor = FIND_FOR_MS;
 
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+let coreWaits = true;
+
+/** Waits `ms`. The page's own timers nearly stop while its window is hidden or the display sleeps
+ * (WebKit throttles them), but answers from the core still come, so ask the core to wait
+ * (dev_wait), and use a timer only without one, as in tests. */
+export async function pause(ms: number): Promise<void> {
+  if (coreWaits) {
+    try {
+      await invoke('dev_wait', { ms });
+      return;
+    } catch {
+      coreWaits = false;
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** Splits a line into words, keeping "quoted text" (JSON string rules) and /regex/ whole. */
 export function words(line: string): string[] {
@@ -59,12 +81,14 @@ function visible(element: Element): boolean {
   return true;
 }
 
-/** Groups as the screen file titles them: [alertdialog], [nav "Recipes"]. */
+/** Groups as the screen file titles them: [alertdialog], [nav "Recipes"]; and a fieldset by its
+ * legend, the line under [fieldset]. */
 function groupMatches(element: Element, test: (text: string) => boolean): boolean {
   const label = element.getAttribute('aria-label');
   const role = element.getAttribute('role');
   const kind = role ?? element.tagName.toLowerCase();
-  return test(kind) || (!!label && test(label));
+  const legend = element.tagName === 'FIELDSET' ? element.querySelector(':scope > legend')?.textContent : null;
+  return test(kind) || (!!label && test(label)) || (!!legend && test(squash(legend)));
 }
 
 function candidates(name: string, scope: string | undefined): HTMLElement[] {
@@ -88,7 +112,7 @@ async function find(args: string[]): Promise<HTMLElement> {
   const scopeAt = args.indexOf('in');
   const scope = scopeAt > 0 ? args[scopeAt + 1] : undefined;
   const nth = args.find((arg) => /^#\d+$/.test(arg));
-  const deadline = Date.now() + FIND_FOR_MS;
+  const deadline = Date.now() + waitFor;
   for (;;) {
     const found = candidates(name, scope);
     if (nth) {
@@ -123,6 +147,24 @@ function submit(form: HTMLFormElement) {
 
 function disabled(element: HTMLElement) {
   if (element.matches(':disabled')) throw new Error(`${nameOf(element)} is disabled.`);
+}
+
+/** Waits for text on screen, or for it to go. Quoted text matches any part of the screen. */
+async function expectText(args: string[]) {
+  const absent = args[0] === 'not';
+  const [what, ms] = absent ? args.slice(1) : args;
+  if (!what) throw new Error('Say what text, in quotes.');
+  const regex = /^\/(.+)\/([a-z]*)$/.exec(what);
+  const pattern = regex ? new RegExp(regex[1], regex[2]) : null;
+  const wanted = unquote(what);
+  const deadline = Date.now() + (Number(ms) || waitFor);
+  for (;;) {
+    const screen = describeScreen(document.body);
+    const found = pattern ? pattern.test(screen) : screen.includes(wanted);
+    if (found !== absent) return;
+    if (Date.now() > deadline) throw new Error(absent ? `${what} is still on screen.` : `${what} is not on screen.`);
+    await pause(100);
+  }
 }
 
 async function run(line: string): Promise<void> {
@@ -174,6 +216,14 @@ async function run(line: string): Promise<void> {
       await invoke('dev_pick', { path: unquote(args[0]) });
       return;
     }
+    case 'expect':
+      return expectText(args);
+    case 'timeout': {
+      const ms = Number(args[0]);
+      if (!(ms > 0)) throw new Error('Say how many milliseconds.');
+      waitFor = ms;
+      return;
+    }
     case 'wait':
       await pause(Number(args[0]) || 0);
       return;
@@ -185,12 +235,16 @@ async function run(line: string): Promise<void> {
 /** Runs a script line by line, stopping at the first failure. Returns what each line did. */
 export async function runScript(script: string): Promise<string[]> {
   const report: string[] = [];
+  waitFor = FIND_FOR_MS;
   const lines = script.split(/\r?\n/).map((line) => line.trim());
   for (const [index, line] of lines.entries()) {
     if (!line || line.startsWith('#')) continue;
     try {
+      const started = Date.now();
       await run(line);
-      report.push(`ok   ${line}`);
+      // Slow commands say how long they took, to find what makes a script slow.
+      const took = Date.now() - started;
+      report.push(`ok   ${line}${took > 1000 && !line.startsWith('wait') ? ` (${(took / 1000).toFixed(1)}s)` : ''}`);
       // Lets React render before the next command looks.
       await pause(50);
     } catch (e) {

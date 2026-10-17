@@ -1,6 +1,7 @@
 import type { RecipeHead } from '../api';
-import { BATCH_UNITS, formatWeight, scaleBatch, usableLines, type BatchUnit } from '../batch';
+import { BATCH_UNITS, baseOf, formatWeight, scaleBatch, usableLines, type BatchUnit } from '../batch';
 import type { Analysis, RecipeContent } from '../chemistry';
+import { describeDetails } from '../recipeFields';
 import { AnalysisPanel } from './AnalysisPanel';
 
 export type PrintJob = { kind: 'recipe' } | { kind: 'batch'; size: number; unit: BatchUnit };
@@ -12,13 +13,16 @@ export function PrintView({
   content,
   saved,
   changed,
-  analysis
+  analysis,
+  sheet = false
 }: {
   job: PrintJob;
   content: RecipeContent;
   saved: RecipeHead | null;
   changed: boolean;
   analysis: Analysis;
+  /** A batch sheet, whose materials are codes. */
+  sheet?: boolean;
 }) {
   const printed = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const status = changed
@@ -35,7 +39,9 @@ export function PrintView({
         {content.name || 'Untitled'}
       </h1>
       {status && <p className="meta">{status}</p>}
-      {job.kind === 'batch' ? <BatchTable content={content} size={job.size} unit={job.unit} /> : <RecipeTable content={content} />}
+      {!sheet && describeDetails(content) && <p className="meta">{describeDetails(content)}</p>}
+      {!sheet && !!content.tags?.length && <p className="meta">Tags: {content.tags.join(', ')}</p>}
+      {job.kind === 'batch' ? <BatchTable content={content} size={job.size} unit={job.unit} heading={sheet ? 'Code' : 'Material'} /> : <RecipeTable content={content} />}
       {content.notes.trim() && (
         <>
           <h2>Notes</h2>
@@ -61,9 +67,14 @@ export function PrintView({
   );
 }
 
+/** A line's name, marked when it is added on top of the base. */
+const lineName = (line: { material: string; addition: boolean }) =>
+  line.addition ? `+ ${line.material} (addition)` : line.material;
+
 function RecipeTable({ content }: { content: RecipeContent }) {
   const lines = usableLines(content.lines);
   const sum = lines.reduce((total, line) => total + line.amount, 0);
+  const base = baseOf(lines);
   return (
     <table className="paper-table">
       <thead>
@@ -80,9 +91,9 @@ function RecipeTable({ content }: { content: RecipeContent }) {
       <tbody>
         {lines.map((line, i) => (
           <tr key={i}>
-            <td>{line.material}</td>
+            <td>{lineName(line)}</td>
             <td className="num">{line.amount.toLocaleString()}</td>
-            <td className="num">{((line.amount / sum) * 100).toFixed(2)}</td>
+            <td className="num">{((line.amount / base) * 100).toFixed(2)}</td>
           </tr>
         ))}
       </tbody>
@@ -90,14 +101,25 @@ function RecipeTable({ content }: { content: RecipeContent }) {
         <tr>
           <th scope="row">Total</th>
           <td className="num">{sum.toLocaleString()}</td>
-          <td className="num">100.00</td>
+          <td className="num">{((sum / base) * 100).toFixed(2)}</td>
         </tr>
       </tfoot>
     </table>
   );
 }
 
-function BatchTable({ content, size, unit }: { content: RecipeContent; size: number; unit: BatchUnit }) {
+/** A batch of `size`, line by line; on a batch sheet the materials are codes, under `heading`. */
+export function BatchTable({
+  content,
+  size,
+  unit,
+  heading = 'Material'
+}: {
+  content: RecipeContent;
+  size: number;
+  unit: BatchUnit;
+  heading?: string;
+}) {
   const batch = scaleBatch(content.lines, size);
   const unitLabel = BATCH_UNITS.find((u) => u.unit === unit)?.label ?? unit;
   if (!batch) return <p>This recipe has no amounts to scale.</p>;
@@ -112,7 +134,7 @@ function BatchTable({ content, size, unit }: { content: RecipeContent; size: num
       <table className="paper-table batch">
         <thead>
           <tr>
-            <th scope="col">Material</th>
+            <th scope="col">{heading}</th>
             <th scope="col" className="num">
               %
             </th>
@@ -129,7 +151,7 @@ function BatchTable({ content, size, unit }: { content: RecipeContent; size: num
         <tbody>
           {batch.lines.map((line, i) => (
             <tr key={i}>
-              <td>{line.material}</td>
+              <td>{lineName(line)}</td>
               <td className="num">{line.percent.toFixed(2)}</td>
               <td className="num weight">{formatWeight(line.weight, unit)}</td>
               <td className="num">{formatWeight(runningTotals[i], unit)}</td>
@@ -141,7 +163,7 @@ function BatchTable({ content, size, unit }: { content: RecipeContent; size: num
         <tfoot>
           <tr>
             <th scope="row">Total</th>
-            <td className="num">100.00</td>
+            <td className="num">{batch.lines.reduce((total, line) => total + line.percent, 0).toFixed(2)}</td>
             <td className="num weight">{formatWeight(batch.total, unit)}</td>
             <td />
             <td />

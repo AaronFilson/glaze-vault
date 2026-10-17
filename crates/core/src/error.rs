@@ -26,6 +26,24 @@ pub enum Error {
     NewerBackup,
     #[error("{0}")]
     InvalidSetting(&'static str),
+    #[error("You do not have permission to do that. An admin can change what you may do.")]
+    NotAllowed,
+    #[error("Choose your name first.")]
+    ChooseName,
+    #[error("That person is not in this vault.")]
+    NoSuchPerson,
+    #[error("Someone in this vault already has that name.")]
+    NameTaken,
+    #[error("Give a name, so others can tell who this is.")]
+    NameMissing,
+    #[error("This vault is not shared with others yet.")]
+    NotATeam,
+    #[error("This vault is already shared with others.")]
+    AlreadyATeam,
+    #[error("The vault on this computer is shared with others, so only one of its admins can replace it.")]
+    NotAnAdminHere,
+    #[error("An admin cannot be removed in this version: it needs a new organization key, which comes later.")]
+    RemovingAdmin,
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -51,6 +69,15 @@ impl Error {
             Error::BackupDamaged => "backup-damaged",
             Error::NewerBackup => "newer-backup",
             Error::InvalidSetting(_) => "invalid-setting",
+            Error::NotAllowed => "not-allowed",
+            Error::ChooseName => "choose-name",
+            Error::NoSuchPerson => "no-such-person",
+            Error::NameTaken => "name-taken",
+            Error::NameMissing => "name-missing",
+            Error::NotATeam => "not-a-team",
+            Error::AlreadyATeam => "already-a-team",
+            Error::NotAnAdminHere => "not-an-admin-here",
+            Error::RemovingAdmin => "removing-admin",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",

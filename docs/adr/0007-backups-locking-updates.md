@@ -72,8 +72,12 @@ promises an app that updates itself.
 - An old backup and an old recovery sheet can still open an old copy of the recipes. That is what
   a backup is for, but it means retiring a leaked recovery key does not retire backups made
   before; the guide says to make a new backup after making a new recovery key.
-- Backups hold the whole database in memory while being written or restored, which is fine for
-  recipe vaults (megabytes) but would need streaming for large attachments later.
+- Backups were first one ciphertext of the whole database, held in memory while written or
+  restored (format 1). Before attachments, format 2 (2026-10-16) encrypts the database in 1 MiB
+  chunks with the STREAM construction: each chunk's nonce has the backup's random prefix, the
+  chunk's number and a flag on the last, and every chunk is bound to the header, so a backup cut
+  short, reordered or changed does not restore. Neither making nor restoring one holds the vault
+  in memory; format 1 backups still restore.
 - The update check is the app's only network connection, and it can be switched off. Industrial
   sites with no internet simply hear nothing; ADR 5's LAN update mirror comes later.
 - Drafts are kept only when the vault locks by itself, not when the app is closed with unsaved

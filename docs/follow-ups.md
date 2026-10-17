@@ -23,16 +23,37 @@ Work decided on but not done yet, with the reason it waits.
 ## Next for one person ([ADR 6](adr/0006-one-person-first.md))
 
 - More import formats ([ADR 10](adr/0010-importing.md)): Digitalfire's material XML (MDT) once a
-  real file is at hand to check against, Glazy's YAML dumps, and exporting Insight XML so recipes
-  can go back to Insight-live and Glazy.
-- A batch save for imports, if hundreds of records at once are too slow.
+  real file is at hand to check against, and Glazy's YAML dumps.
+
+## Teams ([ADR 12](adr/0012-teams-on-one-computer.md))
+
+- Removing an admin, or taking admin away: needs a new organization key, sealed to the admins
+  left, every collection key sealed to it again, and a new organization recovery sheet.
+- Roles that admins can change, and moving a recipe to another collection.
+- With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
+  author's key, under keys the organization signs, and the audit log of who viewed, printed,
+  exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
+
+## Firing log ([ADR 14](adr/0014-firing-log-and-photos.md))
+
+- Keep unsaved edits to a firing as a draft when the vault locks, as recipes are.
+- A vitrification chart: absorption and shrinkage against cone across a recipe's firings.
+- Slips: specific gravity, viscosity (Ford cup seconds) and gel, measured and target.
+- Export the log as CSV, with the bar's results.
+- A role for someone who logs firings without changing recipes.
+
+## Chemistry tools ([ADR 15](adr/0015-chemistry-tools.md))
+
+- Work out a recipe from a target formula, or move one into a limit set, with Glazecalc's
+  `fitAmounts`.
+- Triaxial blends.
+- Costs on printed batch sheets, and price lists per collection.
 
 ## Engineering
 
-- Nobody has run the app on Windows or Linux yet: try the installers from a CI run's
-  artifacts. The first real release also tests the updater end to end.
-- Stream backups instead of holding the database in memory, before vaults hold attachments.
-- End-to-end tests. `tauri-driver` (WebDriver) runs on Windows and Linux but not macOS, so they
-  would run in CI on those two.
-- Sign each revision with its author's key ([ADR 4](adr/0004-roles-and-collections.md)), before
-  there is more than one author.
+- Nobody has installed the app on Windows or Linux yet: the end-to-end tests run the development
+  app there in CI, but the installers from a CI run's artifacts are untried. The first real
+  release also tests the updater end to end.
+- End-to-end tests of a release build ([ADR 11](adr/0011-end-to-end-tests.md) tests the
+  development app): before the first release, a check that each installer opens and unlocks a
+  vault.

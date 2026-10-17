@@ -15,3 +15,8 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0008](0008-materials-history-drafts.md) | Your own materials, earlier revisions, and drafts that outlast closing | 2026-10-15 |
 | [0009](0009-deleting-and-erasing.md)     | Deleting, and erasing for good                                         | 2026-10-15 |
 | [0010](0010-importing.md)                | Importing, formula materials, and renaming in recipes                  | 2026-10-15 |
+| [0011](0011-end-to-end-tests.md)         | End-to-end tests through the development screen and driver             | 2026-10-16 |
+| [0012](0012-teams-on-one-computer.md)    | A team on one computer: growing a vault, people, roles and collections | 2026-10-16 |
+| [0013](0013-recipe-details-and-additions.md) | Recipe details, additions, and finding recipes                   | 2026-10-16 |
+| [0014](0014-firing-log-and-photos.md)    | The firing log, and photos kept as attachments                         | 2026-10-16 |
+| [0015](0015-chemistry-tools.md)          | Chemistry tools: line blends, limit formulas and costs                 | 2026-10-16 |

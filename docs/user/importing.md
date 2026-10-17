@@ -14,6 +14,12 @@ Glaze Vault can add recipes and materials from other programs and from spreadshe
 | `.mat` | GlazeChem | Materials |
 | `.csv` | A spreadsheet, such as a supplier's data sheet typed up | Materials |
 
+A recipe's [details](recipes.md#details) and [additions](recipes.md#additions) come with it from
+a Glaze Vault export. From Insight XML, lines marked as added are additions and the keywords are
+tags. From GlazeChem, additions are additions, and the cone range, firing, type, color, quality
+and transparency fill in the details where Glaze Vault has a match; what it has none for goes in
+the notes.
+
 A spreadsheet of materials needs a column of names and a column for each oxide, headed with its
 symbol: `SiO2`, `Al2O3`, `K2O` and so on (`SiO2 %` and `SiO2_percent` work too). A column headed
 `LOI` is the loss on ignition, and columns headed `Kind` and `Notes` are read if they are there.
@@ -49,5 +55,7 @@ GlazeChem materials given as a molar formula, rather than a percent analysis, be
 [materials given as a formula](materials.md#a-material-as-a-formula). Insight recipes that mix
 units, such as kilograms and grams, are converted with the factors in the file.
 
-> Coming later: Digitalfire's material files (MDT), Glazy's data downloads, and exporting
-> recipes as Insight XML.
+To take recipes the other way, to Insight-live or Glazy, use
+[Export as Insight XML](backups.md#exporting-recipes).
+
+> Coming later: Digitalfire's material files (MDT) and Glazy's data downloads.

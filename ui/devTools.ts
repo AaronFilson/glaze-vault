@@ -13,11 +13,14 @@
 // and recovery words are left out, unless GLAZE_VAULT_SHOW_SECRETS=1 asks for them too, to get a
 // script past the recovery key's check.
 import { invoke } from '@tauri-apps/api/core';
-import { runScript } from './devDriver';
+import { pendingCalls } from './api';
+import { pause, runScript } from './devDriver';
 import { describeScreen, squash } from './devScreen';
 
 const problems: string[] = [];
 let driven: string[] = [];
+/** Scripts run since the page loaded, so one finishing can be told from the one before. */
+let scriptsRun = 0;
 /** Whether the core says to show passwords and recovery words too: GLAZE_VAULT_SHOW_SECRETS. */
 let secrets = false;
 
@@ -42,6 +45,14 @@ function collectProblems() {
 function snapshot(): string {
   const parts = [`Glaze Vault screen, ${new Date().toLocaleString()}`, '', describeScreen(document.body, { secrets })];
   if (problems.length) parts.push('', 'Problems:', ...problems.map((p) => '  ' + p));
+  const waiting = [...pendingCalls.values()].filter((call) => Date.now() - call.at > 1000);
+  if (waiting.length) {
+    parts.push(
+      '',
+      'Waiting on the core:',
+      ...waiting.map((call) => `  ${call.command}, ${Math.round((Date.now() - call.at) / 1000)}s`)
+    );
+  }
   if (driven.length) parts.push('', 'Last script:', ...driven.map((line) => '  ' + line));
   return parts.join('\n') + '\n';
 }
@@ -49,11 +60,12 @@ function snapshot(): string {
 /** Sends the screen to the core whenever it changes, until the core says nobody asked for it. */
 function sendScreen(): () => void {
   let last = '';
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let waiting = false;
   let stopped = false;
 
+  // Waits go through the core (pause), since the page's timers nearly stop while it is hidden.
   const send = async () => {
-    timer = undefined;
+    waiting = false;
     if (stopped) return;
     const text = snapshot();
     // The heading line carries the time, so compare what is below it.
@@ -73,24 +85,31 @@ function sendScreen(): () => void {
     }
   };
   const soon = () => {
-    if (!timer && !stopped) timer = setTimeout(send, 200);
+    if (waiting || stopped) return;
+    waiting = true;
+    void pause(200).then(send);
   };
 
   const observer = new MutationObserver(soon);
   const events = ['input', 'change', 'focusin', 'toggle'];
   // Values typed into inputs and the clock in "Saved …" change without a mutation, so look again
   // now and then too.
-  const interval = setInterval(soon, 2000);
+  const lookAgain = async () => {
+    while (!stopped) {
+      await pause(2000);
+      soon();
+    }
+  };
   function stop() {
     stopped = true;
     observer.disconnect();
     events.forEach((type) => document.removeEventListener(type, soon, true));
-    clearInterval(interval);
   }
 
   observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
   events.forEach((type) => document.addEventListener(type, soon, true));
   soon();
+  void lookAgain();
   return soon;
 }
 
@@ -104,13 +123,14 @@ function takeScripts(onDone: () => void) {
       return; // No GLAZE_VAULT_DRIVE, or not in Tauri: stop asking.
     }
     if (script !== null) {
-      const started = new Date().toLocaleTimeString();
-      driven = [`started ${started}, running…`];
+      const started = `script ${++scriptsRun}, started ${new Date().toLocaleTimeString()}`;
+      driven = [`${started}, running…`];
       onDone();
-      driven = [`started ${started}, done ${new Date().toLocaleTimeString()}`, ...(await runScript(script))];
+      driven = [`${started}, done ${new Date().toLocaleTimeString()}`, ...(await runScript(script))];
       onDone();
     }
-    setTimeout(poll, 300);
+    await pause(300);
+    void poll();
   };
   void poll();
 }

@@ -1,8 +1,15 @@
 //! A vault: the database, its key file, and the keys of the person who unlocked it.
 //!
-//! For now a vault has one person and one collection (docs/adr/0006-one-person-first.md), but it is
-//! stored the way a team's vault will be, so growing one needs no change of format.
+//! A vault starts with one person and one collection (docs/adr/0006-one-person-first.md), stored the
+//! way a team's is, so it can grow into one (docs/adr/0012-teams-on-one-computer.md, in `team`).
 
+mod attachments;
+mod team;
+
+pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
+pub use team::{Collection, Grant, Person};
+
+use crate::access::Role;
 use crate::backup::Backup;
 use crate::crypto::{self, Key, KeyPair, PasswordKdf};
 use crate::error::{Error, Result};
@@ -20,6 +27,8 @@ use zeroize::Zeroizing;
 
 pub const MIN_PASSWORD_CHARS: usize = 8;
 const MAX_RECORD_BYTES: usize = 1024 * 1024;
+/// The most revisions [`Vault::save_all`] takes at once.
+const MAX_BATCH: usize = 1000;
 const KEYRING_FILE: &str = "vault.keys";
 const DATABASE_FILE: &str = "vault.db";
 
@@ -29,8 +38,36 @@ pub struct Vault {
     user_id: Uuid,
     keys: KeyPair,
     conn: Connection,
-    collection_id: Uuid,
-    collection_key: Key,
+    /// The collections this person can open, with their keys and roles.
+    collections: Vec<OpenCollection>,
+    /// Where a new record goes when no collection is named: the vault's first collection.
+    default_collection: Uuid,
+    /// The organization's key pair, when this person is an admin of a team's vault.
+    organization: Option<KeyPair>,
+}
+
+/// A collection this person can open.
+struct OpenCollection {
+    id: Uuid,
+    name: String,
+    /// The person whose private collection it is.
+    owner: Option<Uuid>,
+    role: Role,
+    /// The collection's key, or for a batch operator its batch key only.
+    key: Key,
+}
+
+impl OpenCollection {
+    /// The key records of a kind are encrypted with here, if this person may read them: batch
+    /// sheets under the batch key, so a batch operator can open them and nothing else.
+    fn key_for(&self, kind: Kind) -> Option<Key> {
+        match (self.role, kind) {
+            (Role::Operator, Kind::Batch) => Some(self.key.clone()),
+            (Role::Operator, _) => None,
+            (_, Kind::Batch) => Some(batch_key(&self.key, &self.id)),
+            _ => Some(self.key.clone()),
+        }
+    }
 }
 
 /// What a record is. Each kind keeps its own list; the core does not look inside the content.
@@ -40,6 +77,16 @@ pub enum Kind {
     Recipe,
     /// A person's own material, colorant or additive.
     Material,
+    /// A batch sheet: a recipe's lines with its materials named by in-house codes, for a batch
+    /// operator to weigh out (ADR 4).
+    Batch,
+    /// A firing of a recipe in the firing log: how it was fired, what came out, measurements and
+    /// photos (ADR 14).
+    Firing,
+    /// A set of limits for a unity formula, to check recipes against (ADR 15).
+    Limits,
+    /// What materials cost, to cost recipes (ADR 15).
+    Prices,
 }
 
 impl Kind {
@@ -47,7 +94,24 @@ impl Kind {
         match self {
             Kind::Recipe => "recipe",
             Kind::Material => "material",
+            Kind::Batch => "batch",
+            Kind::Firing => "firing",
+            Kind::Limits => "limits",
+            Kind::Prices => "prices",
         }
+    }
+
+    fn parse(text: &str) -> Option<Kind> {
+        [
+            Kind::Recipe,
+            Kind::Material,
+            Kind::Batch,
+            Kind::Firing,
+            Kind::Limits,
+            Kind::Prices,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == text)
     }
 }
 
@@ -63,6 +127,7 @@ pub struct Revision {
     pub content: serde_json::Value,
     /// This revision deletes the record. It keeps the content it had, to restore it from.
     pub deleted: bool,
+    pub collection_id: Uuid,
 }
 
 impl Vault {
@@ -105,13 +170,18 @@ impl Vault {
                 name: String::new(),
                 password_kdf,
                 private_key,
-                private_key_by_recovery,
+                private_key_by_recovery: Some(private_key_by_recovery),
                 database_key: crypto::seal_key(
                     &keys.public,
                     &database_key,
                     &keyring::database_key_info(&vault_id, &user_id),
                 ),
+                previous_database_key: None,
+                public_key: Vec::new(),
+                organization_key: None,
+                must_set_password: false,
             }],
+            organization: None,
         };
 
         let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
@@ -120,7 +190,7 @@ impl Vault {
         let sealed = crypto::seal_key(
             &keys.public,
             &collection_key,
-            &grant_info(&vault_id, &collection_id, &user_id),
+            &grant_info(&vault_id, &collection_id, &user_id, Role::Admin),
         );
         let tx = conn.unchecked_transaction()?;
         tx.execute(
@@ -149,26 +219,48 @@ impl Vault {
             user_id,
             keys,
             conn,
-            collection_id,
-            collection_key,
+            collections: vec![OpenCollection {
+                id: collection_id,
+                name: String::new(),
+                owner: None,
+                role: Role::Admin,
+                key: collection_key,
+            }],
+            default_collection: collection_id,
+            organization: None,
         };
         Ok((vault, recovery))
     }
 
-    /// Opens the vault with the password. A vault has one person for now, so no name is asked.
+    /// Opens a one-person vault with the password.
     pub fn unlock(dir: &Path, password: &str) -> Result<Vault> {
-        let keyring = read_keyring(dir)?;
-        let keys = open_private_key(&keyring, &Credential::Password(password))?;
-        Vault::open(dir, keyring, keys)
+        Vault::unlock_as(dir, None, password)
     }
 
-    /// Opens the vault with the recovery key and sets a new password. The recovery key stays the
-    /// same, so the printed sheet still works.
+    /// Opens the vault as a person, with their password. A team's vault needs the person; a
+    /// one-person vault's is found without.
+    pub fn unlock_as(dir: &Path, person: Option<Uuid>, password: &str) -> Result<Vault> {
+        let keyring = read_keyring(dir)?;
+        let user = person_in(&keyring, person)?;
+        let keys = open_private_key(&keyring, user, &Credential::Password(password))?;
+        let user_id = user.id;
+        Vault::open(dir, keyring, user_id, keys)
+    }
+
+    /// Opens a one-person vault with the recovery key and sets a new password.
     pub fn recover(dir: &Path, words: &str, new_password: &str) -> Result<Vault> {
+        Vault::recover_as(dir, None, words, new_password)
+    }
+
+    /// Opens the vault as a person with their recovery key and sets a new password. The recovery
+    /// key stays the same, so the printed sheet still works.
+    pub fn recover_as(dir: &Path, person: Option<Uuid>, words: &str, new_password: &str) -> Result<Vault> {
         let credential = Credential::RecoveryKey { words, new_password };
         let keyring = read_keyring(dir)?;
-        let keys = open_private_key(&keyring, &credential)?;
-        let mut vault = Vault::open(dir, keyring, keys)?;
+        let user = person_in(&keyring, person)?;
+        let keys = open_private_key(&keyring, user, &credential)?;
+        let user_id = user.id;
+        let mut vault = Vault::open(dir, keyring, user_id, keys)?;
         vault.set_password(new_password)?;
         Ok(vault)
     }
@@ -190,7 +282,7 @@ impl Vault {
             &keyring::private_key_aad(&self.keyring.vault_id, &self.user_id, "recovery"),
         );
         let mut keyring = self.keyring.clone();
-        user_mut(&mut keyring, &self.user_id).private_key_by_recovery = sealed;
+        user_mut(&mut keyring, &self.user_id).private_key_by_recovery = Some(sealed);
         keyring.write(&self.dir.join(KEYRING_FILE))?;
         self.keyring = keyring;
         Ok(recovery)
@@ -216,7 +308,7 @@ impl Vault {
         if plaintext.len() > MAX_RECORD_BYTES {
             return Err(Error::TooLarge);
         }
-        let sealed = crypto::encrypt(&self.collection_key, &plaintext, &self.draft_aad());
+        let sealed = crypto::encrypt(&self.draft_collection()?.key, &plaintext, &self.draft_aad()?);
         self.set_meta(&self.draft_name(), &serde_json::to_string(&sealed)?)
     }
 
@@ -226,7 +318,7 @@ impl Vault {
             return Ok(None);
         };
         let sealed: crypto::Sealed = serde_json::from_str(&json)?;
-        let plaintext = crypto::decrypt(&self.collection_key, &sealed, &self.draft_aad())
+        let plaintext = crypto::decrypt(&self.draft_collection()?.key, &sealed, &self.draft_aad()?)
             .ok_or_else(|| Error::Corrupt("the saved draft does not decrypt".into()))?;
         Ok(Some(serde_json::from_slice(&plaintext)?))
     }
@@ -247,6 +339,10 @@ impl Vault {
 
     /// Writes a backup of the whole vault to `path` (docs/adr/0007-backups-locking-updates.md).
     pub fn back_up(&mut self, path: &Path) -> Result<LastBackup> {
+        // A backup holds every collection, so in a team only admins make one (ADR 12).
+        if self.is_team() {
+            self.admin()?;
+        }
         // Moves everything from the write-ahead log into the database file, so the file alone is
         // the whole vault. The app holds the only connection, so nothing can be writing meanwhile.
         let busy: i64 = self
@@ -255,24 +351,20 @@ impl Vault {
         if busy != 0 {
             return Err(Error::Io(std::io::Error::other("the vault was busy; try again")));
         }
-        let database = fs::read(self.dir.join(DATABASE_FILE))?;
         let database_key = self.database_key()?;
         let at = now_ms();
-        let file = Backup::seal(
+        Backup::write(
+            path,
             self.keyring.vault_id,
             at,
             self.keyring.clone(),
             &database_key,
-            &database,
+            &self.dir.join(DATABASE_FILE),
         )?;
-        files::write_atomically(path, &file)?;
 
         let last = LastBackup {
             at,
-            file_name: path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            file_name: file_name_of(path),
         };
         self.set_meta("last_backup", &serde_json::to_string(&last)?)?;
         Ok(last)
@@ -280,10 +372,18 @@ impl Vault {
 
     /// What can be told about a backup before it is opened.
     pub fn backup_info(path: &Path) -> Result<BackupInfo> {
-        let backup = Backup::parse(&fs::read(path)?)?;
+        let backup = Backup::open(path)?;
+        let admins = match backup.header.keyring.organization {
+            Some(_) => team::people(&backup.header.keyring)
+                .into_iter()
+                .filter(|p| p.admin)
+                .collect(),
+            None => Vec::new(),
+        };
         Ok(BackupInfo {
             created_at: backup.header.created_at,
             app_version: backup.header.app_version,
+            admins,
         })
     }
 
@@ -291,43 +391,68 @@ impl Vault {
     /// its recovery key. Nothing in `dir` changes until the backup has been opened and checked;
     /// a vault already there is then moved into a `replaced-…` folder beside it, not deleted.
     /// Returns that folder, if there was a vault to move.
-    pub fn restore(dir: &Path, path: &Path, credential: &Credential) -> Result<(Vault, Option<PathBuf>)> {
-        let backup = Backup::parse(&fs::read(path)?)?;
+    pub fn restore(
+        dir: &Path,
+        path: &Path,
+        person: Option<Uuid>,
+        credential: &Credential,
+    ) -> Result<(Vault, Option<PathBuf>)> {
+        let backup = Backup::open(path)?;
         let keyring = backup.header.keyring.clone();
-        let keys = open_private_key(&keyring, credential)?;
-        let user = only_user(&keyring)?;
+        let user = person_in(&keyring, person)?;
+        // A team's backup replaces everyone's vault, so only an admin restores it (ADR 12).
+        if keyring.organization.is_some() && user.organization_key.is_none() {
+            return Err(Error::NotAllowed);
+        }
+        Vault::may_replace(dir, &user.id)?;
+        let keys = open_private_key(&keyring, user, credential)?;
         let database_key = crypto::open_key(
             &keys,
             &user.database_key,
             &keyring::database_key_info(&keyring.vault_id, &user.id),
         )
         .ok_or(Error::BackupDamaged)?;
-        let database = backup.open(&database_key)?;
-
-        fs::create_dir_all(dir)?;
-        let restoring = dir.join(format!("{DATABASE_FILE}.restoring"));
-        files::write_atomically(&restoring, &database)?;
-        let checked = store::open(&restoring, &database_key).and_then(|conn| {
-            let stored_id: String =
-                conn.query_row("SELECT value FROM meta WHERE name = 'vault_id'", [], |row| row.get(0))?;
-            if parse_id(&stored_id)? != keyring.vault_id {
-                return Err(Error::BackupDamaged);
-            }
-            Ok(())
-        });
-        if let Err(error) = checked {
-            let _ = fs::remove_file(&restoring);
-            return Err(error);
-        }
-
-        let set_aside = set_aside_vault(dir)?;
-        fs::rename(&restoring, dir.join(DATABASE_FILE))?;
-        keyring.write(&dir.join(KEYRING_FILE))?;
-        let mut vault = Vault::open(dir, keyring, keys)?;
+        let user_id = user.id;
+        let created_at = backup.header.created_at;
+        let set_aside = place_backup(dir, backup, &database_key)?;
+        let mut vault = Vault::open(dir, keyring, user_id, keys)?;
         if let Credential::RecoveryKey { new_password, .. } = credential {
             vault.set_password(new_password)?;
         }
+        vault.record_restored(created_at, path)?;
         Ok((vault, set_aside))
+    }
+
+    /// A team's vault holds everyone's work, so only one of its admins may restore over it.
+    /// `person` has shown who they are to the backup; they must also be an admin of the vault in
+    /// `dir`, which their id from another vault is not. A one-person vault, or a key file that does
+    /// not read and so opens for nobody, may be replaced by anyone who can open the backup.
+    fn may_replace(dir: &Path, person: &Uuid) -> Result<()> {
+        let Ok(here) = read_keyring(dir) else {
+            return Ok(());
+        };
+        if here.organization.is_some()
+            && here
+                .user(person)
+                .ok()
+                .is_none_or(|user| user.organization_key.is_none())
+        {
+            return Err(Error::NotAnAdminHere);
+        }
+        Ok(())
+    }
+
+    /// The vault is now what the backup holds, so the backup is its latest, though the copy
+    /// inside the backup was made just before it was recorded.
+    fn record_restored(&mut self, created_at: i64, path: &Path) -> Result<()> {
+        if self.last_backup()?.is_none_or(|last| last.at < created_at) {
+            let last = LastBackup {
+                at: created_at,
+                file_name: file_name_of(path),
+            };
+            self.set_meta("last_backup", &serde_json::to_string(&last)?)?;
+        }
+        Ok(())
     }
 
     /// The vaults a restore set aside in `dir`, newest first.
@@ -374,7 +499,36 @@ impl Vault {
     /// after it. Revisions are never changed, only added (docs/adr/0005-lan-host-and-replicas.md).
     /// Saving after a revision that deletes a record restores it.
     pub fn save(&mut self, kind: Kind, parent: Option<Uuid>, content: &serde_json::Value) -> Result<Revision> {
-        self.add_revision(kind, parent, content, false)
+        self.add_revision(kind, parent, None, content, false)
+    }
+
+    /// Saves a new record into a collection, rather than the vault's first.
+    pub fn save_in(&mut self, kind: Kind, collection: Uuid, content: &serde_json::Value) -> Result<Revision> {
+        self.add_revision(kind, None, Some(collection), content, false)
+    }
+
+    /// Saves several revisions at once, all or none: an import's hundreds of records in one
+    /// write to disk rather than one each. Each is `(parent, content)` as for [`Vault::save`];
+    /// new records go into `collection`, or the vault's first.
+    pub fn save_all(
+        &mut self,
+        kind: Kind,
+        collection: Option<Uuid>,
+        revisions: &[(Option<Uuid>, serde_json::Value)],
+    ) -> Result<Vec<Revision>> {
+        if revisions.len() > MAX_BATCH {
+            return Err(Error::TooLarge);
+        }
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let saved = revisions
+            .iter()
+            .map(|(parent, content)| self.add_revision(kind, *parent, collection, content, false))
+            .collect::<Result<Vec<_>>>()
+            .and_then(|saved| Ok(self.conn.execute_batch("COMMIT").map(|()| saved)?));
+        if saved.is_err() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        saved
     }
 
     /// Deletes a record by adding a revision after its newest that says so, with the same content.
@@ -389,28 +543,39 @@ impl Vault {
             )?
             .pop()
             .ok_or(Error::NotFound)?;
-        self.add_revision(kind, Some(newest), &revision.content, true)
+        self.add_revision(kind, Some(newest), None, &revision.content, true)
     }
 
     /// Erases a deleted record: every revision of it is removed from the vault, and cannot be
     /// brought back. Backups made before still hold it. Returns how many revisions there were.
     pub fn erase(&mut self, kind: Kind, record_id: Uuid) -> Result<usize> {
-        if !self.deleted(kind)?.iter().any(|r| r.record_id == record_id) {
+        let deleted = self.deleted(kind)?;
+        let Some(record) = deleted.iter().find(|r| r.record_id == record_id) else {
             return Err(Error::NotDeleted);
-        }
-        let erased = self.conn.execute(
+        };
+        self.editable(&record.collection_id)?;
+        let tx = self.conn.unchecked_transaction()?;
+        let erased = tx.execute(
             "DELETE FROM revisions WHERE record_id = ?1 AND kind = ?2",
             params![record_id.to_string(), kind.as_str()],
         )?;
+        tx.execute(
+            "DELETE FROM attachments WHERE record_id = ?1 AND kind = ?2",
+            params![record_id.to_string(), kind.as_str()],
+        )?;
+        tx.commit()?;
         // secure_delete has zeroed the freed pages; this empties the write-ahead log of them too.
         self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(erased)
     }
 
+    /// Adds a revision after `parent`, in its collection, or starts a record in `collection` (or
+    /// the vault's first), if this person may change records there.
     fn add_revision(
         &mut self,
         kind: Kind,
         parent: Option<Uuid>,
+        collection: Option<Uuid>,
         content: &serde_json::Value,
         deleted: bool,
     ) -> Result<Revision> {
@@ -418,33 +583,34 @@ impl Vault {
         if plaintext.len() > MAX_RECORD_BYTES {
             return Err(Error::TooLarge);
         }
-        let (record_id, number) = match parent {
-            None => (Uuid::new_v4(), 1),
+        let (record_id, number, collection_id) = match parent {
+            None => (Uuid::new_v4(), 1, collection.unwrap_or(self.default_collection)),
             Some(parent_id) => {
-                let (record_id, number): (String, i64) = self
+                let (record_id, number, collection_id): (String, i64, String) = self
                     .conn
                     .query_row(
-                        "SELECT record_id, number FROM revisions WHERE id = ?1 AND kind = ?2",
+                        "SELECT record_id, number, collection_id FROM revisions WHERE id = ?1 AND kind = ?2",
                         params![parent_id.to_string(), kind.as_str()],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )
                     .optional()?
                     .ok_or(Error::NotFound)?;
-                (parse_id(&record_id)?, number + 1)
+                (parse_id(&record_id)?, number + 1, parse_id(&collection_id)?)
             }
         };
+        let collection_key = self.editable(&collection_id)?.key_for(kind).ok_or(Error::NotAllowed)?;
         let revision_id = Uuid::new_v4();
         let saved_at = now_ms();
         let aad = revision_aad(
             &revision_id,
             &record_id,
             kind.as_str(),
-            &self.collection_id,
+            &collection_id,
             number,
             parent.as_ref(),
             deleted,
         );
-        let sealed = crypto::encrypt(&self.collection_key, &plaintext, &aad);
+        let sealed = crypto::encrypt(&collection_key, &plaintext, &aad);
         self.conn.execute(
             "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -454,7 +620,7 @@ impl Vault {
                 kind.as_str(),
                 parent.map(|id| id.to_string()),
                 number,
-                self.collection_id.to_string(),
+                collection_id.to_string(),
                 self.user_id.to_string(),
                 saved_at,
                 sealed.nonce,
@@ -469,6 +635,7 @@ impl Vault {
             saved_at,
             content: content.clone(),
             deleted,
+            collection_id,
         })
     }
 
@@ -515,8 +682,8 @@ impl Vault {
         Ok(revisions)
     }
 
-    /// Reads and decrypts the revisions that `where_clause` picks, in this vault's collection. The
-    /// clause is fixed SQL, never built from input: values go in `values`.
+    /// Reads and decrypts the revisions that `where_clause` picks, in the collections this person
+    /// can open. The clause is fixed SQL, never built from input: values go in `values`.
     fn read_revisions(
         &self,
         where_clause: &'static str,
@@ -547,9 +714,14 @@ impl Vault {
             let (revision_id, record_id, collection_id) =
                 (parse_id(&id)?, parse_id(&record_id)?, parse_id(&collection_id)?);
             let parent = parent_id.as_deref().map(parse_id).transpose()?;
-            if collection_id != self.collection_id {
+            let Some(key) = self
+                .collections
+                .iter()
+                .find(|c| c.id == collection_id)
+                .and_then(|c| c.key_for(kind))
+            else {
                 continue;
-            }
+            };
             let aad = revision_aad(
                 &revision_id,
                 &record_id,
@@ -559,7 +731,7 @@ impl Vault {
                 parent.as_ref(),
                 deleted,
             );
-            let plaintext = crypto::decrypt(&self.collection_key, &crypto::Sealed { nonce, ciphertext }, &aad)
+            let plaintext = crypto::decrypt(&key, &crypto::Sealed { nonce, ciphertext }, &aad)
                 .ok_or_else(|| Error::Corrupt(format!("revision {revision_id} does not decrypt")))?;
             revisions.push(Revision {
                 record_id,
@@ -568,56 +740,134 @@ impl Vault {
                 saved_at,
                 content: serde_json::from_slice(&plaintext)?,
                 deleted,
+                collection_id,
             });
         }
         Ok(revisions)
     }
 
-    fn open(dir: &Path, keyring: Keyring, keys: KeyPair) -> Result<Vault> {
-        let user = only_user(&keyring)?;
-        let user_id = user.id;
-        let database_key = crypto::open_key(
-            &keys,
-            &user.database_key,
-            &keyring::database_key_info(&keyring.vault_id, &user_id),
-        )
-        .ok_or_else(|| Error::Corrupt("the database key is not sealed to this user".into()))?;
-        let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
+    fn open(dir: &Path, mut keyring: Keyring, user_id: Uuid, keys: KeyPair) -> Result<Vault> {
+        let path = dir.join(DATABASE_FILE);
+        let conn = {
+            let user = keyring.user(&user_id)?;
+            let database_key = |sealed: &crypto::SealedBox| {
+                crypto::open_key(&keys, sealed, &keyring::database_key_info(&keyring.vault_id, &user_id))
+                    .ok_or_else(|| Error::Corrupt("the database key is not sealed to this user".into()))
+            };
+            match (
+                store::open(&path, &database_key(&user.database_key)?),
+                &user.previous_database_key,
+            ) {
+                // A change of database key that did not finish (team::rotate_database_key) left
+                // the database with the one before: finish it.
+                (Err(_), Some(previous)) => {
+                    let conn = store::open(&path, &database_key(previous)?)?;
+                    store::rekey(&conn, &database_key(&user.database_key)?)?;
+                    conn
+                }
+                (opened, _) => opened?,
+            }
+        };
 
         let stored_id: String =
             conn.query_row("SELECT value FROM meta WHERE name = 'vault_id'", [], |row| row.get(0))?;
         if parse_id(&stored_id)? != keyring.vault_id {
             return Err(Error::Corrupt("the key file belongs to another vault".into()));
         }
-        let collection_id: String =
+        if keyring.users.iter().any(|u| u.previous_database_key.is_some()) {
+            keyring.users.iter_mut().for_each(|u| u.previous_database_key = None);
+            keyring.write(&dir.join(KEYRING_FILE))?;
+        }
+        let default_collection: String =
             conn.query_row("SELECT value FROM meta WHERE name = 'default_collection'", [], |row| {
                 row.get(0)
             })?;
-        let collection_id = parse_id(&collection_id)?;
-        let (enc, ciphertext): (Vec<u8>, Vec<u8>) = conn
-            .query_row(
-                "SELECT enc, ciphertext FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                params![user_id.to_string(), collection_id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?
-            .ok_or_else(|| Error::Corrupt("no access to the vault's collection".into()))?;
-        let collection_key = crypto::open_key(
-            &keys,
-            &crypto::SealedBox { enc, ciphertext },
-            &grant_info(&keyring.vault_id, &collection_id, &user_id),
-        )
-        .ok_or_else(|| Error::Corrupt("the collection key does not open".into()))?;
-
-        Ok(Vault {
+        let organization = match (&keyring.organization, &keyring.user(&user_id)?.organization_key) {
+            (Some(_), Some(sealed)) => Some(team::open_organization_key(&keyring, &keys, user_id, sealed)?),
+            _ => None,
+        };
+        let mut vault = Vault {
             dir: dir.to_owned(),
             keyring,
             user_id,
             keys,
             conn,
-            collection_id,
-            collection_key,
-        })
+            collections: Vec::new(),
+            default_collection: parse_id(&default_collection)?,
+            organization,
+        };
+        vault.load_collections()?;
+        Ok(vault)
+    }
+
+    /// Opens the keys of every collection granted to this person, and of all of them for an
+    /// admin. Someone who must still choose their own password opens none.
+    fn load_collections(&mut self) -> Result<()> {
+        self.collections.clear();
+        if self.user().must_set_password {
+            return Ok(());
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT c.id, c.name, c.owner_id, g.role, g.enc, g.ciphertext
+             FROM grants g JOIN collections c ON c.id = g.collection_id WHERE g.user_id = ?1
+             ORDER BY c.created_at",
+        )?;
+        let rows = statement
+            .query_map(params![self.user_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        let mut collections = Vec::new();
+        for (id, name, owner, role, enc, ciphertext) in rows {
+            let id = parse_id(&id)?;
+            let role = parse_role(&role)?;
+            let key = crypto::open_key(
+                &self.keys,
+                &crypto::SealedBox { enc, ciphertext },
+                &grant_info(&self.keyring.vault_id, &id, &self.user_id, role),
+            )
+            .ok_or_else(|| Error::Corrupt("a collection key does not open".into()))?;
+            collections.push(OpenCollection {
+                id,
+                name,
+                owner: owner.as_deref().map(parse_id).transpose()?,
+                role,
+                key,
+            });
+        }
+        if let Some(organization) = &self.organization {
+            for collection in team::organization_collections(&self.conn, &self.keyring, organization)? {
+                match collections.iter_mut().find(|c| c.id == collection.id) {
+                    // An admin's own grant may be an operator's, which holds only the batch key.
+                    Some(granted) => *granted = collection,
+                    None => collections.push(collection),
+                }
+            }
+        }
+        self.collections = collections;
+        Ok(())
+    }
+
+    /// A collection this person can open, or NotFound: one they cannot is not shown to exist.
+    fn readable(&self, id: &Uuid) -> Result<&OpenCollection> {
+        self.collections.iter().find(|c| c.id == *id).ok_or(Error::NotFound)
+    }
+
+    /// A collection this person may change records in.
+    fn editable(&self, id: &Uuid) -> Result<&OpenCollection> {
+        let collection = self.readable(id)?;
+        if !collection.role.can_edit() {
+            return Err(Error::NotAllowed);
+        }
+        Ok(collection)
     }
 
     fn user(&self) -> &KeyringUser {
@@ -670,12 +920,22 @@ impl Vault {
         format!("draft {}", self.user_id)
     }
 
-    fn draft_aad(&self) -> Vec<u8> {
-        format!(
-            "glaze-vault v1 draft vault {} user {} collection {}",
-            self.keyring.vault_id, self.user_id, self.collection_id
-        )
-        .into_bytes()
+    fn draft_aad(&self) -> Result<Vec<u8>> {
+        Ok(draft_aad_for(
+            &self.keyring.vault_id,
+            &self.user_id.to_string(),
+            &self.draft_collection()?.id,
+        ))
+    }
+
+    /// Drafts are encrypted with the person's private collection's key in a team's vault, which
+    /// only they and admins hold; in a one-person vault, with its only collection's.
+    fn draft_collection(&self) -> Result<&OpenCollection> {
+        self.collections
+            .iter()
+            .find(|c| c.owner == Some(self.user_id))
+            .or_else(|| self.collections.iter().find(|c| c.id == self.default_collection))
+            .ok_or(Error::NotAllowed)
     }
 
     fn meta(&self, name: &str) -> Result<Option<String>> {
@@ -767,11 +1027,12 @@ fn set_aside_time(name: &str) -> Option<i64> {
 pub struct BackupInfo {
     pub created_at: i64,
     pub app_version: String,
+    /// For a team's backup, the admins who can restore it; empty for one person's.
+    pub admins: Vec<Person>,
 }
 
-/// Decrypts the person's private key with their password or recovery key.
-fn open_private_key(keyring: &Keyring, credential: &Credential) -> Result<KeyPair> {
-    let user = only_user(keyring)?;
+/// Decrypts a person's private key with their password or recovery key.
+fn open_private_key(keyring: &Keyring, user: &KeyringUser, credential: &Credential) -> Result<KeyPair> {
     let secret = match credential {
         Credential::Password(password) => crypto::decrypt(
             &user.password_kdf.derive(password),
@@ -782,9 +1043,10 @@ fn open_private_key(keyring: &Keyring, credential: &Credential) -> Result<KeyPai
         Credential::RecoveryKey { words, new_password } => {
             check_password(new_password)?;
             let recovery = RecoveryKey::parse(words)?;
+            let sealed = user.private_key_by_recovery.as_ref().ok_or(Error::WrongRecoveryKey)?;
             crypto::decrypt(
                 &crypto::recovery_key(&recovery.entropy(), user.id.as_bytes()),
-                &user.private_key_by_recovery,
+                sealed,
                 &keyring::private_key_aad(&keyring.vault_id, &user.id, "recovery"),
             )
             .ok_or(Error::WrongRecoveryKey)?
@@ -815,10 +1077,12 @@ fn read_keyring(dir: &Path) -> Result<Keyring> {
     Keyring::read(&dir.join(KEYRING_FILE))
 }
 
-fn only_user(keyring: &Keyring) -> Result<&KeyringUser> {
-    match keyring.users.as_slice() {
-        [user] => Ok(user),
-        _ => Err(Error::Corrupt("this version opens vaults with one person only".into())),
+/// The person named, or a one-person vault's only person.
+fn person_in(keyring: &Keyring, person: Option<Uuid>) -> Result<&KeyringUser> {
+    match (person, keyring.users.as_slice()) {
+        (Some(id), _) => keyring.user(&id),
+        (None, [user]) => Ok(user),
+        (None, _) => Err(Error::ChooseName),
     }
 }
 
@@ -832,6 +1096,45 @@ fn set_aside_orphan_database(dir: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Puts a backup's database and key file in `dir`, once the database has opened and been checked,
+/// and returns the folder the vault already there was moved to, if there was one.
+fn place_backup(dir: &Path, backup: Backup, database_key: &Key) -> Result<Option<PathBuf>> {
+    let keyring = backup.header.keyring.clone();
+    let created = !dir.exists();
+    fs::create_dir_all(dir)?;
+    let restoring = dir.join(format!("{DATABASE_FILE}.restoring"));
+    // Decrypted a piece at a time; a backup found damaged part way leaves nothing behind.
+    let checked = files::write_atomically_with(&restoring, |file| {
+        backup
+            .restore_into(database_key, &mut std::io::BufWriter::new(file))
+            .map_err(std::io::Error::other)
+    })
+    .map_err(|error| match error.downcast::<Error>() {
+        Ok(error) => error,
+        Err(error) => Error::Io(error),
+    })
+    .and_then(|()| store::open(&restoring, database_key))
+    .and_then(|conn| {
+        let stored_id: String =
+            conn.query_row("SELECT value FROM meta WHERE name = 'vault_id'", [], |row| row.get(0))?;
+        if parse_id(&stored_id)? != keyring.vault_id {
+            return Err(Error::BackupDamaged);
+        }
+        Ok(())
+    });
+    if let Err(error) = checked {
+        let _ = fs::remove_file(&restoring);
+        if created {
+            let _ = fs::remove_dir(dir);
+        }
+        return Err(error);
+    }
+    let set_aside = set_aside_vault(dir)?;
+    fs::rename(&restoring, dir.join(DATABASE_FILE))?;
+    keyring.write(&dir.join(KEYRING_FILE))?;
+    Ok(set_aside)
 }
 
 /// Moves a vault's files into a new `replaced-…` folder in `dir`, and returns the folder, or None
@@ -852,8 +1155,29 @@ fn set_aside_vault(dir: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(aside))
 }
 
-fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid) -> Vec<u8> {
-    format!("glaze-vault v1 collection-key vault {vault_id} collection {collection_id} user {user_id}").into_bytes()
+/// Binds a person's draft to them and to the collection whose key encrypts it.
+fn draft_aad_for(vault_id: &Uuid, user_id: &str, collection_id: &Uuid) -> Vec<u8> {
+    format!("glaze-vault v1 draft vault {vault_id} user {user_id} collection {collection_id}").into_bytes()
+}
+
+/// What a grant's sealed key is bound to. A batch operator's grant holds the batch key, under
+/// other words, so it cannot be passed off as the collection's key.
+fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid, role: Role) -> Vec<u8> {
+    let what = if role == Role::Operator {
+        "batch-key"
+    } else {
+        "collection-key"
+    };
+    format!("glaze-vault v1 {what} vault {vault_id} collection {collection_id} user {user_id}").into_bytes()
+}
+
+/// A collection's batch sheets are encrypted with a key made from its key, which is all a batch
+/// operator is given: it opens the sheets, and does not lead back to the recipes and materials.
+pub(crate) fn batch_key(collection_key: &Key, collection_id: &Uuid) -> Key {
+    crypto::narrower_key(
+        collection_key,
+        format!("glaze-vault v1 batch-key collection {collection_id}").as_bytes(),
+    )
 }
 
 /// Binds a revision's content to where it belongs, so ciphertext cannot be moved to another
@@ -875,8 +1199,19 @@ fn revision_aad(
         .into_bytes()
 }
 
+/// The name a backup is shown by: its file's, without the folder.
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn parse_id(text: &str) -> Result<Uuid> {
     Uuid::parse_str(text).map_err(|_| Error::Corrupt(format!("bad id {text}")))
+}
+
+fn parse_role(text: &str) -> Result<Role> {
+    Role::parse(text).ok_or_else(|| Error::Corrupt(format!("unknown role {text}")))
 }
 
 fn now_ms() -> i64 {
@@ -1082,11 +1417,11 @@ mod tests {
 
         let target = elsewhere.path().join("vault");
         assert!(matches!(
-            Vault::restore(&target, &path, &Credential::Password("wrong password")),
+            Vault::restore(&target, &path, None, &Credential::Password("wrong password")),
             Err(Error::WrongPassword)
         ));
         assert!(!target.exists());
-        let (restored, set_aside) = Vault::restore(&target, &path, &Credential::Password(PASSWORD)).unwrap();
+        let (restored, set_aside) = Vault::restore(&target, &path, None, &Credential::Password(PASSWORD)).unwrap();
         assert!(set_aside.is_none());
         assert_eq!(
             restored.heads(Kind::Recipe).unwrap()[0].content["name"],
@@ -1114,7 +1449,7 @@ mod tests {
             words: &words,
             new_password: "restored password",
         };
-        let (restored, set_aside) = Vault::restore(dir.path(), &path, &credential).unwrap();
+        let (restored, set_aside) = Vault::restore(dir.path(), &path, None, &credential).unwrap();
         let names: Vec<_> = restored
             .heads(Kind::Recipe)
             .unwrap()
@@ -1122,6 +1457,10 @@ mod tests {
             .map(|r| r.content["name"].clone())
             .collect();
         assert_eq!(names, vec![json!("Before")]);
+        // The backup it came from counts as its latest.
+        let last = restored.last_backup().unwrap().unwrap();
+        assert_eq!(last.file_name, "b.gvbackup");
+        assert_eq!(last.at, Vault::backup_info(&path).unwrap().created_at);
         drop(restored);
         Vault::unlock(dir.path(), "restored password").unwrap();
 
@@ -1140,7 +1479,7 @@ mod tests {
         vault.back_up(&path).unwrap();
         vault.save(Kind::Recipe, None, &json!({ "name": "After" })).unwrap();
         drop(vault);
-        let (restored, _) = Vault::restore(dir.path(), &path, &Credential::Password(PASSWORD)).unwrap();
+        let (restored, _) = Vault::restore(dir.path(), &path, None, &Credential::Password(PASSWORD)).unwrap();
         drop(restored);
 
         let aside = Vault::set_aside(dir.path()).unwrap();
@@ -1177,7 +1516,7 @@ mod tests {
         let restore = |bytes: &[u8]| {
             let path = files.path().join("try.gvbackup");
             fs::write(&path, bytes).unwrap();
-            Vault::restore(elsewhere.path(), &path, &Credential::Password(PASSWORD)).map(|_| ())
+            Vault::restore(elsewhere.path(), &path, None, &Credential::Password(PASSWORD)).map(|_| ())
         };
 
         let mut flipped = good.clone();
@@ -1307,6 +1646,54 @@ mod tests {
         vault.save(Kind::Material, None, &json!({ "name": "Spar" })).unwrap();
         vault.conn.execute("UPDATE revisions SET kind = 'recipe'", []).unwrap();
         assert!(matches!(vault.heads(Kind::Recipe), Err(Error::Corrupt(_))));
+    }
+
+    #[test]
+    fn saving_many_at_once_saves_all_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let first = vault.save(Kind::Material, None, &json!({ "name": "Spar" })).unwrap();
+        let saved = vault
+            .save_all(
+                Kind::Material,
+                None,
+                &[
+                    (None, json!({ "name": "Frit" })),
+                    (Some(first.revision_id), json!({ "name": "Spar, lot 2" })),
+                ],
+            )
+            .unwrap();
+        assert_eq!(saved[1].record_id, first.record_id);
+        assert_eq!(saved[1].number, 2);
+        assert_eq!(vault.heads(Kind::Material).unwrap().len(), 2);
+
+        // One that cannot be saved, here a parent that is not there, leaves out the rest too.
+        let error = vault
+            .save_all(
+                Kind::Material,
+                None,
+                &[(None, json!({ "name": "Whiting" })), (Some(Uuid::new_v4()), json!({}))],
+            )
+            .unwrap_err();
+        assert!(matches!(error, Error::NotFound));
+        let names: Vec<_> = vault
+            .heads(Kind::Material)
+            .unwrap()
+            .iter()
+            .map(|r| r.content["name"].clone())
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert!(!names.contains(&json!("Whiting")));
+        drop(vault);
+        // And what was saved is still there after reopening.
+        assert_eq!(
+            Vault::unlock(dir.path(), PASSWORD)
+                .unwrap()
+                .heads(Kind::Material)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]

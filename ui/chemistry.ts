@@ -11,6 +11,7 @@ import {
   type OxideGroup,
   type UmfResult
 } from '@glazecalc/chemistry';
+import type { RecipeDetails } from './recipeFields';
 import additivesNdjson from '../vendor/glazecalc/data/additives.ndjson?raw';
 import materialsNdjson from '../vendor/glazecalc/data/materials.ndjson?raw';
 
@@ -23,10 +24,13 @@ export interface StandardMaterial extends MaterialInput {
 export interface RecipeLine {
   material: string;
   amount: string;
+  /** On top of the base: the other lines add up to 100, and this is added to them, as grog or a
+   * colorant often is. Missing means part of the base. */
+  addition?: boolean;
 }
 
-/** What the core stores, encrypted, for each revision of a recipe. */
-export interface RecipeContent {
+/** What the core stores, encrypted, for each revision of a recipe, with its optional details. */
+export interface RecipeContent extends RecipeDetails {
   name: string;
   lines: RecipeLine[];
   notes: string;
@@ -225,6 +229,12 @@ export function knownMaterial(library: MaterialLibrary, name: string): boolean {
 /** Accepts 12.5 or 12,5. */
 export function amountOf(text: string): number {
   return Number(text.trim().replace(',', '.'));
+}
+
+/** As amountOf, but null when nothing is typed or it is not a number. */
+export function numberOf(text: string): number | null {
+  const value = amountOf(text);
+  return text.trim() && Number.isFinite(value) ? value : null;
 }
 
 export function analyse(lines: RecipeLine[], library: MaterialLibrary = STANDARD_LIBRARY): Analysis {

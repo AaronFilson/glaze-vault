@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateActio
 import {
   api,
   errorText,
+  type Access,
   type Draft,
   type Kind,
   type LastBackup,
@@ -12,8 +13,9 @@ import {
   type UpdateInfo,
   type VaultStatus
 } from '../api';
-import { BATCH_UNITS, type BatchUnit } from '../batch';
+import { BATCH_UNITS, type BatchSheet, type BatchUnit } from '../batch';
 import {
+  amountOf,
   analyse,
   materialLibrary,
   sameName,
@@ -24,7 +26,15 @@ import {
 import { localDate } from '../export';
 import { restorePart, useEditor, type Editor } from '../useEditor';
 import { useIdleLock } from '../useIdleLock';
+import { BatchSheetForm, BatchSheets } from './BatchSheets';
+import { Blend } from './Blend';
+import { LimitSets, LimitsPanel, limitSets, savedLimitChoice } from './Limits';
+import type { LimitsContent } from '../limits';
+import type { PricesContent } from '../prices';
+import { CostLine, PriceList } from './Prices';
 import { Compare, type Side } from './Compare';
+import { FiringLog, type FiringEditing } from './FiringLog';
+import { newFiring, type Firing } from '../firing';
 import { ConfirmNotice } from './Deleted';
 import { Import } from './Import';
 import type { ImportPlan } from '../importFormats';
@@ -33,6 +43,8 @@ import { PrintView, type PrintJob } from './PrintView';
 import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
+import { CollectionPicker } from './Team';
+import { byCollection, canEdit, defaultCollection, editableCollections, onlyWeighs } from '../team';
 
 const DAY = 24 * 60 * 60 * 1000;
 /** How long after the last keystroke unsaved edits are kept as a draft. */
@@ -42,7 +54,7 @@ type Scope = 'recipe' | 'material' | 'all';
 
 /** One kind's lists and editor, for what deleting, restoring and erasing do the same for both. */
 interface Records<Content> {
-  kind: Kind;
+  kind: 'recipe' | 'material';
   editor: Editor<Content>;
   setHeads: Dispatch<SetStateAction<Revision<Content>[]>>;
   setDeleted: Dispatch<SetStateAction<Revision<Content>[]>>;
@@ -81,13 +93,36 @@ export function Recipes({
   // window.confirm(), so the question is asked in the page.
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
   const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
-  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare' | 'import'>('recipes');
+  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'blend'>(
+    'recipes'
+  );
+  // The firing log (ADR 14): every firing, the one being edited, and the recipe it is showing.
+  const [firings, setFirings] = useState<Firing[]>([]);
+  const [firing, setFiring] = useState<FiringEditing | null>(null);
+  const [firingsOf, setFiringsOf] = useState<string | null>(null);
+  // The recipe a line blend starts from.
+  const [blendFrom, setBlendFrom] = useState<string | null>(null);
+  // People's own limit formulas, and the set the unity formula is compared with (ADR 15).
+  const [ownLimits, setOwnLimits] = useState<Revision<LimitsContent>[]>([]);
+  const [limitChoice, setLimitChoice] = useState(savedLimitChoice);
+  // The price list: the newest the person can open.
+  const [priceList, setPriceList] = useState<Revision<PricesContent> | null>(null);
+  // Batch sheets (ADR 12): the one open, and whether the open recipe's is being made.
+  const [sheets, setSheets] = useState<BatchSheet[]>([]);
+  const [sheet, setSheet] = useState<BatchSheet | null>(null);
+  const [makingSheet, setMakingSheet] = useState(false);
   const [importing, setImporting] = useState<{ fileName: string; plan: ImportPlan } | null>(null);
   const [comparing, setComparing] = useState<[Side, Side] | null>(null);
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
   const [kept, setKept] = useState({ recipe: false, material: false });
   const [newWords, setNewWords] = useState<string[] | null>(null);
+  const [organizationWords, setOrganizationWords] = useState<string[] | null>(null);
+  // Who is signed in and what they can open; in a team's vault, names for other people's
+  // private collections (admins only), and where new records go (ADR 12).
+  const [access, setAccess] = useState<Access | null>(null);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [newCollection, setNewCollection] = useState<string | null>(null);
   const [reminderHidden, setReminderHidden] = useState(false);
   const [updateHidden, setUpdateHidden] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -105,18 +140,65 @@ export function Recipes({
     return done;
   };
 
+  const loadAccess = async () => {
+    const now = await api.access();
+    setAccess(now);
+    setNewCollection((chosen) =>
+      chosen && editableCollections(now).some((c) => c.id === chosen) ? chosen : defaultCollection(now)
+    );
+    if (now.team && now.me.admin) {
+      const team = await api.team();
+      setNames(Object.fromEntries(team.people.map((p) => [p.id, p.name])));
+    }
+    return now;
+  };
+
+  /** After growing or changing the team: access, and the lists, which now show collections. */
+  const reloadAccess = () => {
+    Promise.all([
+      loadAccess(),
+      api.recipes(),
+      api.materials(),
+      api.batchSheets(),
+      api.firings(),
+      api.limitSets(),
+      api.priceLists()
+    ])
+      .then(([, heads, ownMaterials, batchSheets, allFirings, limits, priceLists]) => {
+        setPriceList(priceLists[0] ?? null);
+        setRecipes(heads);
+        setMaterials(ownMaterials);
+        setSheets(batchSheets);
+        setFirings(allFirings);
+        setOwnLimits(limits);
+      })
+      .catch((e) => setError(errorText(e)));
+  };
+
   useEffect(() => {
     (async () => {
-      const [heads, ownMaterials, gone, goneMaterials, settings, last, draft] = await Promise.all([
+      const [now, heads, ownMaterials, gone, goneMaterials, settings, last, draft, batchSheets, allFirings, limits, priceLists] =
+        await Promise.all([
+        loadAccess(),
         api.recipes(),
         api.materials(),
         api.deletedRecords<RecipeContent>('recipe'),
         api.deletedRecords<MaterialContent>('material'),
         api.settings(),
         api.lastBackup(),
-        api.draft()
+        api.draft(),
+        api.batchSheets(),
+        api.firings(),
+        api.limitSets(),
+        api.priceLists()
       ]);
+      setOwnLimits(limits);
+      setPriceList(priceLists[0] ?? null);
       setRecipes(heads);
+      setSheets(batchSheets);
+      setFirings(allFirings);
+      // Someone who only weighs batches starts on the batch sheets.
+      if (onlyWeighs(now)) setView('batches');
       setMaterials(ownMaterials);
       setDeletedRecipes(gone);
       setDeletedMaterials(goneMaterials);
@@ -190,6 +272,7 @@ export function Recipes({
   const openRecipe = (head: RecipeHead | null) =>
     leave('recipe', () => {
       recipe.open(head);
+      setMakingSheet(false);
       setError('');
       setKept((k) => ({ ...k, recipe: false }));
       setView('recipes');
@@ -206,7 +289,11 @@ export function Recipes({
     setSaving(true);
     setError('');
     try {
-      const saved = await api.saveRecipe(recipe.current?.revisionId ?? null, recipe.draft);
+      const saved = await api.saveRecipe(
+        recipe.current?.revisionId ?? null,
+        recipe.draft,
+        recipe.current ? null : newCollection
+      );
       recipe.show(saved);
       setRecipes((list) => [saved, ...list.filter((r) => r.recordId !== saved.recordId)]);
       setKept((k) => ({ ...k, recipe: false }));
@@ -234,7 +321,11 @@ export function Recipes({
     setMaterialError('');
     try {
       const oldName = material.current?.content.name;
-      const saved = await api.saveMaterial(material.current?.revisionId ?? null, { ...material.draft, name });
+      const saved = await api.saveMaterial(
+        material.current?.revisionId ?? null,
+        { ...material.draft, name },
+        material.current ? null : newCollection
+      );
       material.show(saved);
       setMaterials((list) => [saved, ...list.filter((m) => m.recordId !== saved.recordId)]);
       setKept((k) => ({ ...k, material: false }));
@@ -254,7 +345,10 @@ export function Recipes({
       ...content,
       lines: content.lines.map((line) => (sameName(line.material, oldName) ? { ...line, material: name } : line))
     });
-    const users = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, oldName)));
+    const all = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, oldName)));
+    // In a team's vault, recipes this person may only read keep the old name.
+    const users = all.filter((r) => canEdit(access, r.collectionId));
+    const readOnly = all.filter((r) => !users.includes(r)).map((r) => r.content.name || 'Untitled');
     const failed: string[] = [];
     for (const head of users) {
       try {
@@ -265,9 +359,11 @@ export function Recipes({
         failed.push(head.content.name || 'Untitled');
       }
     }
-    if (failed.length) {
-      setMaterialError(`The new name could not be put in ${failed.join(', ')}. Change it there by hand.`);
-    }
+    const problems = [
+      failed.length && `The new name could not be put in ${failed.join(', ')}. Change it there by hand.`,
+      readOnly.length && `You may not change ${readOnly.join(', ')}, so they still use ${oldName}.`
+    ].filter(Boolean);
+    if (problems.length) setMaterialError(problems.join(' '));
   };
 
   const lock = () =>
@@ -401,9 +497,29 @@ export function Recipes({
   if (newWords) {
     return <RecoverySheet words={newWords} doneLabel="Done" onDone={() => setNewWords(null)} />;
   }
+  if (organizationWords) {
+    return (
+      <RecoverySheet
+        words={organizationWords}
+        organization
+        doneLabel="Done"
+        onDone={() => {
+          setOrganizationWords(null);
+          reloadAccess();
+        }}
+      />
+    );
+  }
 
+  const team = !!access?.team;
+  const mayCreate = !team || editableCollections(access).length > 0;
+  const picker = team && access && (
+    <CollectionPicker access={access} names={names} value={newCollection} onChange={setNewCollection} />
+  );
   const reminderDays = settings?.backupReminderDays ?? 0;
   const backupDue =
+    // In a team's vault only admins back up.
+    (!team || !!access?.me.admin) &&
     !reminderHidden &&
     reminderDays > 0 &&
     recipes.length > 0 &&
@@ -461,7 +577,93 @@ export function Recipes({
       </p>
     );
   };
-  const viewButton = (name: 'materials' | 'settings', label: string) => (
+  /** Below a saved recipe someone may change, in a team's vault: its batch sheet. */
+  const batchSheetPart = () => {
+    const current = recipe.current;
+    if (!team || !current || recipe.viewing || !canEdit(access, current.collectionId)) return null;
+    const made = sheets.find((s) => s.content.recipe === current.recordId) ?? null;
+    if (makingSheet) {
+      return (
+        <BatchSheetForm
+          key={current.revisionId}
+          recipe={current}
+          sheet={made}
+          sheets={sheets}
+          recipes={recipes}
+          onSaved={(saved) => {
+            setSheets((list) => [saved, ...list.filter((s) => s.recordId !== saved.recordId)]);
+            setMakingSheet(false);
+          }}
+          onCancel={() => setMakingSheet(false)}
+        />
+      );
+    }
+    const status = !made
+      ? ''
+      : made.content.recipeNumber === current.number
+        ? 'Its batch sheet is up to date.'
+        : `Its batch sheet was made from revision ${made.content.recipeNumber}. Update it to weigh this one.`;
+    return (
+      <div className="row">
+        <button type="button" disabled={recipe.changed} onClick={() => setMakingSheet(true)}>
+          Batch sheet…
+        </button>
+        {status && <span className="hint">{status}</span>}
+      </div>
+    );
+  };
+
+  /** Below a saved recipe: its firings, and logging another. */
+  const firingsPart = () => {
+    const current = recipe.current;
+    if (!current || recipe.viewing) return null;
+    const count = firings.filter((f) => f.content.recipe === current.recordId).length;
+    const show = (editing: FiringEditing | null) => {
+      setFiringsOf(current.recordId);
+      if (editing) setFiring(editing);
+      setView('firings');
+    };
+    return (
+      <div className="row">
+        {count > 0 && (
+          <button type="button" onClick={() => show(null)}>
+            Firings ({count})
+          </button>
+        )}
+        {recipes.length > 1 && (
+          <button
+            type="button"
+            onClick={() =>
+              leave('recipe', () => {
+                setBlendFrom(current.recordId);
+                setView('blend');
+              })
+            }
+          >
+            Line blend…
+          </button>
+        )}
+        {canEdit(access, current.collectionId) && (
+          <button
+            type="button"
+            onClick={() =>
+              show({
+                current: null,
+                draft: newFiring(
+                  { recordId: current.recordId, number: current.number, name: current.content.name },
+                  new Date()
+                )
+              })
+            }
+          >
+            Log a firing…
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const viewButton = (name: 'materials' | 'settings' | 'batches' | 'firings', label: string) => (
     <button type="button" aria-pressed={view === name} onClick={() => setView(view === name ? 'recipes' : name)}>
       {label}
     </button>
@@ -477,8 +679,11 @@ export function Recipes({
               Print…
             </button>
           )}
+          {viewButton('firings', 'Firing log')}
+          {team && viewButton('batches', 'Batch sheets')}
           {viewButton('materials', 'Materials')}
           {viewButton('settings', 'Settings')}
+          {team && access && <span className="hint signed-in">{access.me.name}</span>}
           <button type="button" onClick={lock}>
             Lock
           </button>
@@ -619,6 +824,29 @@ export function Recipes({
             setView('import');
           }}
           onClose={() => setView('recipes')}
+          access={access}
+          onShared={setOrganizationWords}
+          onTeamChanged={reloadAccess}
+          limitFormulas={
+            <LimitSets
+              own={ownLimits}
+              canCreate={mayCreate}
+              collection={team ? newCollection : null}
+              onSaved={(saved) =>
+                setOwnLimits((list) => [saved, ...list.filter((l) => l.recordId !== saved.recordId)])
+              }
+              onDeleted={(recordId) => setOwnLimits((list) => list.filter((l) => l.recordId !== recordId))}
+            />
+          }
+          prices={
+            <PriceList
+              list={priceList}
+              library={library}
+              canEdit={priceList ? canEdit(access, priceList.collectionId) : mayCreate}
+              collection={team ? newCollection : null}
+              onSaved={setPriceList}
+            />
+          }
         />
       ) : view === 'import' && importing ? (
         <Import
@@ -626,6 +854,8 @@ export function Recipes({
           plan={importing.plan}
           recipes={recipes}
           materials={materials}
+          collection={team ? newCollection : null}
+          into={picker || undefined}
           onImported={({ recipes: newRecipes, materials: newMaterials }) => {
             const merge = <Content,>(list: Revision<Content>[], added: Revision<Content>[]) => [
               ...added,
@@ -650,6 +880,43 @@ export function Recipes({
           initial={comparing}
           onClose={() => setView('recipes')}
         />
+      ) : view === 'blend' ? (
+        <Blend
+          recipes={recipes}
+          library={library}
+          initial={blendFrom}
+          canSave={mayCreate}
+          onSave={async (content) => {
+            const saved = await api.saveRecipe(null, content, newCollection);
+            setRecipes((list) => [saved, ...list]);
+          }}
+          onClose={() => setView('recipes')}
+        />
+      ) : view === 'firings' ? (
+        <FiringLog
+          firings={firings}
+          recipes={recipes}
+          access={access}
+          editing={firing}
+          onEdit={setFiring}
+          forRecipe={firingsOf}
+          onForRecipe={setFiringsOf}
+          onSaved={(saved) => setFirings((list) => [saved, ...list.filter((f) => f.recordId !== saved.recordId)])}
+          onErased={(recordId) => setFirings((list) => list.filter((f) => f.recordId !== recordId))}
+        />
+      ) : view === 'batches' && access ? (
+        <BatchSheets
+          sheets={sheets}
+          access={access}
+          names={names}
+          current={sheet}
+          onOpen={setSheet}
+          onPrint={(size, unit) => print({ kind: 'batch', size, unit })}
+          onDeleted={(gone) => {
+            setSheets((list) => list.filter((s) => s.recordId !== gone.recordId));
+            setSheet(null);
+          }}
+        />
       ) : view === 'materials' ? (
         <Materials
           materials={materials}
@@ -671,6 +938,9 @@ export function Recipes({
           onErase={() => setConfirming({ action: 'erase', kind: 'material' })}
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
+          readOnly={!canEdit(access, material.current ? material.current.collectionId : newCollection)}
+          canCreate={mayCreate}
+          newIn={picker || undefined}
         />
       ) : (
         <RecipeEditor
@@ -696,16 +966,41 @@ export function Recipes({
                 }
               : undefined
           }
+          readOnly={!canEdit(access, recipe.current ? recipe.current.collectionId : newCollection)}
+          canCreate={mayCreate}
+          groups={team && access ? byCollection(recipes, access, names) : undefined}
+          newIn={picker || undefined}
+          limits={
+            <>
+              <CostLine lines={shownRecipe.lines} list={priceList?.content ?? null} />
+              <LimitsPanel
+                sets={limitSets(ownLimits)}
+                chosen={limitChoice}
+                onChoose={setLimitChoice}
+                umf={analysis?.result?.umf ?? null}
+              />
+            </>
+          }
+          batchSheet={
+            <>
+              {firingsPart()}
+              {batchSheetPart()}
+            </>
+          }
         />
       )}
 
-      <PrintView
-        job={printJob}
-        content={shownRecipe}
-        saved={recipe.viewing ?? recipe.current}
-        changed={!recipe.viewing && recipe.changed}
-        analysis={analysis}
-      />
+      {view === 'blend' ? null : view === 'batches' && sheet ? (
+        <PrintView job={printJob} content={sheet.content} saved={sheet} changed={false} analysis={null} sheet />
+      ) : (
+        <PrintView
+          job={printJob}
+          content={shownRecipe}
+          saved={recipe.viewing ?? recipe.current}
+          changed={!recipe.viewing && recipe.changed}
+          analysis={analysis}
+        />
+      )}
     </div>
   );
 }
@@ -743,7 +1038,7 @@ function PrintOptions({
   const [kind, setKind] = useState<PrintJob['kind']>(job.kind);
   const [size, setSize] = useState(job.kind === 'batch' ? String(job.size) : '1000');
   const [unit, setUnit] = useState<BatchUnit>(job.kind === 'batch' ? job.unit : 'g');
-  const amount = Number(size.trim().replace(',', '.'));
+  const amount = amountOf(size);
   const ready = kind === 'recipe' || (Number.isFinite(amount) && amount > 0);
 
   const submit = (event: React.FormEvent) => {

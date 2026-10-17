@@ -1,5 +1,19 @@
+import { useState } from 'react';
 import type { RecipeHead } from '../api';
 import type { Analysis, MaterialLibrary, RecipeContent, RecipeLine } from '../chemistry';
+import {
+  ATMOSPHERES,
+  matchesSearch,
+  parseTags,
+  RECIPE_ORDERS,
+  sortRecipes,
+  type RecipeOrder,
+  RECIPE_TYPES,
+  sameDetails,
+  SURFACES,
+  TRANSPARENCIES,
+  type RecipeDetails
+} from '../recipeFields';
 import type { Editor } from '../useEditor';
 import { AnalysisPanel } from './AnalysisPanel';
 import { DeletedList, DeletedNotice } from './Deleted';
@@ -12,8 +26,14 @@ export function sameRecipe(a: RecipeContent, b: RecipeContent): boolean {
   return (
     a.name === b.name &&
     a.notes === b.notes &&
+    sameDetails(a, b) &&
     a.lines.length === b.lines.length &&
-    a.lines.every((line, i) => line.material === b.lines[i].material && line.amount === b.lines[i].amount)
+    a.lines.every(
+      (line, i) =>
+        line.material === b.lines[i].material &&
+        line.amount === b.lines[i].amount &&
+        !!line.addition === !!b.lines[i].addition
+    )
   );
 }
 
@@ -33,7 +53,13 @@ export function RecipeEditor({
   onDelete,
   onRestore,
   onErase,
-  onCompare
+  onCompare,
+  readOnly = false,
+  canCreate = true,
+  groups,
+  newIn,
+  batchSheet,
+  limits
 }: {
   recipes: RecipeHead[];
   deleted: RecipeHead[];
@@ -52,9 +78,26 @@ export function RecipeEditor({
   /** Opens Compare: from here when nothing is said, or with an earlier revision. Missing when
    * there is nothing to compare with. */
   onCompare?: (revisionNumber?: number) => void;
+  /** The person may read this recipe but not change it (a team's vault, ADR 12). */
+  readOnly?: boolean;
+  /** Whether the person may make recipes in any collection. */
+  canCreate?: boolean;
+  /** In a team's vault, the list in groups by collection. */
+  groups?: { label: string; items: RecipeHead[] }[];
+  /** For a new recipe in a team's vault, where it will be saved. */
+  newIn?: React.ReactNode;
+  /** Below the recipe: its batch sheet, in a team's vault. */
+  batchSheet?: React.ReactNode;
+  /** Below the unity formula: comparing it with a limit formula. */
+  limits?: React.ReactNode;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
+  const [search, setSearch] = useState('');
+  const [order, setOrder] = useState<RecipeOrder>(savedOrder);
+  const found = (list: RecipeHead[]) => sortRecipes(list.filter((r) => matchesSearch(r.content, search)), order);
+  const shownGroups = groups?.map((group) => ({ ...group, items: found(group.items) })).filter((g) => g.items.length);
+  const shownRecipes = found(recipes);
 
   const setLine = (index: number, line: RecipeLine) =>
     setDraft({ ...draft, lines: draft.lines.map((l, i) => (i === index ? line : l)) });
@@ -62,21 +105,54 @@ export function RecipeEditor({
   return (
     <>
       <nav className="sidebar no-print" aria-label="Recipes">
-        <button type="button" className="primary" onClick={() => onOpen(null)}>
-          New recipe
-        </button>
+        {canCreate && (
+          <button type="button" className="primary" onClick={() => onOpen(null)}>
+            New recipe
+          </button>
+        )}
+        {recipes.length > 1 && (
+          <div className="find">
+            <input
+              type="search"
+              aria-label="Search recipes"
+              placeholder="Search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <select
+              aria-label="Sort by"
+              value={order}
+              onChange={(e) => {
+                const next = e.target.value as RecipeOrder;
+                setOrder(next);
+                try {
+                  localStorage.setItem(ORDER_KEY, next);
+                } catch {
+                  // Remembering the order is a convenience.
+                }
+              }}
+            >
+              {RECIPE_ORDERS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {recipes.length === 0 ? (
           <p className="hint">No recipes yet.</p>
+        ) : !shownRecipes.length ? (
+          <p className="hint">No recipe has {search.trim()}.</p>
+        ) : shownGroups ? (
+          shownGroups.map((group) => (
+            <section key={group.label}>
+              <h2 className="list-heading">{group.label}</h2>
+              <RecipeList recipes={group.items} current={current} onOpen={onOpen} />
+            </section>
+          ))
         ) : (
-          <ul className="list">
-            {recipes.map((head) => (
-              <li key={head.recordId}>
-                <button type="button" aria-current={head.recordId === current?.recordId} onClick={() => onOpen(head)}>
-                  {head.content.name || 'Untitled'}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <RecipeList recipes={shownRecipes} current={current} onOpen={onOpen} />
         )}
         <DeletedList deleted={deleted} nameOf={(c) => c.name} viewing={viewing} onOpen={onOpenDeleted} />
       </nav>
@@ -94,7 +170,13 @@ export function RecipeEditor({
             onCompare={onCompare && (() => onCompare(viewing.number))}
           />
         )}
-        <fieldset className="plain" disabled={!!viewing}>
+        {readOnly && current && !viewing && (
+          <p className="hint" role="status">
+            You can read this recipe, but not change it. An admin can change what you may do.
+          </p>
+        )}
+        {!current && !viewing && newIn}
+        <fieldset className="plain" disabled={!!viewing || readOnly}>
           <label htmlFor="name">Recipe name</label>
           <input
             id="name"
@@ -103,6 +185,7 @@ export function RecipeEditor({
             placeholder="Untitled"
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
           />
+          <DetailsFields shown={shown} onChange={(change) => setDraft({ ...draft, ...change })} />
 
           <table className="lines">
             <thead>
@@ -110,6 +193,9 @@ export function RecipeEditor({
                 <th scope="col">Material</th>
                 <th scope="col" className="num">
                   Amount
+                </th>
+                <th scope="col" title="On top of the base, which adds up to 100">
+                  Added
                 </th>
                 <th scope="col">
                   <span className="visually-hidden">Remove</span>
@@ -133,6 +219,17 @@ export function RecipeEditor({
                       inputMode="decimal"
                       value={line.amount}
                       onChange={(e) => setLine(index, { ...line, amount: e.target.value })}
+                    />
+                  </td>
+                  <td className="added">
+                    <input
+                      type="checkbox"
+                      aria-label={`Material ${index + 1} is an addition`}
+                      checked={!!line.addition}
+                      onChange={(e) => {
+                        const { addition: _, ...rest } = line;
+                        setLine(index, e.target.checked ? { ...rest, addition: true } : rest);
+                      }}
                     />
                   </td>
                   <td>
@@ -171,9 +268,11 @@ export function RecipeEditor({
         </fieldset>
 
         <div className="row">
-          <button type="button" className="primary" disabled={!changed || saving || !!viewing} onClick={onSave}>
-            {saving ? 'Saving…' : 'Save'}
-          </button>
+          {!readOnly && (
+            <button type="button" className="primary" disabled={!changed || saving || !!viewing} onClick={onSave}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          )}
           {current && !changed && !viewing && (
             <span className="hint">
               Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
@@ -184,19 +283,138 @@ export function RecipeEditor({
               Compare…
             </button>
           )}
-          {current && !viewing && (
+          {current && !viewing && !readOnly && (
             <button type="button" className={`link danger${onCompare ? '' : ' end'}`} onClick={onDelete}>
               Delete…
             </button>
           )}
         </div>
         {error && <p role="alert" className="error">{error}</p>}
+        {batchSheet}
         {current && <RevisionHistory kind="recipe" current={current} viewing={viewing} onView={editor.setViewing} />}
       </main>
 
       <aside className="analysis no-print" aria-label="Unity formula">
         <AnalysisPanel analysis={analysis} />
+        {limits}
       </aside>
     </>
+  );
+}
+
+function RecipeList({
+  recipes,
+  current,
+  onOpen
+}: {
+  recipes: RecipeHead[];
+  current: RecipeHead | null;
+  onOpen: (recipe: RecipeHead) => void;
+}) {
+  return (
+    <ul className="list">
+      {recipes.map((head) => (
+        <li key={head.recordId}>
+          <button type="button" aria-current={head.recordId === current?.recordId} onClick={() => onOpen(head)}>
+            {head.content.name || 'Untitled'}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const ORDER_KEY = 'glaze-vault.recipe-order';
+
+function savedOrder(): RecipeOrder {
+  try {
+    const saved = localStorage.getItem(ORDER_KEY);
+    if (RECIPE_ORDERS.some((o) => o.value === saved)) return saved as RecipeOrder;
+  } catch {
+    // Not available: the default.
+  }
+  return 'changed';
+}
+
+const choices = <Value extends string>(options: { value: Value; label: string }[]) => (
+  <>
+    <option value="">—</option>
+    {options.map((o) => (
+      <option key={o.value} value={o.value}>
+        {o.label}
+      </option>
+    ))}
+  </>
+);
+
+/** A recipe's optional details: what it is, how it is fired, how it looks, and tags. */
+function DetailsFields({
+  shown,
+  onChange
+}: {
+  shown: RecipeContent;
+  onChange: (change: Partial<RecipeDetails>) => void;
+}) {
+  // Tags are typed as text, so a comma can be typed before the next tag.
+  const [tagText, setTagText] = useState(() => (shown.tags ?? []).join(', '));
+  const tags = shown.tags ?? [];
+  const typed = parseTags(tagText);
+  const tagsShown =
+    typed.length === tags.length && typed.every((tag, i) => tag === tags[i]) ? tagText : tags.join(', ');
+  const select = <Value extends string>(
+    id: string,
+    label: string,
+    options: { value: Value; label: string }[],
+    value: Value | undefined,
+    set: (value: Value | undefined) => void
+  ) => (
+    <div className="detail">
+      <label htmlFor={id}>{label}</label>
+      <select id={id} value={value ?? ''} onChange={(e) => set((e.target.value as Value) || undefined)}>
+        {choices(options)}
+      </select>
+    </div>
+  );
+  return (
+    <div className="details">
+      {select('recipe-type', 'Type', RECIPE_TYPES, shown.type, (type) => onChange({ type }))}
+      <div className="detail narrow">
+        <label htmlFor="recipe-cone">Cone</label>
+        <input
+          id="recipe-cone"
+          value={shown.cone ?? ''}
+          placeholder="6, or 9-10"
+          onChange={(e) => onChange({ cone: e.target.value || undefined })}
+        />
+      </div>
+      {select('recipe-atmosphere', 'Atmosphere', ATMOSPHERES, shown.atmosphere, (atmosphere) =>
+        onChange({ atmosphere })
+      )}
+      {select('recipe-surface', 'Surface', SURFACES, shown.surface, (surface) => onChange({ surface }))}
+      {select('recipe-transparency', 'Transparency', TRANSPARENCIES, shown.transparency, (transparency) =>
+        onChange({ transparency })
+      )}
+      <div className="detail">
+        <label htmlFor="recipe-color">Color</label>
+        <input
+          id="recipe-color"
+          value={shown.color ?? ''}
+          onChange={(e) => onChange({ color: e.target.value || undefined })}
+        />
+      </div>
+      <div className="detail wide">
+        <label htmlFor="recipe-tags">Tags</label>
+        <input
+          id="recipe-tags"
+          value={tagsShown}
+          placeholder="Separated by commas"
+          onChange={(e) => {
+            setTagText(e.target.value);
+            const next = parseTags(e.target.value);
+            onChange({ tags: next.length ? next : undefined });
+          }}
+        />
+      </div>
+    </div>
   );
 }
