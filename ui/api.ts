@@ -225,6 +225,8 @@ export const api = {
   deleteRecord: <Content>(kind: Kind, newest: string) => invoke<Revision<Content>>('delete_record', { kind, newest }),
   /** The deleted records, newest first. */
   deletedRecords: <Content>(kind: Kind) => invoke<Revision<Content>[]>('deleted_records', { kind }),
+  /** Moves records, with all their revisions and attachments, to another collection, all or none. */
+  moveRecords: (records: [Kind, string][], to: string) => invoke<void>('move_records', { records, to }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),
   newRecoveryKey: (password: string) => invoke<string[]>('new_recovery_key', { password }),

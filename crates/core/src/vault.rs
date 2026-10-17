@@ -4,6 +4,7 @@
 //! way a team's is, so it can grow into one (docs/adr/0012-teams-on-one-computer.md, in `team`).
 
 mod attachments;
+mod moving;
 mod team;
 
 pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};

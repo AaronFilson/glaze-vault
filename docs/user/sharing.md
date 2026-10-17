@@ -33,6 +33,11 @@ When you make a new recipe or material, **Save in** says which collection it goe
 recipe stays in its collection when it is changed. Imports go into the collection chosen on the
 import screen.
 
+To move a recipe, open it and choose a collection under **Move to**, then **Move…**. It goes with
+all its revisions, firings, photos and batch sheet, and is encrypted again for its new
+collection: people who could open the old one but not the new one stop seeing it. You need to be
+able to change recipes in both.
+
 Admins add collections at the bottom of **Settings** › **People**, and rename them there.
 
 ## Adding someone

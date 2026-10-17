@@ -302,6 +302,13 @@ fn deleted_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revi
     with_vault(&state, |vault| vault.deleted(kind))
 }
 
+/// Moves records, every revision and attachment of each, to another collection: a recipe with its
+/// firings and batch sheets. All move, or none.
+#[tauri::command(async)]
+fn move_records(state: State<AppState>, records: Vec<(Kind, Uuid)>, to: Uuid) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.move_records(&records, to))
+}
+
 /// Removes every revision of a deleted record. Returns how many there were.
 #[tauri::command(async)]
 fn erase_record(state: State<AppState>, kind: Kind, record_id: Uuid) -> CommandResult<usize> {
@@ -891,6 +898,7 @@ pub fn run() {
             delete_record,
             deleted_records,
             erase_record,
+            move_records,
             choose_photo,
             add_attachment,
             get_attachment,

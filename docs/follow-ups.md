@@ -29,7 +29,8 @@ Work decided on but not done yet, with the reason it waits.
 
 - Removing an admin, or taking admin away: needs a new organization key, sealed to the admins
   left, every collection key sealed to it again, and a new organization recovery sheet.
-- Roles that admins can change, and moving a recipe to another collection.
+- Roles that admins can change.
+- Moving a material to another collection, as recipes move.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).

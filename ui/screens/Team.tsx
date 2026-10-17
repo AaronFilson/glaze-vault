@@ -29,6 +29,94 @@ export function CollectionPicker({
   );
 }
 
+/** Below a recipe in a team's vault: moving it, with its firings and batch sheet, to another
+ * collection this person may change. Who can see it changes with it, so it is asked first. */
+export function MoveTo({
+  access,
+  names,
+  from,
+  name,
+  along,
+  onMove
+}: {
+  access: Access;
+  names: Record<string, string>;
+  /** The collection it is in. */
+  from: string;
+  name: string;
+  /** What goes with it, such as "its 3 firings" and "its batch sheet". */
+  along: string[];
+  onMove: (to: string) => Promise<void>;
+}) {
+  const id = useId();
+  const others = editableCollections(access).filter((c) => c.id !== from);
+  const [to, setTo] = useState(others[0]?.id ?? '');
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!others.length) return null;
+  const here = access.collections.find((c) => c.id === from);
+  const there = others.find((c) => c.id === to);
+  const label = (c: typeof here) => (c ? collectionLabel(c, access, names) : '');
+  const move = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await onMove(to);
+      setAsking(false);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className="row">
+        <label htmlFor={id}>Move to</label>
+        <select id={id} value={to} onChange={(e) => setTo(e.target.value)}>
+          {others.map((c) => (
+            <option key={c.id} value={c.id}>
+              {label(c)}
+            </option>
+          ))}
+        </select>
+        <button type="button" onClick={() => setAsking(true)}>
+          Move…
+        </button>
+      </div>
+      {asking && (
+        <div className="notice warning" role="alertdialog" aria-label="Move">
+          <p>
+            <strong>
+              Move {name || 'Untitled'} to {label(there)}?
+            </strong>{' '}
+            It goes with {inWords(['every revision', ...along])}. People who can open {label(here)} but not{' '}
+            {label(there)} will no longer see it.
+          </p>
+          <div className="row">
+            <button type="button" className="primary" disabled={busy} onClick={() => void move()}>
+              {busy ? 'Moving…' : 'Move'}
+            </button>
+            <button type="button" autoFocus onClick={() => setAsking(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** "a", "a and b", "a, b and c". */
+const inWords = (items: string[]) =>
+  items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+
 /** Settings for a one-person vault: growing it into a team's (ADR 12). */
 export function ShareVault({ onShared }: { onShared: (organizationWords: string[]) => void }) {
   const [name, setName] = useState('');

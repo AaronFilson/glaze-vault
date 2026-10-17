@@ -46,7 +46,7 @@ import { PrintView, type PrintJob } from './PrintView';
 import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
-import { CollectionPicker } from './Team';
+import { CollectionPicker, MoveTo } from './Team';
 import { byCollection, canEdit, defaultCollection, editableCollections, onlyWeighs } from '../team';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -642,6 +642,45 @@ export function Recipes({
     );
   };
 
+  /** Below a saved recipe someone may change, in a team's vault: moving it to another collection,
+   * with its firings and batch sheets. */
+  const movePart = () => {
+    const current = recipe.current;
+    if (!team || !access || !current || recipe.viewing || !canEdit(access, current.collectionId)) return null;
+    const ownFirings = firings.filter((f) => f.content.recipe === current.recordId);
+    const ownSheets = sheets.filter((s) => s.content.recipe === current.recordId);
+    const along = [
+      ownFirings.length ? (ownFirings.length === 1 ? 'its firing' : `its ${ownFirings.length} firings`) : '',
+      ownSheets.length ? 'its batch sheet' : ''
+    ].filter(Boolean);
+    return (
+      <MoveTo
+        key={current.recordId}
+        access={access}
+        names={names}
+        from={current.collectionId!}
+        name={current.content.name}
+        along={along}
+        onMove={async (to) => {
+          await api.moveRecords(
+            [
+              ['recipe', current.recordId],
+              ...ownFirings.map((f): [Kind, string] => ['firing', f.recordId]),
+              ...ownSheets.map((s): [Kind, string] => ['batch', s.recordId])
+            ],
+            to
+          );
+          const moved = <Item extends { recordId: string; collectionId?: string }>(list: Item[], ids: string[]) =>
+            list.map((item) => (ids.includes(item.recordId) ? { ...item, collectionId: to } : item));
+          setRecipes((list) => moved(list, [current.recordId]));
+          setFirings((list) => moved(list, ownFirings.map((f) => f.recordId)));
+          setSheets((list) => moved(list, ownSheets.map((s) => s.recordId)));
+          recipe.rebase({ ...current, collectionId: to }, (draft) => draft);
+        }}
+      />
+    );
+  };
+
   /** Below a saved recipe: its firings, and logging another. */
   const firingsPart = () => {
     const current = recipe.current;
@@ -1055,6 +1094,7 @@ export function Recipes({
             <>
               {firingsPart()}
               {batchSheetPart()}
+              {movePart()}
             </>
           }
         />

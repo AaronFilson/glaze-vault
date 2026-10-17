@@ -65,6 +65,11 @@ decides the steps people take and what is built first.
   first, everyone else is removed, their private collections stay as "From name", the
   organization key goes, and every collection and the database get new keys. Roles are not
   remembered for growing again; the admin's private collection is.
+- **Moving a recipe** to another collection takes its firings and batch sheets with it (the page
+  names them; the core does not read content). Every revision and attachment is encrypted again
+  under the new collection's key and bound to it, in one transaction, and needs the right to
+  change records in both collections. This rewrites revisions in place, which is fine on one
+  computer; with the LAN host a move becomes an event of its own that replicas apply.
 - **Signing revisions and the audit log wait for the LAN host** (ADR 5). On one computer, anyone
   who could forge a revision or rewrite a log already holds the database key and their own
   signing key, so signatures there show little; with a host, the host checks each signature
