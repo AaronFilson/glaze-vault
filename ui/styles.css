@@ -9,6 +9,9 @@
   --danger: #a3341f;
   --warn: #8a5a00;
   --focus: #2f6f6a66;
+  /* Chart series, checked for colour blindness against the surface (the dataviz palette). */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
   color-scheme: light;
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-size: 15px;
@@ -27,6 +30,8 @@
     --danger: #f08a73;
     --warn: #e6b450;
     --focus: #6fb8b166;
+    --series-1: #3987e5;
+    --series-2: #d95926;
     color-scheme: dark;
   }
 }
@@ -877,4 +882,153 @@ table.facts th {
 
 input.short {
   width: 5rem;
+}
+
+/* The vitrification chart (VitrificationChart.tsx). */
+.vitrification {
+  margin: 0 0 1.5rem;
+  max-width: 40rem;
+}
+
+.vitrification .legend {
+  display: flex;
+  gap: 1rem;
+  list-style: none;
+  margin: 0.25rem 0;
+  padding: 0;
+  font-size: 0.9rem;
+}
+
+.vitrification .legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chart-frame {
+  position: relative;
+}
+
+.chart-frame svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.chart-frame .grid line {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-frame text {
+  fill: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-frame .end-label {
+  fill: var(--text);
+}
+
+.chart-frame .dot {
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.chart-frame .crosshair {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.chart-frame .hit {
+  fill: transparent;
+  outline: none;
+}
+
+.chart-frame .hit:focus-visible {
+  fill: var(--focus);
+}
+
+.chart-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px #0002;
+}
+
+.chart-tooltip .tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Blends (Blend.tsx): wide tables scroll, and a triaxial's triangle of numbered tests. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.compare-table.blend .shares {
+  display: block;
+  font-weight: 400;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.triangle-key {
+  margin: 0.5rem 0;
+  max-width: 22rem;
+}
+
+.triangle-key svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.triangle-key .triangle {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.triangle-key .point {
+  fill: var(--surface);
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.triangle-key text {
+  fill: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.triangle-key .corner {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.fit-button {
+  margin-top: 0.5rem;
+}
+
+.role-editor {
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+
+.role-editor fieldset legend {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
 }

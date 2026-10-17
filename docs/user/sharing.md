@@ -33,6 +33,11 @@ When you make a new recipe or material, **Save in** says which collection it goe
 recipe stays in its collection when it is changed. Imports go into the collection chosen on the
 import screen.
 
+To move a recipe, open it and choose a collection under **Move to**, then **Move…**. It goes with
+all its revisions, firings, photos and batch sheet, and is encrypted again for its new
+collection: people who could open the old one but not the new one stop seeing it. You need to be
+able to change recipes in both.
+
 Admins add collections at the bottom of **Settings** › **People**, and rename them there.
 
 ## Adding someone
@@ -52,11 +57,22 @@ Then give them a role on each shared collection, in the table:
 | No access | Nothing in that collection. |
 | Batch operator: weighs | Its batch sheets, and nothing else: no recipes, materials or chemistry. |
 | Chemist: reads | Read its recipes and materials, and their chemistry. |
+| Tester: logs firings | Read as a chemist does, and log firings with their photos. |
 | Formulator: changes | Also make, change, delete and erase them. |
 | Admin | Everything, in every collection, and people, collections and backups. |
 
 Someone who can only read a recipe sees it with its fields greyed out, and no **Save** or
 **Delete…**.
+
+### Your own roles
+
+Under **Roles**, below the people, an admin can make roles of their own: a name, and what it
+changes, out of recipes, materials, batch sheets, firings, limit formulas and prices. Each reads
+everything in its collections, as a chemist does. *Costing* might change only prices; *Glaze
+tester* firings and limit formulas. Give it to people in the table like any other role.
+
+Changing a role changes it for everyone who has it, from their next sign-in. A role can be
+deleted once nobody has it.
 
 ## Batch sheets
 
@@ -101,9 +117,17 @@ chosen on this computer.
 
 ## More than one admin
 
-**Make admin…** makes someone an admin. Admins can do everything, so choose them with care: in
-this version an admin cannot be made an ordinary member again, or removed. That needs a new
-organization key, which comes later.
+**Make admin…** makes someone an admin. Admins can do everything, so choose them with care.
+
+**Take admin away…** makes an admin an ordinary member again, keeping their roles on collections.
+An admin could open every collection, so the organization gets a new key and every collection a
+new one, which takes a moment, and then Glaze Vault shows the new **organization recovery
+sheet** to print and check. The old sheet stops working: put it out of use. **Remove…** on an
+admin does the same first, then removes them.
+
+If the organization's sheet is lost, **New organization recovery sheet…** makes a new one to
+print; the old one stops working. Nobody can take admin away from themselves, so there is always
+an admin left.
 
 ## If every admin is locked out
 

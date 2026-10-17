@@ -12,7 +12,8 @@ import {
   type UpdateInfo,
   type VaultStatus
 } from '../api';
-import { exportCsv, exportFileName, exportInsightXml, exportJson, exportMaterialsCsv } from '../export';
+import { exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJson, exportMaterialsCsv } from '../export';
+import type { Firing } from '../firing';
 import { ImportError, readImport, type ImportPlan } from '../importFormats';
 import { editableCollections } from '../team';
 import { NewPassword } from './NewPassword';
@@ -34,6 +35,7 @@ export function Settings({
   backUp,
   recipes,
   materials,
+  firings,
   status,
   update,
   onUpdate,
@@ -55,6 +57,7 @@ export function Settings({
   backUp: () => Promise<void>;
   recipes: RecipeHead[];
   materials: MaterialHead[];
+  firings: Firing[];
   status: VaultStatus;
   update: UpdateInfo | null;
   onUpdate: (update: UpdateInfo | null) => void;
@@ -101,6 +104,7 @@ export function Settings({
           ) : access.me.admin ? (
             <People
               access={access}
+              onOrganizationKey={onShared}
               onChanged={onTeamChanged}
               onShrunk={(backup) => {
                 setShrunkTo(backup);
@@ -120,8 +124,10 @@ export function Settings({
       <AutoLock settings={settings} onSettings={onSettings} />
       {admin && <Backups settings={settings} onSettings={onSettings} lastBackup={lastBackup} backUp={backUp} />}
       {admin && <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />}
-      {(!team || editableCollections(access).length > 0) && <Import onImport={onImport} />}
-      <Export recipes={recipes} materials={materials} version={status.version} />
+      {(!team || editableCollections(access, 'recipe').length > 0 || editableCollections(access, 'material').length > 0) && (
+        <Import onImport={onImport} />
+      )}
+      <Export recipes={recipes} materials={materials} firings={firings} version={status.version} />
       <ChangePassword />
       <RecoveryKey onNewRecoveryKey={onNewRecoveryKey} />
       <Updates status={status} update={update} onUpdate={onUpdate} onInstall={onInstall} />
@@ -340,15 +346,17 @@ function Backups({
 function Export({
   recipes,
   materials,
+  firings,
   version
 }: {
   recipes: RecipeHead[];
   materials: MaterialHead[];
+  firings: Firing[];
   version: string;
 }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const run = async (kind: 'csv' | 'json' | 'xml' | 'materials-csv') => {
+  const run = async (kind: 'csv' | 'json' | 'xml' | 'materials-csv' | 'firings-csv') => {
     setMessage('');
     setError('');
     const now = new Date();
@@ -359,9 +367,15 @@ function Export({
           ? exportJson(recipes, materials, now, version)
           : kind === 'xml'
             ? exportInsightXml(recipes)
-            : exportMaterialsCsv(materials);
+            : kind === 'firings-csv'
+              ? exportFiringsCsv(firings)
+              : exportMaterialsCsv(materials);
     const fileName =
-      kind === 'materials-csv' ? exportFileName('csv', now, 'materials') : exportFileName(kind, now);
+      kind === 'materials-csv'
+        ? exportFileName('csv', now, 'materials')
+        : kind === 'firings-csv'
+          ? exportFileName('csv', now, 'firing log')
+          : exportFileName(kind, now);
     try {
       const saved = await api.saveExport(fileName, contents);
       if (saved) setMessage(`Saved ${saved}.`);
@@ -373,7 +387,7 @@ function Export({
     <Section title="Export">
       <p>
         Saves every recipe as a spreadsheet (CSV), or as Insight XML for Insight-live and Glazy, or everything as JSON
-        for other programs. Your own materials have a spreadsheet of their own.{' '}
+        for other programs. Your own materials and the firing log each have a spreadsheet of their own.{' '}
         <strong>Exported files are not encrypted:</strong> anyone who gets the file can read your recipes. Use a
         backup to keep a safe copy.
       </p>
@@ -389,6 +403,9 @@ function Export({
         </button>
         <button type="button" disabled={!materials.length} onClick={() => run('materials-csv')}>
           Export materials as CSV…
+        </button>
+        <button type="button" disabled={!firings.length} onClick={() => run('firings-csv')}>
+          Export firing log as CSV…
         </button>
       </div>
       {message && <p className="hint" role="status">{message}</p>}

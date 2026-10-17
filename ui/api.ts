@@ -2,7 +2,7 @@
 // what these return.
 import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core';
 import type { BatchSheet } from './batch';
-import type { Firing } from './firing';
+import type { Firing, FiringContent } from './firing';
 import type { LimitsContent } from './limits';
 import type { PricesContent } from './prices';
 import type { MaterialContent, RecipeContent } from './chemistry';
@@ -27,8 +27,16 @@ export interface VaultStatus {
   people: Person[];
 }
 
-/** What a person may do in a collection (docs/adr/0012-teams-on-one-computer.md). */
-export type Role = 'operator' | 'chemist' | 'formulator' | 'admin';
+/** What a person may do in a collection (docs/adr/0012-teams-on-one-computer.md, 0004): a built-in
+ * role, or "role:" and the id of one an admin made. */
+export type Role = 'operator' | 'chemist' | 'tester' | 'formulator' | 'admin' | `role:${string}`;
+
+/** A role an admin made: it reads everything in its collections, and changes these kinds. */
+export interface CustomRole {
+  id: string;
+  name: string;
+  changes: Kind[];
+}
 
 export interface Person {
   id: string;
@@ -44,6 +52,8 @@ export interface Collection {
   /** The person whose private collection it is. */
   owner: string | null;
   role: Role;
+  /** The kinds of record this person may make and change here, as the core decides. */
+  changes: Kind[];
 }
 
 /** Who unlocked the vault, whether it is a team's, and what they can open. */
@@ -115,6 +125,7 @@ export interface DraftPart<Content> {
 export interface Draft {
   recipe?: DraftPart<RecipeContent>;
   material?: DraftPart<MaterialContent>;
+  firing?: DraftPart<FiringContent>;
 }
 
 export type RestoreWith =
@@ -188,9 +199,17 @@ export const api = {
   resetPerson: (person: string, oneTimePassword: string) =>
     invoke<void>('reset_person', { person, oneTimePassword }),
   makeAdmin: (person: string) => invoke<void>('make_admin', { person }),
+  /** Returns the organization's new recovery words: the old sheet stops working. */
+  takeAdminAway: (person: string) => invoke<string[]>('take_admin_away', { person }),
+  newOrganizationRecoveryKey: () => invoke<string[]>('new_organization_recovery_key'),
   /** Removes everyone else and the organization key; returns where the backup made first is. */
   goBackToOnePerson: () => invoke<string>('go_back_to_one_person'),
   createCollection: (name: string) => invoke<Collection>('create_collection', { name }),
+  customRoles: () => invoke<CustomRole[]>('custom_roles'),
+  createRole: (name: string, changes: Kind[]) => invoke<CustomRole>('create_role', { name, changes }),
+  changeRole: (id: string, name: string, changes: Kind[]) => invoke<void>('change_role', { id, name, changes }),
+  /** Refused while anyone has the role. */
+  deleteRole: (id: string) => invoke<void>('delete_role', { id }),
   renameCollection: (collection: string, name: string) => invoke<void>('rename_collection', { collection, name }),
   lock: () => invoke<void>('lock'),
   changePassword: (current: string, newPassword: string) => invoke<void>('change_password', { current, newPassword }),
@@ -224,6 +243,8 @@ export const api = {
   deleteRecord: <Content>(kind: Kind, newest: string) => invoke<Revision<Content>>('delete_record', { kind, newest }),
   /** The deleted records, newest first. */
   deletedRecords: <Content>(kind: Kind) => invoke<Revision<Content>[]>('deleted_records', { kind }),
+  /** Moves records, with all their revisions and attachments, to another collection, all or none. */
+  moveRecords: (records: [Kind, string][], to: string) => invoke<void>('move_records', { records, to }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),
   newRecoveryKey: (password: string) => invoke<string[]>('new_recovery_key', { password }),

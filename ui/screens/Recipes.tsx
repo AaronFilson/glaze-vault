@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
+  type DraftPart,
   api,
   errorText,
   type Access,
@@ -28,13 +29,15 @@ import { restorePart, useEditor, type Editor } from '../useEditor';
 import { useIdleLock } from '../useIdleLock';
 import { BatchSheetForm, BatchSheets } from './BatchSheets';
 import { Blend } from './Blend';
+import { Fit } from './Fit';
 import { LimitSets, LimitsPanel, limitSets, savedLimitChoice } from './Limits';
 import type { LimitsContent } from '../limits';
 import type { PricesContent } from '../prices';
-import { CostLine, PriceList } from './Prices';
+import { CostLine, PriceLists } from './Prices';
+import { priceListFor } from '../prices';
 import { Compare, type Side } from './Compare';
 import { FiringLog, type FiringEditing } from './FiringLog';
-import { newFiring, type Firing } from '../firing';
+import { newFiring, sameFiring, type Firing, type FiringContent } from '../firing';
 import { ConfirmNotice } from './Deleted';
 import { Import } from './Import';
 import type { ImportPlan } from '../importFormats';
@@ -43,7 +46,7 @@ import { PrintView, type PrintJob } from './PrintView';
 import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
-import { CollectionPicker } from './Team';
+import { CollectionPicker, MoveTo } from './Team';
 import { byCollection, canEdit, defaultCollection, editableCollections, onlyWeighs } from '../team';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -93,9 +96,9 @@ export function Recipes({
   // window.confirm(), so the question is asked in the page.
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
   const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
-  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'blend'>(
-    'recipes'
-  );
+  const [view, setView] = useState<
+    'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'blend' | 'fit'
+  >('recipes');
   // The firing log (ADR 14): every firing, the one being edited, and the recipe it is showing.
   const [firings, setFirings] = useState<Firing[]>([]);
   const [firing, setFiring] = useState<FiringEditing | null>(null);
@@ -105,8 +108,8 @@ export function Recipes({
   // People's own limit formulas, and the set the unity formula is compared with (ADR 15).
   const [ownLimits, setOwnLimits] = useState<Revision<LimitsContent>[]>([]);
   const [limitChoice, setLimitChoice] = useState(savedLimitChoice);
-  // The price list: the newest the person can open.
-  const [priceList, setPriceList] = useState<Revision<PricesContent> | null>(null);
+  // The price lists the person can open, newest first: a recipe is costed by its collection's.
+  const [priceLists, setPriceLists] = useState<Revision<PricesContent>[]>([]);
   // Batch sheets (ADR 12): the one open, and whether the open recipe's is being made.
   const [sheets, setSheets] = useState<BatchSheet[]>([]);
   const [sheet, setSheet] = useState<BatchSheet | null>(null);
@@ -115,7 +118,7 @@ export function Recipes({
   const [comparing, setComparing] = useState<[Side, Side] | null>(null);
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
-  const [kept, setKept] = useState({ recipe: false, material: false });
+  const [kept, setKept] = useState({ recipe: false, material: false, firing: false });
   const [newWords, setNewWords] = useState<string[] | null>(null);
   const [organizationWords, setOrganizationWords] = useState<string[] | null>(null);
   // Who is signed in and what they can open; in a team's vault, names for other people's
@@ -165,7 +168,7 @@ export function Recipes({
       api.priceLists()
     ])
       .then(([, heads, ownMaterials, batchSheets, allFirings, limits, priceLists]) => {
-        setPriceList(priceLists[0] ?? null);
+        setPriceLists(priceLists);
         setRecipes(heads);
         setMaterials(ownMaterials);
         setSheets(batchSheets);
@@ -193,7 +196,7 @@ export function Recipes({
         api.priceLists()
       ]);
       setOwnLimits(limits);
-      setPriceList(priceLists[0] ?? null);
+      setPriceLists(priceLists);
       setRecipes(heads);
       setSheets(batchSheets);
       setFirings(allFirings);
@@ -207,19 +210,39 @@ export function Recipes({
       draftKept.current = !!draft;
       const keptRecipe = draft?.recipe && restorePart(draft.recipe, heads, sameRecipe);
       const keptMaterial = draft?.material && restorePart(draft.material, ownMaterials, sameMaterial);
+      const keptFiring = draft?.firing && restorePart(draft.firing, allFirings, sameFiring);
       if (keptRecipe) recipe.show(keptRecipe.current, keptRecipe.content);
       if (keptMaterial) material.show(keptMaterial.current, keptMaterial.content);
+      if (keptFiring) setFiring({ current: keptFiring.current, draft: keptFiring.content });
       if (keptMaterial && !keptRecipe) setView('materials');
-      setKept({ recipe: !!keptRecipe, material: !!keptMaterial });
+      else if (keptFiring && !keptRecipe) setView('firings');
+      setKept({ recipe: !!keptRecipe, material: !!keptMaterial, firing: !!keptFiring });
       setLoaded(true);
     })().catch((e) => setError(errorText(e)));
     // Once, on opening.
   }, []);
 
+  // A firing being logged or changed, as a draft. A new one counts from when it is opened.
+  const firingChanged = !!firing && (!firing.current || !sameFiring(firing.current.content, firing.draft));
+  const firingPart: DraftPart<FiringContent> | undefined =
+    firing && firingChanged
+      ? { recordId: firing.current?.recordId ?? null, revisionId: firing.current?.revisionId ?? null, content: firing.draft }
+      : undefined;
+  // Opening another firing, or saving this one, ends what was kept from last time.
+  const editFiring = (next: FiringEditing | null) => {
+    if (!next || next.current !== firing?.current) setKept((k) => ({ ...k, firing: false }));
+    setFiring(next);
+  };
+  // For locking, which may run after the recipe's and material's changes are saved or discarded.
+  const firingPartRef = useRef(firingPart);
+  firingPartRef.current = firingPart;
+
   // Keeps unsaved edits as an encrypted draft a moment after the last change, and forgets the
   // draft as soon as nothing is unsaved.
   const unsaved: Draft | null =
-    recipe.part || material.part ? { recipe: recipe.part, material: material.part } : null;
+    recipe.part || material.part || firingPart
+      ? { recipe: recipe.part, material: material.part, firing: firingPart }
+      : null;
   const unsavedJson = JSON.stringify(unsaved);
   useEffect(() => {
     if (!loaded) return;
@@ -245,6 +268,8 @@ export function Recipes({
 
   const library = useMemo(() => materialLibrary(materials.map((m) => m.content)), [materials]);
   const shownRecipe = recipe.viewing?.content ?? recipe.draft;
+  const prices =
+    priceListFor(priceLists, (recipe.viewing ?? recipe.current)?.collectionId ?? newCollection)?.content ?? null;
   const analysis = useMemo(() => analyse(shownRecipe.lines, library), [shownRecipe.lines, library]);
 
   useIdleLock(settings?.autoLock && !newWords ? settings.autoLockMinutes : null, async () => {
@@ -324,7 +349,7 @@ export function Recipes({
       const saved = await api.saveMaterial(
         material.current?.revisionId ?? null,
         { ...material.draft, name },
-        material.current ? null : newCollection
+        material.current ? null : newIn('material')
       );
       material.show(saved);
       setMaterials((list) => [saved, ...list.filter((m) => m.recordId !== saved.recordId)]);
@@ -366,9 +391,13 @@ export function Recipes({
     if (problems.length) setMaterialError(problems.join(' '));
   };
 
+  // A firing being edited is kept for next time rather than asked about: its editor may not be
+  // on the screen to save it from.
   const lock = () =>
     leave('all', async () => {
-      await api.lock();
+      const firing = firingPartRef.current;
+      if (firing) await writeDraft(() => api.lockWithDraft({ firing }));
+      else await api.lock();
       onLocked('manual');
     });
 
@@ -516,6 +545,10 @@ export function Recipes({
   const picker = team && access && (
     <CollectionPicker access={access} names={names} value={newCollection} onChange={setNewCollection} />
   );
+  /** Where a new record of a kind goes: the collection chosen, if this person may make that kind
+   * there, else the first where they may. */
+  const newIn = (kind: Kind) =>
+    !team || canEdit(access, newCollection, kind) ? newCollection : defaultCollection(access, kind);
   const reminderDays = settings?.backupReminderDays ?? 0;
   const backupDue =
     // In a team's vault only admins back up.
@@ -580,7 +613,7 @@ export function Recipes({
   /** Below a saved recipe someone may change, in a team's vault: its batch sheet. */
   const batchSheetPart = () => {
     const current = recipe.current;
-    if (!team || !current || recipe.viewing || !canEdit(access, current.collectionId)) return null;
+    if (!team || !current || recipe.viewing || !canEdit(access, current.collectionId, 'batch')) return null;
     const made = sheets.find((s) => s.content.recipe === current.recordId) ?? null;
     if (makingSheet) {
       return (
@@ -613,6 +646,52 @@ export function Recipes({
     );
   };
 
+  /** Below a saved recipe someone may change, in a team's vault: moving it to another collection,
+   * with its firings and batch sheets. */
+  const movePart = () => {
+    const current = recipe.current;
+    if (!team || !access || !current || recipe.viewing) return null;
+    const ownFirings = firings.filter((f) => f.content.recipe === current.recordId);
+    const ownSheets = sheets.filter((s) => s.content.recipe === current.recordId);
+    const kinds: Kind[] = [
+      'recipe',
+      ...(ownFirings.length ? (['firing'] as const) : []),
+      ...(ownSheets.length ? (['batch'] as const) : [])
+    ];
+    if (!kinds.every((kind) => canEdit(access, current.collectionId, kind))) return null;
+    const along = [
+      ownFirings.length ? (ownFirings.length === 1 ? 'its firing' : `its ${ownFirings.length} firings`) : '',
+      ownSheets.length ? 'its batch sheet' : ''
+    ].filter(Boolean);
+    return (
+      <MoveTo
+        key={`${current.recordId} ${current.collectionId}`}
+        access={access}
+        names={names}
+        from={current.collectionId!}
+        kinds={kinds}
+        name={current.content.name}
+        along={along}
+        onMove={async (to) => {
+          await api.moveRecords(
+            [
+              ['recipe', current.recordId],
+              ...ownFirings.map((f): [Kind, string] => ['firing', f.recordId]),
+              ...ownSheets.map((s): [Kind, string] => ['batch', s.recordId])
+            ],
+            to
+          );
+          const moved = <Item extends { recordId: string; collectionId?: string }>(list: Item[], ids: string[]) =>
+            list.map((item) => (ids.includes(item.recordId) ? { ...item, collectionId: to } : item));
+          setRecipes((list) => moved(list, [current.recordId]));
+          setFirings((list) => moved(list, ownFirings.map((f) => f.recordId)));
+          setSheets((list) => moved(list, ownSheets.map((s) => s.recordId)));
+          recipe.rebase({ ...current, collectionId: to }, (draft) => draft);
+        }}
+      />
+    );
+  };
+
   /** Below a saved recipe: its firings, and logging another. */
   const firingsPart = () => {
     const current = recipe.current;
@@ -620,7 +699,7 @@ export function Recipes({
     const count = firings.filter((f) => f.content.recipe === current.recordId).length;
     const show = (editing: FiringEditing | null) => {
       setFiringsOf(current.recordId);
-      if (editing) setFiring(editing);
+      if (editing) editFiring(editing);
       setView('firings');
     };
     return (
@@ -640,10 +719,10 @@ export function Recipes({
               })
             }
           >
-            Line blend…
+            Blend…
           </button>
         )}
-        {canEdit(access, current.collectionId) && (
+        {canEdit(access, current.collectionId, 'firing') && (
           <button
             type="button"
             onClick={() =>
@@ -744,6 +823,17 @@ export function Recipes({
             }}
           />
         )}
+        {kept.firing && firingChanged && firing && (
+          <KeptNotice
+            name={firing.draft.recipeName ? `the firing of ${firing.draft.recipeName}` : 'a firing'}
+            plain
+            onShow={view === 'firings' ? undefined : () => setView('firings')}
+            onDiscard={() => {
+              editFiring(firing.current ? { current: firing.current, draft: firing.current.content } : null);
+              setKept((k) => ({ ...k, firing: false }));
+            }}
+          />
+        )}
         {printing && view === 'recipes' && (
           <PrintOptions job={printJob} onPrint={print} onCancel={() => setPrinting(false)} />
         )}
@@ -796,6 +886,7 @@ export function Recipes({
           backUp={backUp}
           recipes={recipes}
           materials={materials}
+          firings={firings}
           status={status}
           update={update}
           onUpdate={(found) => {
@@ -830,8 +921,8 @@ export function Recipes({
           limitFormulas={
             <LimitSets
               own={ownLimits}
-              canCreate={mayCreate}
-              collection={team ? newCollection : null}
+              canCreate={!team || editableCollections(access, 'limits').length > 0}
+              collection={team ? newIn('limits') : null}
               onSaved={(saved) =>
                 setOwnLimits((list) => [saved, ...list.filter((l) => l.recordId !== saved.recordId)])
               }
@@ -839,12 +930,12 @@ export function Recipes({
             />
           }
           prices={
-            <PriceList
-              list={priceList}
+            <PriceLists
+              lists={priceLists}
+              access={access}
+              names={names}
               library={library}
-              canEdit={priceList ? canEdit(access, priceList.collectionId) : mayCreate}
-              collection={team ? newCollection : null}
-              onSaved={setPriceList}
+              onSaved={(saved) => setPriceLists((lists) => [saved, ...lists.filter((l) => l.recordId !== saved.recordId)])}
             />
           }
         />
@@ -892,13 +983,37 @@ export function Recipes({
           }}
           onClose={() => setView('recipes')}
         />
+      ) : view === 'fit' ? (
+        <Fit
+          recipe={shownRecipe}
+          library={library}
+          sets={limitSets(ownLimits)}
+          initialSet={limitChoice}
+          onUse={
+            !recipe.viewing && canEdit(access, recipe.current ? recipe.current.collectionId : newCollection)
+              ? (lines) => {
+                  recipe.edit({ ...recipe.draft, lines });
+                  setView('recipes');
+                }
+              : undefined
+          }
+          onSaveNew={
+            mayCreate
+              ? async (content) => {
+                  const saved = await api.saveRecipe(null, content, newCollection);
+                  setRecipes((list) => [saved, ...list]);
+                }
+              : undefined
+          }
+          onClose={() => setView('recipes')}
+        />
       ) : view === 'firings' ? (
         <FiringLog
           firings={firings}
           recipes={recipes}
           access={access}
           editing={firing}
-          onEdit={setFiring}
+          onEdit={editFiring}
           forRecipe={firingsOf}
           onForRecipe={setFiringsOf}
           onSaved={(saved) => setFirings((list) => [saved, ...list.filter((f) => f.recordId !== saved.recordId)])}
@@ -938,9 +1053,20 @@ export function Recipes({
           onErase={() => setConfirming({ action: 'erase', kind: 'material' })}
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
-          readOnly={!canEdit(access, material.current ? material.current.collectionId : newCollection)}
-          canCreate={mayCreate}
-          newIn={picker || undefined}
+          readOnly={!canEdit(access, material.current ? material.current.collectionId : newIn('material'), 'material')}
+          canCreate={!team || editableCollections(access, 'material').length > 0}
+          newIn={
+            (team && access && (
+              <CollectionPicker
+                access={access}
+                names={names}
+                kind="material"
+                value={newIn('material')}
+                onChange={setNewCollection}
+              />
+            )) ||
+            undefined
+          }
         />
       ) : (
         <RecipeEditor
@@ -972,25 +1098,31 @@ export function Recipes({
           newIn={picker || undefined}
           limits={
             <>
-              <CostLine lines={shownRecipe.lines} list={priceList?.content ?? null} />
+              <CostLine lines={shownRecipe.lines} list={prices} />
               <LimitsPanel
                 sets={limitSets(ownLimits)}
                 chosen={limitChoice}
                 onChoose={setLimitChoice}
                 umf={analysis?.result?.umf ?? null}
               />
+              {analysis?.result && (
+                <button type="button" className="fit-button" onClick={() => setView('fit')}>
+                  Fit to a formula…
+                </button>
+              )}
             </>
           }
           batchSheet={
             <>
               {firingsPart()}
               {batchSheetPart()}
+              {movePart()}
             </>
           }
         />
       )}
 
-      {view === 'blend' ? null : view === 'batches' && sheet ? (
+      {view === 'blend' || view === 'fit' ? null : view === 'batches' && sheet ? (
         <PrintView job={printJob} content={sheet.content} saved={sheet} changed={false} analysis={null} sheet />
       ) : (
         <PrintView
@@ -999,18 +1131,30 @@ export function Recipes({
           saved={recipe.viewing ?? recipe.current}
           changed={!recipe.viewing && recipe.changed}
           analysis={analysis}
+          prices={prices}
         />
       )}
     </div>
   );
 }
 
-function KeptNotice({ name, onShow, onDiscard }: { name: string; onShow?: () => void; onDiscard: () => void }) {
+function KeptNotice({
+  name,
+  plain = false,
+  onShow,
+  onDiscard
+}: {
+  name: string;
+  /** The name is a phrase, not a record's name to show in bold. */
+  plain?: boolean;
+  onShow?: () => void;
+  onDiscard: () => void;
+}) {
   return (
     <div className="notice" role="status">
       <p>
-        These are your unsaved changes to <strong>{name || 'Untitled'}</strong> from last time. Save them, or discard
-        them.
+        These are your unsaved changes to {plain ? name : <strong>{name || 'Untitled'}</strong>} from last time. Save
+        them, or discard them.
       </p>
       <div className="row">
         {onShow && (

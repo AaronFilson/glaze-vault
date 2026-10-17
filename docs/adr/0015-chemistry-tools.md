@@ -27,12 +27,21 @@ mostly in the app.
   (kg or lb) and a price per material, matched to recipe lines by name as materials are. A recipe
   shows its cost per unit of dry batch, additions included, and names the materials with no
   price. In a team, whoever may read the list's collection sees prices.
-- **Not yet:** working out a recipe from a target formula. Glazecalc's chemistry can fit amounts
-  to target oxides (its `fitAmounts`), which this can use later; triaxial blends; and costs on
-  printed batch sheets.
+- **Fitting to a formula** uses Glazecalc's `fitAmounts`: the target, a unity formula, is scaled
+  to the recipe's own moles of flux so the batch keeps its size, and the fit changes the amounts
+  as little as the match allows. Lines can be held, additions are held unless asked, and
+  materials can be brought in to try. Moving into a limit set clamps each oxide just inside its
+  range and scales the fluxes not at a bound so they still add up to one; since a fit comes near
+  and not exactly, the target is moved further in for any oxide the result is still outside, and
+  fitted again, up to six times. What is found goes into the editor as unsaved changes, or is
+  saved as a new recipe; nothing is changed by fitting alone.
+- Added after: **triaxial blends** of three recipes, over a triangle with 2 to 6 steps along a side,
+  numbered row by row from the first recipe's corner, mixed as line blends are; a test is named
+  after the recipes with a share in it. And printed batch sheets show each line's cost and the batch's, converting the batch's
+  unit to the list's; and each collection can have its own price list, a recipe being costed by
+  its collection's list or else the newest the person can open.
 
 ## Consequences
 
 - The built-in set is one source's view; the guide says where it is from and to check others.
-- A price list is per vault for now: the newest the person can open. Different prices per
-  collection, and price histories, wait until someone needs them.
+- Price histories wait until someone needs them; a list's revisions keep its earlier prices.

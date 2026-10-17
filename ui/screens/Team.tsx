@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { api, errorText, MIN_PASSWORD_CHARS, type Access, type Role, type Team } from '../api';
+import { api, errorText, MIN_PASSWORD_CHARS, type Access, type CustomRole, type Kind, type Role, type Team } from '../api';
 import { collectionLabel, editableCollections } from '../team';
 
 /** Where a new recipe or material is saved, in a team's vault. */
@@ -7,19 +7,22 @@ export function CollectionPicker({
   access,
   names,
   value,
-  onChange
+  onChange,
+  kind = 'recipe'
 }: {
   access: Access;
   names: Record<string, string>;
   value: string | null;
   onChange: (collection: string) => void;
+  /** What is being made, for the collections it can go into. */
+  kind?: Kind;
 }) {
   const id = useId();
   return (
     <div className="row">
       <label htmlFor={id}>Save in</label>
       <select id={id} value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
-        {editableCollections(access).map((collection) => (
+        {editableCollections(access, kind).map((collection) => (
           <option key={collection.id} value={collection.id}>
             {collectionLabel(collection, access, names)}
           </option>
@@ -28,6 +31,97 @@ export function CollectionPicker({
     </div>
   );
 }
+
+/** Below a recipe in a team's vault: moving it, with its firings and batch sheet, to another
+ * collection this person may change. Who can see it changes with it, so it is asked first. */
+export function MoveTo({
+  access,
+  names,
+  from,
+  kinds,
+  name,
+  along,
+  onMove
+}: {
+  access: Access;
+  names: Record<string, string>;
+  /** The collection it is in. */
+  from: string;
+  /** The kinds of record that move, which this person must be able to change in both. */
+  kinds: Kind[];
+  name: string;
+  /** What goes with it, such as "its 3 firings" and "its batch sheet". */
+  along: string[];
+  onMove: (to: string) => Promise<void>;
+}) {
+  const id = useId();
+  const others = access.collections.filter((c) => c.id !== from && kinds.every((kind) => c.changes.includes(kind)));
+  const [to, setTo] = useState(others[0]?.id ?? '');
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!others.length) return null;
+  const here = access.collections.find((c) => c.id === from);
+  const there = others.find((c) => c.id === to);
+  const label = (c: typeof here) => (c ? collectionLabel(c, access, names) : '');
+  const move = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await onMove(to);
+      setAsking(false);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className="row">
+        <label htmlFor={id}>Move to</label>
+        <select id={id} value={to} onChange={(e) => setTo(e.target.value)}>
+          {others.map((c) => (
+            <option key={c.id} value={c.id}>
+              {label(c)}
+            </option>
+          ))}
+        </select>
+        <button type="button" onClick={() => setAsking(true)}>
+          Move…
+        </button>
+      </div>
+      {asking && (
+        <div className="notice warning" role="alertdialog" aria-label="Move">
+          <p>
+            <strong>
+              Move {name || 'Untitled'} to {label(there)}?
+            </strong>{' '}
+            It goes with {inWords(['every revision', ...along])}. People who can open {label(here)} but not{' '}
+            {label(there)} will no longer see it.
+          </p>
+          <div className="row">
+            <button type="button" className="primary" disabled={busy} onClick={() => void move()}>
+              {busy ? 'Moving…' : 'Move'}
+            </button>
+            <button type="button" autoFocus onClick={() => setAsking(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** "a", "a and b", "a, b and c". */
+const inWords = (items: string[]) =>
+  items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 
 /** Settings for a one-person vault: growing it into a team's (ADR 12). */
 export function ShareVault({ onShared }: { onShared: (organizationWords: string[]) => void }) {
@@ -86,34 +180,58 @@ const ROLES: { role: Role | ''; label: string }[] = [
   { role: '', label: 'No access' },
   { role: 'operator', label: 'Batch operator: weighs' },
   { role: 'chemist', label: 'Chemist: reads' },
+  { role: 'tester', label: 'Tester: logs firings' },
   { role: 'formulator', label: 'Formulator: changes' }
 ];
+
+/** What a role an admin makes can be allowed to change, in the order shown. */
+export const CHANGEABLE: { kind: Kind; label: string }[] = [
+  { kind: 'recipe', label: 'Recipes' },
+  { kind: 'material', label: 'Materials' },
+  { kind: 'batch', label: 'Batch sheets' },
+  { kind: 'firing', label: 'Firings' },
+  { kind: 'limits', label: 'Limit formulas' },
+  { kind: 'prices', label: 'Prices' }
+];
+
+/** "Costing: changes prices", "Reviewer: reads". */
+function customLabel(role: CustomRole): string {
+  const kinds = CHANGEABLE.filter((c) => role.changes.includes(c.kind)).map((c) => c.label.toLowerCase());
+  return `${role.name}: ${kinds.length ? `changes ${kinds.join(', ')}` : 'reads'}`;
+}
 
 /** Settings for a team's admin: people, what each may do in each collection, and collections. */
 export function People({
   access,
   onChanged,
-  onShrunk
+  onShrunk,
+  onOrganizationKey
 }: {
   access: Access;
   onChanged: () => void;
   /** The vault is one person's again; with where the backup made first is. */
   onShrunk: (backup: string) => void;
+  /** The organization has a new recovery key, to print: after admin is taken away, or for a lost sheet. */
+  onOrganizationKey: (words: string[]) => void;
 }) {
   const [shrinking, setShrinking] = useState(false);
+  const [replacingSheet, setReplacingSheet] = useState(false);
   const [team, setTeam] = useState<Team | null>(null);
+  const [roles, setRoles] = useState<CustomRole[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [asking, setAsking] = useState<{ person: string; action: 'remove' | 'reset' | 'admin' } | null>(null);
+  const [asking, setAsking] = useState<{ person: string; action: Question } | null>(null);
   const [newName, setNewName] = useState('');
   const [oneTime, setOneTime] = useState('');
   const [collectionName, setCollectionName] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = () =>
-    api
-      .team()
-      .then(setTeam)
+    Promise.all([api.team(), api.customRoles()])
+      .then(([team, roles]) => {
+        setTeam(team);
+        setRoles(roles);
+      })
       .catch((e) => setError(errorText(e)));
   useEffect(() => {
     void load();
@@ -189,11 +307,13 @@ export function People({
                         )
                       }
                     >
-                      {ROLES.map(({ role, label }) => (
-                        <option key={role} value={role}>
-                          {label}
-                        </option>
-                      ))}
+                      {[...ROLES, ...roles.map((r) => ({ role: `role:${r.id}` as Role, label: customLabel(r) }))].map(
+                        ({ role, label }) => (
+                          <option key={role} value={role}>
+                            {label}
+                          </option>
+                        )
+                      )}
                     </select>
                   )}
                 </td>
@@ -201,7 +321,11 @@ export function People({
               <td>
                 {person.id !== access.me.id && (
                   <div className="row">
-                    {!person.admin && (
+                    {person.admin ? (
+                      <button type="button" className="link" onClick={() => setAsking({ person: person.id, action: 'unadmin' })}>
+                        Take admin away…
+                      </button>
+                    ) : (
                       <button type="button" className="link" onClick={() => setAsking({ person: person.id, action: 'admin' })}>
                         Make admin…
                       </button>
@@ -209,15 +333,13 @@ export function People({
                     <button type="button" className="link" onClick={() => setAsking({ person: person.id, action: 'reset' })}>
                       Reset password…
                     </button>
-                    {!person.admin && (
-                      <button
-                        type="button"
-                        className="link danger"
-                        onClick={() => setAsking({ person: person.id, action: 'remove' })}
-                      >
-                        Remove…
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="link danger"
+                      onClick={() => setAsking({ person: person.id, action: person.admin ? 'remove-admin' : 'remove' })}
+                    >
+                      Remove…
+                    </button>
                   </div>
                 )}
               </td>
@@ -235,20 +357,33 @@ export function People({
           onConfirm={async (password) => {
             const { person, action } = asking;
             const name = nameOf(person);
+            // Taking admin away gives the organization a new recovery sheet, shown even if
+            // removing them afterwards does not work. Once it is done, trying again only removes.
+            let words: string[] | null = null;
+            if (action === 'remove-admin') {
+              const demoted = await change(async () => {
+                words = await api.takeAdminAway(person);
+              });
+              if (!demoted) return;
+              setAsking({ person, action: 'remove' });
+            }
             const done = await change(
-              () =>
-                action === 'remove'
-                  ? api.removePerson(person)
-                  : action === 'reset'
-                    ? api.resetPerson(person, password)
-                    : api.makeAdmin(person),
-              action === 'remove'
+              async () => {
+                if (action === 'unadmin') words = await api.takeAdminAway(person);
+                else if (action === 'remove' || action === 'remove-admin') await api.removePerson(person);
+                else if (action === 'reset') await api.resetPerson(person, password);
+                else if (action === 'admin') await api.makeAdmin(person);
+              },
+              action === 'remove' || action === 'remove-admin'
                 ? `${name} was removed. Collections they could open have new keys.`
                 : action === 'reset'
                   ? `Pass the one-time password on to ${name}. They choose their own when they sign in.`
-                  : `${name} is now an admin.`
+                  : action === 'unadmin'
+                    ? `${name} is not an admin any more, and keeps their roles. Every collection has a new key.`
+                    : `${name} is now an admin.`
             );
             if (done) setAsking(null);
+            if (words) onOrganizationKey(words);
           }}
         />
       )}
@@ -321,6 +456,69 @@ export function People({
         </button>
       </form>
 
+      <h3>Roles</h3>
+      <p className="hint">
+        Besides the roles above, you can make your own. Each reads everything in the collections it is given on, as a
+        chemist does, and changes what you tick. A change to a role applies to everyone who has it, from their next
+        sign-in.
+      </p>
+      <ul className="plain-list">
+        {roles.map((role) => (
+          <RoleEditor
+            key={role.id}
+            role={role}
+            busy={busy}
+            onSave={(name, changes) => change(() => api.changeRole(role.id, name, changes), `${name} saved.`)}
+            onDelete={() => change(() => api.deleteRole(role.id), `${role.name} deleted.`)}
+          />
+        ))}
+        <RoleEditor
+          key={`new-${roles.length}`}
+          role={null}
+          busy={busy}
+          onSave={(name, changes) => change(() => api.createRole(name, changes), `${name} made. Give it to people above.`)}
+        />
+      </ul>
+
+      <h3>Organization recovery sheet</h3>
+      <p>
+        If the organization recovery sheet is lost, make a new one to print and keep safe. The old sheet stops working.
+      </p>
+      <div className="row">
+        <button type="button" disabled={busy} onClick={() => setReplacingSheet(true)}>
+          New organization recovery sheet…
+        </button>
+      </div>
+      {replacingSheet && (
+        <div className="notice warning" role="alertdialog" aria-label="New organization recovery sheet">
+          <p>
+            Make a new organization recovery sheet? The one you have stops working at once, so print the new one and
+            keep it safe before you leave the next screen.
+          </p>
+          <div className="row">
+            <button
+              type="button"
+              className="danger"
+              disabled={busy}
+              onClick={() => {
+                let words: string[] | null = null;
+                void change(async () => {
+                  words = await api.newOrganizationRecoveryKey();
+                }).then(() => {
+                  setReplacingSheet(false);
+                  if (words) onOrganizationKey(words);
+                });
+              }}
+            >
+              Make a new sheet
+            </button>
+            <button type="button" autoFocus onClick={() => setReplacingSheet(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       <h3>Going back to one person</h3>
       <p>
         Makes this vault yours alone again. Everyone else is removed; what was in their private collections stays,
@@ -374,6 +572,74 @@ export function People({
   );
 }
 
+/** A role an admin made, to rename or change, or a new one to make. */
+function RoleEditor({
+  role,
+  busy,
+  onSave,
+  onDelete
+}: {
+  role: CustomRole | null;
+  busy: boolean;
+  onSave: (name: string, changes: Kind[]) => Promise<boolean>;
+  onDelete?: () => void;
+}) {
+  const [name, setName] = useState(role?.name ?? '');
+  const [changes, setChanges] = useState<Kind[]>(role?.changes ?? []);
+  const id = useId();
+  const changed =
+    !role || name.trim() !== role.name || changes.length !== role.changes.length || changes.some((k) => !role.changes.includes(k));
+  return (
+    <li>
+      <form
+        className="role-editor"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void onSave(name.trim(), changes).then((done) => {
+            if (done && !role) {
+              setName('');
+              setChanges([]);
+            }
+          });
+        }}
+      >
+        <label htmlFor={`${id}-name`}>{role ? 'Role' : 'New role'}</label>
+        <input
+          id={`${id}-name`}
+          value={name}
+          placeholder={role ? undefined : 'Such as Costing, or Glaze tester'}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <fieldset className="plain row wrap">
+          <legend>Changes</legend>
+          {CHANGEABLE.map(({ kind, label }) => (
+            <label key={kind} className="check">
+              <input
+                type="checkbox"
+                checked={changes.includes(kind)}
+                onChange={(e) => setChanges(e.target.checked ? [...changes, kind] : changes.filter((k) => k !== kind))}
+              />
+              {label}
+            </label>
+          ))}
+        </fieldset>
+        <div className="row">
+          <button type="submit" disabled={busy || !name.trim() || !changed}>
+            {role ? 'Save role' : 'Make role'}
+          </button>
+          {role && onDelete && (
+            <button type="button" className="link danger" disabled={busy} onClick={onDelete}>
+              Delete
+            </button>
+          )}
+        </div>
+      </form>
+    </li>
+  );
+}
+
+type Question = 'remove' | 'remove-admin' | 'reset' | 'admin' | 'unadmin';
+
 function PersonQuestion({
   name,
   action,
@@ -382,25 +648,41 @@ function PersonQuestion({
   onCancel
 }: {
   name: string;
-  action: 'remove' | 'reset' | 'admin';
+  action: Question;
   busy: boolean;
   onConfirm: (oneTimePassword: string) => void;
   onCancel: () => void;
 }) {
   const [password, setPassword] = useState('');
-  const confirm = action === 'remove' ? `Remove ${name}` : action === 'reset' ? 'Reset password' : 'Make admin';
+  const removing = action === 'remove' || action === 'remove-admin';
+  const confirm = removing
+    ? `Remove ${name}`
+    : action === 'reset'
+      ? 'Reset password'
+      : action === 'unadmin'
+        ? 'Take admin away'
+        : 'Make admin';
   return (
     <div className="notice warning" role="alertdialog" aria-label={confirm}>
-      {action === 'remove' && (
+      {removing && (
         <p>
           Remove {name}? They can no longer sign in. Every collection they could open gets a new key, which takes a
           moment. Their private collection stays, for admins.
+          {action === 'remove-admin' &&
+            ` ${name} is an admin, so admin is taken away first: the organization gets a new key and a new recovery sheet, which you print next. The old sheet stops working.`}
+        </p>
+      )}
+      {action === 'unadmin' && (
+        <p>
+          Take admin away from {name}? They keep their roles on collections. The organization gets a new key, and every
+          collection a new one, since an admin could open them all; then you print the new organization recovery sheet.
+          The old sheet stops working.
         </p>
       )}
       {action === 'admin' && (
         <p>
-          Make {name} an admin? They can open and change everything, and manage people. In this version, an admin
-          cannot be made an ordinary member again, or removed.
+          Make {name} an admin? They can open and change everything, and manage people. Taking admin away later gives
+          every collection a new key and the organization a new recovery sheet.
         </p>
       )}
       {action === 'reset' && (
@@ -422,7 +704,7 @@ function PersonQuestion({
       <div className="row">
         <button
           type="button"
-          className={action === 'remove' ? 'danger' : 'primary'}
+          className={removing || action === 'unadmin' ? 'danger' : 'primary'}
           disabled={busy || (action === 'reset' && [...password].length < MIN_PASSWORD_CHARS)}
           onClick={() => onConfirm(password)}
         >

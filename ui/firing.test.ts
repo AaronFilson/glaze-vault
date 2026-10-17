@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barResults, EMPTY_BAR, firingMatches, newFiring, sameFiring, tidyFiring } from './firing';
+import { barResults, EMPTY_BAR, firingMatches, newFiring, sameFiring, tidyFiring, vitrification, type Firing } from './firing';
 import { imageType } from './photos';
 
 describe('a test bar', () => {
@@ -65,5 +65,36 @@ describe('photos', () => {
     expect(imageType(text('RIFF\0\0\0\0WEBPVP8 '))).toBe('image/webp');
     expect(imageType(text('\0\0\0\x18ftypheic'))).toBe('image/heic');
     expect(imageType(text('<svg xmlns='))).toBeNull();
+  });
+});
+
+describe('vitrification', () => {
+  const fired = (cone: string | undefined, fired: string, soaked: string, savedAt = 1): Firing => ({
+    recordId: `f-${cone}-${fired}`,
+    revisionId: 'v',
+    number: 1,
+    savedAt,
+    content: {
+      ...newFiring({ recordId: 'r', number: 1, name: 'Body' }, new Date(2026, 9, 16)),
+      cone,
+      bar: { mark: '100', dry: '95', fired, firedWeight: '50', soakedWeight: soaked, suspendedWeight: '' }
+    }
+  });
+
+  it('averages each cone, lowest cone first, cone 04 below cone 1', () => {
+    const points = vitrification([
+      fired('6', '89', '51'),
+      fired('04', '94', '56'),
+      fired('6', '87', '50.5'),
+      fired('^10', '86', '50')
+    ]);
+    expect(points.map((p) => p.cone)).toEqual(['04', '6', '10']);
+    expect(points[1]).toEqual({ cone: '6', firings: 2, absorption: 1.5, shrinkage: 12 });
+    expect(points[2].absorption).toBe(0);
+  });
+
+  it('leaves out firings without a cone or results', () => {
+    const none = fired('6', '', '');
+    expect(vitrification([fired(undefined, '90', '52'), none])).toEqual([]);
   });
 });

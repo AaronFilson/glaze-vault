@@ -1,4 +1,4 @@
-// A recipe's optional details (type, firing, surface, colour, tags), and finding and sorting
+// A recipe's optional details (type, firing, surface, colour, tags, a slip's targets), and finding and sorting
 // recipes by them. Every field may be missing: recipes saved before they existed have none, and
 // nobody has to fill them in.
 import type { RecipeHead } from './api';
@@ -19,6 +19,9 @@ export interface RecipeDetails {
   transparency?: Transparency;
   color?: string;
   tags?: string[];
+  /** For a slip or glaze as mixed: the specific gravity aimed for, and Ford cup #4 seconds. */
+  gravity?: string;
+  viscosity?: string;
 }
 
 const option = <Value extends string>(value: Value, label: string, ...also: string[]) => ({ value, label, also });
@@ -66,7 +69,7 @@ export function optionNamed<Value extends string>(
   return options.find((o) => [o.value, o.label.toLowerCase(), ...o.also].includes(wanted))?.value;
 }
 
-export function labelOf<Value extends string>(options: { value: Value; label: string }[], value?: Value): string {
+export function labelOf<Value extends string>(options: readonly { value: Value; label: string }[], value?: Value): string {
   return options.find((o) => o.value === value)?.label ?? '';
 }
 
@@ -89,6 +92,8 @@ export function details(content: RecipeDetails): RecipeDetails {
   if (content.transparency) kept.transparency = content.transparency;
   if (content.color?.trim()) kept.color = content.color.trim();
   if (content.tags?.length) kept.tags = content.tags;
+  if (content.gravity?.trim()) kept.gravity = content.gravity.trim();
+  if (content.viscosity?.trim()) kept.viscosity = content.viscosity.trim();
   return kept;
 }
 
@@ -99,7 +104,17 @@ export function sameDetails(a: RecipeDetails, b: RecipeDetails): boolean {
 
 function orderedDetails(content: RecipeDetails) {
   const kept = details(content);
-  return [kept.type, kept.cone, kept.atmosphere, kept.surface, kept.transparency, kept.color, kept.tags ?? []];
+  return [
+    kept.type,
+    kept.cone,
+    kept.atmosphere,
+    kept.surface,
+    kept.transparency,
+    kept.color,
+    kept.tags ?? [],
+    kept.gravity,
+    kept.viscosity
+  ];
 }
 
 /** The details in a line of text, for printing and comparing: "Glaze · cone 6 · oxidation · …". */
@@ -113,7 +128,9 @@ export function describeDetails(content: RecipeDetails): string {
     kept.cone && `Cone ${kept.cone}`,
     labelOf(ATMOSPHERES, kept.atmosphere),
     look,
-    kept.color
+    kept.color,
+    kept.gravity && `SG ${kept.gravity}`,
+    kept.viscosity && `Ford cup ${kept.viscosity} s`
   ]
     .filter(Boolean)
     .join(' · ');

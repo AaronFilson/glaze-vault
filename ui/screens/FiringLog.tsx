@@ -12,6 +12,7 @@ import {
   newFiring,
   sameFiring,
   tidyFiring,
+  vitrification,
   type BarReadings,
   type Firing,
   type FiringContent,
@@ -19,8 +20,10 @@ import {
 } from '../firing';
 import { PhotoError, smallerPhoto } from '../photos';
 import { ATMOSPHERES, SURFACES, TRANSPARENCIES } from '../recipeFields';
+import { EMPTY_SLIP, hasSlipReadings, isSlip, type SlipReadings } from '../slip';
 import { canEdit, editableCollections } from '../team';
 import { ConfirmNotice } from './Deleted';
+import { VitrificationChart } from './VitrificationChart';
 
 /** The firing open in the editor: the newest revision, if saved, and the edits to it. */
 export interface FiringEditing {
@@ -38,6 +41,12 @@ const BAR_FIELDS: { key: keyof BarReadings; label: string }[] = [
 ];
 
 const BODY_TYPES = ['clay body', 'slip', 'engobe', 'casting slip', 'terra sigillata'];
+
+const SLIP_FIELDS: { key: keyof SlipReadings; label: string; target?: 'gravity' | 'viscosity'; decimal?: boolean }[] = [
+  { key: 'gravity', label: 'Specific gravity', target: 'gravity', decimal: true },
+  { key: 'viscosity', label: 'Ford cup #4, s', target: 'viscosity', decimal: true },
+  { key: 'gel', label: 'Gel' }
+];
 
 export function FiringLog({
   firings,
@@ -72,13 +81,15 @@ export function FiringLog({
     .filter((f) => firingMatches(f.content, search))
     .sort((a, b) => b.content.firedOn.localeCompare(a.content.firedOn) || b.savedAt - a.savedAt);
   const team = !!access?.team;
-  const mayLog = !team || editableCollections(access).length > 0;
+  const mayLog = !team || editableCollections(access, 'firing').length > 0;
+  // A recipe's firings at two cones or more make a curve.
+  const curve = forRecipe ? vitrification(firings.filter((f) => f.content.recipe === forRecipe)) : [];
 
   /** Runs `action` now, or once unsaved changes are saved or discarded. */
   const leave = (action: () => void) => (changed ? setPending(() => action) : action());
   const startNew = () =>
     leave(() => {
-      const recipe = recipes.find((r) => r.recordId === forRecipe && canEdit(access, r.collectionId));
+      const recipe = recipes.find((r) => r.recordId === forRecipe && canEdit(access, r.collectionId, 'firing'));
       onEdit({
         current: null,
         draft: newFiring(recipe ? { recordId: recipe.recordId, number: recipe.number, name: recipe.content.name } : null, new Date())
@@ -162,11 +173,14 @@ export function FiringLog({
             registerSave={(save) => (saveRef.current = save)}
           />
         ) : (
-          <p className="hint">
-            {mayLog
-              ? 'Log a firing to keep how a recipe was fired, what came out, a test bar’s measurements and photos.'
-              : 'Choose a firing to read.'}
-          </p>
+          <>
+            {curve.length >= 2 && <VitrificationChart points={curve} />}
+            <p className="hint">
+              {mayLog
+                ? 'Log a firing to keep how a recipe was fired, what came out, a test bar’s measurements and photos.'
+                : 'Choose a firing to read.'}
+            </p>
+          </>
         )}
       </main>
     </>
@@ -235,9 +249,10 @@ function FiringEditor({
   const [error, setError] = useState('');
   const recipe = recipes.find((r) => r.recordId === draft.recipe) ?? null;
   const collection = current?.collectionId ?? recipe?.collectionId ?? null;
-  const readOnly = !canEdit(access, collection);
+  const readOnly = !canEdit(access, collection, 'firing');
   const set = (change: Partial<FiringContent>) => onEdit({ current, draft: { ...draft, ...change } });
   const bar = draft.bar ?? EMPTY_BAR;
+  const slip = draft.slip ?? EMPTY_SLIP;
   const results = barResults(draft.bar);
   const urls = usePhotoUrls(draft.photos);
 
@@ -359,7 +374,7 @@ function FiringEditor({
             >
               <option value="">Choose a recipe</option>
               {recipes
-                .filter((r) => canEdit(access, r.collectionId))
+                .filter((r) => canEdit(access, r.collectionId, 'firing'))
                 .map((r) => (
                   <option key={r.recordId} value={r.recordId}>
                     {r.content.name || 'Untitled'}
@@ -470,6 +485,42 @@ function FiringEditor({
               </tr>
             </tbody>
           </table>
+        </details>
+
+        <details
+          className="bar"
+          open={
+            hasSlipReadings(draft.slip) ||
+            isSlip(recipe?.content.type) ||
+            !!recipe?.content.gravity ||
+            !!recipe?.content.viscosity
+          }
+        >
+          <summary>Slip or glaze as applied</summary>
+          <p className="hint">Its specific gravity and how long it takes through a Ford cup, measured before applying.</p>
+          <div className="details">
+            {SLIP_FIELDS.map(({ key, label, target, decimal }) => {
+              const aim = target && recipe?.content[target];
+              return (
+                <div className={`detail${key === 'gel' ? ' wide' : ''}`} key={key}>
+                  <label htmlFor={`slip-${key}`}>{label}</label>
+                  <input
+                    id={`slip-${key}`}
+                    inputMode={decimal ? 'decimal' : undefined}
+                    placeholder={key === 'gel' ? 'None, or slight after an hour' : undefined}
+                    value={slip[key]}
+                    aria-describedby={aim ? `slip-${key}-target` : undefined}
+                    onChange={(e) => set({ slip: { ...slip, [key]: e.target.value } })}
+                  />
+                  {aim && (
+                    <span id={`slip-${key}-target`} className="hint">
+                      The recipe aims for {aim}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </details>
 
         <label htmlFor="firing-notes">Notes</label>

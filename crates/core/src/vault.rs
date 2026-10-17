@@ -4,9 +4,12 @@
 //! way a team's is, so it can grow into one (docs/adr/0012-teams-on-one-computer.md, in `team`).
 
 mod attachments;
+mod moving;
+mod roles;
 mod team;
 
 pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
+pub use roles::CustomRole;
 pub use team::{Collection, Grant, Person};
 
 use crate::access::Role;
@@ -44,6 +47,8 @@ pub struct Vault {
     default_collection: Uuid,
     /// The organization's key pair, when this person is an admin of a team's vault.
     organization: Option<KeyPair>,
+    /// The roles admins have made, for what each lets a person change.
+    roles: Vec<CustomRole>,
 }
 
 /// A collection this person can open.
@@ -90,6 +95,15 @@ pub enum Kind {
 }
 
 impl Kind {
+    pub const ALL: [Kind; 6] = [
+        Kind::Recipe,
+        Kind::Material,
+        Kind::Batch,
+        Kind::Firing,
+        Kind::Limits,
+        Kind::Prices,
+    ];
+
     fn as_str(self) -> &'static str {
         match self {
             Kind::Recipe => "recipe",
@@ -102,16 +116,7 @@ impl Kind {
     }
 
     fn parse(text: &str) -> Option<Kind> {
-        [
-            Kind::Recipe,
-            Kind::Material,
-            Kind::Batch,
-            Kind::Firing,
-            Kind::Limits,
-            Kind::Prices,
-        ]
-        .into_iter()
-        .find(|kind| kind.as_str() == text)
+        Kind::ALL.into_iter().find(|kind| kind.as_str() == text)
     }
 }
 
@@ -228,6 +233,7 @@ impl Vault {
             }],
             default_collection: collection_id,
             organization: None,
+            roles: Vec::new(),
         };
         Ok((vault, recovery))
     }
@@ -553,7 +559,7 @@ impl Vault {
         let Some(record) = deleted.iter().find(|r| r.record_id == record_id) else {
             return Err(Error::NotDeleted);
         };
-        self.editable(&record.collection_id)?;
+        self.editable(&record.collection_id, kind)?;
         let tx = self.conn.unchecked_transaction()?;
         let erased = tx.execute(
             "DELETE FROM revisions WHERE record_id = ?1 AND kind = ?2",
@@ -598,7 +604,10 @@ impl Vault {
                 (parse_id(&record_id)?, number + 1, parse_id(&collection_id)?)
             }
         };
-        let collection_key = self.editable(&collection_id)?.key_for(kind).ok_or(Error::NotAllowed)?;
+        let collection_key = self
+            .editable(&collection_id, kind)?
+            .key_for(kind)
+            .ok_or(Error::NotAllowed)?;
         let revision_id = Uuid::new_v4();
         let saved_at = now_ms();
         let aad = revision_aad(
@@ -778,6 +787,7 @@ impl Vault {
             keyring.users.iter_mut().for_each(|u| u.previous_database_key = None);
             keyring.write(&dir.join(KEYRING_FILE))?;
         }
+        team::finish_organization_change(&conn, &mut keyring, dir)?;
         let default_collection: String =
             conn.query_row("SELECT value FROM meta WHERE name = 'default_collection'", [], |row| {
                 row.get(0)
@@ -795,7 +805,9 @@ impl Vault {
             collections: Vec::new(),
             default_collection: parse_id(&default_collection)?,
             organization,
+            roles: Vec::new(),
         };
+        vault.load_roles()?;
         vault.load_collections()?;
         Ok(vault)
     }
@@ -861,10 +873,10 @@ impl Vault {
         self.collections.iter().find(|c| c.id == *id).ok_or(Error::NotFound)
     }
 
-    /// A collection this person may change records in.
-    fn editable(&self, id: &Uuid) -> Result<&OpenCollection> {
+    /// A collection this person may change records of a kind in.
+    fn editable(&self, id: &Uuid, kind: Kind) -> Result<&OpenCollection> {
         let collection = self.readable(id)?;
-        if !collection.role.can_edit() {
+        if !self.may_change(collection.role, kind) {
             return Err(Error::NotAllowed);
         }
         Ok(collection)

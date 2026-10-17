@@ -41,7 +41,7 @@ const spar: MaterialHead = {
 const ONE_PERSON: Access = {
   team: false,
   me: { id: 'me', name: '', admin: false, mustSetPassword: false },
-  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin' }]
+  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] }]
 };
 
 /** A record the fake core refuses to save. */
@@ -275,6 +275,38 @@ describe('drafts', () => {
     expect(screen.queryByText(/from last time/)).toBeNull();
     expect((screen.getByLabelText('Recipe name') as HTMLInputElement).value).toBe('');
     await waitFor(() => expect(core.called('clear_draft')).toHaveLength(1));
+  });
+
+  it('brings back a firing that was being logged', async () => {
+    const content = {
+      recipe: 'record-1',
+      recipeNumber: 1,
+      recipeName: 'Shino',
+      firedOn: '2026-10-15',
+      cone: '10',
+      notes: 'Ran at the foot',
+      photos: []
+    };
+    const core = fakeCore({ draft: { firing: { recordId: null, revisionId: null, content } } });
+    show();
+    expect(await screen.findByDisplayValue('Ran at the foot')).toBeTruthy();
+    const notice = screen.getByText(/the firing of Shino from last time/).closest('.notice') as HTMLElement;
+    fireEvent.click(within(notice).getByRole('button', { name: 'Discard changes' }));
+    expect(screen.queryByDisplayValue('Ran at the foot')).toBeNull();
+    await waitFor(() => expect(core.called('clear_draft')).toHaveLength(1));
+  });
+
+  it('keeps a firing being logged when locking, without asking', async () => {
+    const core = fakeCore();
+    const onLocked = show();
+    fireEvent.click(await screen.findByRole('button', { name: 'Shino' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Log a firing…' }));
+    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Crawled by the handle' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Lock' }));
+    await waitFor(() => expect(onLocked).toHaveBeenCalledWith('manual'));
+    expect(core.called('lock')).toHaveLength(0);
+    const kept = core.called('lock_with_draft')[0].args.draft as Draft;
+    expect(kept.firing).toMatchObject({ recordId: null, content: { recipe: 'record-1', notes: 'Crawled by the handle' } });
   });
 
   it('keeps unsaved changes a moment after typing, and forgets them once saved', async () => {

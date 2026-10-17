@@ -30,7 +30,8 @@ decides the steps people take and what is built first.
 - **Roles** are fixed sets of capabilities for now: Chemist (view recipes, materials and their
   chemistry), Formulator (also make, change and delete them) and Admin (everything, on every
   collection, including people, collections and backups). An admin gives a person a role on a
-  collection, which seals its key to them. Roles editable by admins come later.
+  collection, which seals its key to them. Since then, a Tester role and roles admins make
+  (ADR 4).
 - **Batch operator** is a fourth role, for weighing out. A formulator makes a recipe's **batch
   sheet**: its lines with each material named by an in-house code (M-104) instead, a name, and
   notes for the weighing. The sheet is its own record, of kind `batch`, in the recipe's
@@ -47,8 +48,13 @@ decides the steps people take and what is built first.
 - **Removing a person** takes them out of the key file and removes their grants. Every collection
   they could open, and the database, get new keys and are re-encrypted, since they may have kept
   the old ones. Their private collection stays, for admins, under "From name". An admin holds the
-  organization key, which opens every collection key, so removing an admin, or taking admin away,
-  waits for changing the organization key.
+  organization key, which opens every collection key, so **taking admin away** gives the
+  organization a new key pair and recovery key, seals it to the admins left, and gives every
+  collection a new key sealed to it; the person keeps their roles, an admin grant becoming a
+  formulator's. The collections' keys and the new organization key, as public and sealed parts
+  only, go into the database in one transaction, then into the key file; an unlock finishes a
+  change that stopped between them. Removing an admin takes admin away first. A new organization
+  recovery sheet can be made for a lost one.
 - **Lost passwords:** someone with their recovery sheet uses it as in a one-person vault. For
   someone who lost both, an admin gives them new keys and a one-time password, as when they were
   added; the admin holds every collection key through the organization key, so nothing else is
@@ -65,6 +71,11 @@ decides the steps people take and what is built first.
   first, everyone else is removed, their private collections stay as "From name", the
   organization key goes, and every collection and the database get new keys. Roles are not
   remembered for growing again; the admin's private collection is.
+- **Moving a recipe** to another collection takes its firings and batch sheets with it (the page
+  names them; the core does not read content). Every revision and attachment is encrypted again
+  under the new collection's key and bound to it, in one transaction, and needs the right to
+  change records in both collections. This rewrites revisions in place, which is fine on one
+  computer; with the LAN host a move becomes an event of its own that replicas apply.
 - **Signing revisions and the audit log wait for the LAN host** (ADR 5). On one computer, anyone
   who could forge a revision or rewrite a log already holds the database key and their own
   signing key, so signatures there show little; with a host, the host checks each signature

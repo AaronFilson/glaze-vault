@@ -3,8 +3,8 @@
 //! page never chooses where files are written.
 
 use glaze_vault_core::{
-    Attachment, BACKUP_EXTENSION, Collection, Credential, Error, Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, Person,
-    Revision, Role, SetAside, Settings, Vault,
+    Attachment, BACKUP_EXTENSION, Collection, Credential, CustomRole, Error, Grant, Kind, LastBackup,
+    MAX_ATTACHMENT_BYTES, Person, Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -219,6 +219,18 @@ fn make_admin(state: State<AppState>, person: Uuid) -> CommandResult<()> {
     with_vault(&state, |vault| vault.make_admin(person))
 }
 
+/// Takes admin away; returns the organization's new recovery words, to print.
+#[tauri::command(async)]
+fn take_admin_away(state: State<AppState>, person: Uuid) -> CommandResult<Vec<String>> {
+    with_vault(&state, |vault| Ok(vault.take_admin_away(person)?.words()))
+}
+
+/// A new organization recovery key, for a lost sheet; returns its words, to print.
+#[tauri::command(async)]
+fn new_organization_recovery_key(state: State<AppState>) -> CommandResult<Vec<String>> {
+    with_vault(&state, |vault| Ok(vault.new_organization_recovery_key()?.words()))
+}
+
 /// Makes a team's vault this admin's alone again (ADR 6). Returns where the backup made first is.
 #[tauri::command(async)]
 fn go_back_to_one_person(state: State<AppState>) -> CommandResult<String> {
@@ -235,6 +247,27 @@ fn create_collection(state: State<AppState>, name: String) -> CommandResult<Coll
 #[tauri::command(async)]
 fn rename_collection(state: State<AppState>, collection: Uuid, name: String) -> CommandResult<()> {
     with_vault(&state, |vault| vault.rename_collection(collection, &name))
+}
+
+/// The roles admins have made, which anyone signed in sees named on their collections.
+#[tauri::command(async)]
+fn custom_roles(state: State<AppState>) -> CommandResult<Vec<CustomRole>> {
+    with_vault(&state, |vault| Ok(vault.custom_roles()))
+}
+
+#[tauri::command(async)]
+fn create_role(state: State<AppState>, name: String, changes: Vec<Kind>) -> CommandResult<CustomRole> {
+    with_vault(&state, |vault| vault.create_role(&name, &changes))
+}
+
+#[tauri::command(async)]
+fn change_role(state: State<AppState>, id: Uuid, name: String, changes: Vec<Kind>) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.change_role(id, &name, &changes))
+}
+
+#[tauri::command(async)]
+fn delete_role(state: State<AppState>, id: Uuid) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.delete_role(id))
 }
 
 /// Dropping the vault wipes its keys from memory.
@@ -300,6 +333,13 @@ fn delete_record(state: State<AppState>, kind: Kind, newest: Uuid) -> CommandRes
 #[tauri::command(async)]
 fn deleted_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revision>> {
     with_vault(&state, |vault| vault.deleted(kind))
+}
+
+/// Moves records, every revision and attachment of each, to another collection: a recipe with its
+/// firings and batch sheets. All move, or none.
+#[tauri::command(async)]
+fn move_records(state: State<AppState>, records: Vec<(Kind, Uuid)>, to: Uuid) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.move_records(&records, to))
 }
 
 /// Removes every revision of a deleted record. Returns how many there were.
@@ -881,9 +921,15 @@ pub fn run() {
             remove_person,
             reset_person,
             make_admin,
+            take_admin_away,
+            new_organization_recovery_key,
             go_back_to_one_person,
             create_collection,
             rename_collection,
+            custom_roles,
+            create_role,
+            change_role,
+            delete_role,
             list_records,
             save_record,
             save_records,
@@ -891,6 +937,7 @@ pub fn run() {
             delete_record,
             deleted_records,
             erase_record,
+            move_records,
             choose_photo,
             add_attachment,
             get_attachment,

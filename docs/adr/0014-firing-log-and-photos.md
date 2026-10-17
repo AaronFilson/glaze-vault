@@ -38,9 +38,10 @@ are far larger than anything the vault kept before.
 
 - A vault with many photos grows by a few hundred kilobytes a photo, and so do its backups.
 - Firings are deleted and erased in one step, photos and all, so a mistaken photo does not linger.
-- Unsaved edits to a firing are not kept as a draft when the vault locks; recipes and materials
-  are (ADR 8). That is in the follow-ups.
-- A chemist who fires tests but may not change recipes cannot log them yet; a role for that waits
-  for roles admins can change.
-- Still to come from the research: a vitrification chart across a recipe's firings, slips'
-  specific gravity and viscosity, and exporting the log.
+- Unsaved edits to a firing are kept in the draft with recipes and materials (ADR 8). Locking by
+  hand keeps them without asking, since the firing's editor may not be on screen to save from.
+- A **Tester** reads a collection and logs its firings, photos too, without changing recipes
+  (ADR 4).
+- Added after: a vitrification chart (absorption and total shrinkage against cone, averaged per
+  cone, on one percent axis, with a table of the same numbers); the slip as applied (specific
+  gravity, Ford cup seconds, gel) against a recipe's targets; and the log as CSV.

@@ -2,7 +2,7 @@
 //! people, collections and what each person may do in them.
 
 use super::{
-    KEYRING_FILE, OpenCollection, Vault, check_password, grant_info, now_ms, parse_id, parse_role, revision_aad,
+    KEYRING_FILE, Kind, OpenCollection, Vault, check_password, grant_info, now_ms, parse_id, parse_role, revision_aad,
 };
 use crate::access::Role;
 use crate::crypto::{self, Key, KeyPair, PasswordKdf, SealedBox};
@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use crate::keyring::{self, Keyring, KeyringUser, Organization};
 use crate::recovery::RecoveryKey;
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -38,6 +38,8 @@ pub struct Collection {
     /// The person whose private collection it is.
     pub owner: Option<Uuid>,
     pub role: Role,
+    /// The kinds of record this person may make and change here.
+    pub changes: Vec<Kind>,
 }
 
 /// One person's role on one collection, for the people screen.
@@ -84,6 +86,10 @@ impl Vault {
                 name: c.name.clone(),
                 owner: c.owner,
                 role: c.role,
+                changes: Kind::ALL
+                    .into_iter()
+                    .filter(|&kind| self.may_change(c.role, kind))
+                    .collect(),
             })
             .collect()
     }
@@ -128,19 +134,7 @@ impl Vault {
         let database_key = self.database_key()?;
 
         let mut keyring = self.keyring.clone();
-        keyring.organization = Some(Organization {
-            public_key: organization.public.clone(),
-            private_key_by_recovery: crypto::encrypt(
-                &crypto::recovery_key(&recovery.entropy(), vault_id.as_bytes()),
-                &organization.secret,
-                &keyring::organization_recovery_aad(&vault_id),
-            ),
-            database_key: crypto::seal_key(
-                &organization.public,
-                &database_key,
-                &keyring::organization_database_key_info(&vault_id),
-            ),
-        });
+        keyring.organization = Some(new_organization(&vault_id, &organization, &recovery, &database_key));
         let user = super::user_mut(&mut keyring, &self.user_id);
         user.name = name;
         user.public_key = self.keys.public.clone();
@@ -208,6 +202,7 @@ impl Vault {
         )?;
         insert_organization_grant(&tx, &vault_id, &organization_public, &private.0, &private.1)?;
         for (collection, role) in roles {
+            self.known_role(*role)?;
             let collection = self.readable(collection)?;
             insert_grant(
                 &tx,
@@ -266,6 +261,7 @@ impl Vault {
         let vault_id = self.keyring.vault_id;
         match role {
             Some(role) => {
+                self.known_role(role)?;
                 let previous: Option<String> = self
                     .conn
                     .query_row(
@@ -283,7 +279,7 @@ impl Vault {
                 // kept the first, so the collection gets a new one, in the same transaction: a
                 // failure part way leaves them with the role they had.
                 let key =
-                    if role == Role::Operator && previous.is_some_and(|previous| previous != Role::Operator.as_str()) {
+                    if role == Role::Operator && previous.is_some_and(|previous| previous != Role::Operator.code()) {
                         self.rotate_collection_key_in(&tx, &collection)?
                     } else {
                         self.readable(&collection)?.key.clone()
@@ -312,7 +308,7 @@ impl Vault {
             return Err(Error::NotAllowed);
         }
         // An admin holds the organization's private key, which opens every collection's key, so
-        // removing one needs a new organization key: not built yet.
+        // admin is taken away first, which gives the organization a new key and recovery sheet.
         if self.keyring.user(&person)?.organization_key.is_some() {
             return Err(Error::RemovingAdmin);
         }
@@ -380,6 +376,93 @@ impl Vault {
         Ok(())
     }
 
+    /// Takes admin away from someone. The organization gets a new key, sealed to the admins left,
+    /// and a new recovery key, returned to print: the old sheet stops working. Every collection
+    /// gets a new key, since theirs opened them all. They keep their roles on collections, an
+    /// admin's grant becoming a formulator's. Nobody takes admin away from themselves.
+    ///
+    /// The collections' new keys and the new organization key go into the database in one
+    /// transaction, the organization's as public and sealed parts only, and then into the key
+    /// file; if that is not reached, the next unlock finishes it (finish_organization_change).
+    pub fn take_admin_away(&mut self, person: Uuid) -> Result<RecoveryKey> {
+        self.admin()?;
+        // One that stopped before goes into the key file first, so its admin is not counted as
+        // one still, nor its organization key lost under this one.
+        self.finish_organization_change()?;
+        if person == self.user_id {
+            return Err(Error::NotAllowed);
+        }
+        if self.keyring.user(&person)?.organization_key.is_none() {
+            return Err(Error::NotAnAdmin);
+        }
+        let vault_id = self.keyring.vault_id;
+        let organization = KeyPair::generate();
+        let recovery = RecoveryKey::generate();
+        let pending = PendingOrganization {
+            organization: new_organization(&vault_id, &organization, &recovery, &self.database_key()?),
+            admins: self
+                .keyring
+                .users
+                .iter()
+                .filter(|user| user.organization_key.is_some() && user.id != person)
+                .map(|user| (user.id, seal_organization_key(&vault_id, user, &organization)))
+                .collect(),
+            demoted: person,
+        };
+        let collections: Vec<Uuid> = self.collections.iter().map(|c| c.id).collect();
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE grants SET role = ?1 WHERE user_id = ?2 AND role = ?3",
+            params![Role::Formulator.code(), person.to_string(), Role::Admin.code()],
+        )?;
+        for collection in &collections {
+            self.rotate_collection_key_for(&tx, collection, &organization.public)?;
+        }
+        tx.execute(
+            "INSERT INTO meta (name, value) VALUES (?1, ?2)
+             ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+            params![PENDING_ORGANIZATION, serde_json::to_string(&pending)?],
+        )?;
+        tx.commit()?;
+        // The collections are sealed to the new key now, so it is the one to open them with,
+        // whether or not the key file below is written.
+        self.organization = Some(organization);
+        self.load_collections()?;
+        let mut keyring = self.keyring.clone();
+        finish_organization_change(&self.conn, &mut keyring, &self.dir)?;
+        self.keyring = keyring;
+        Ok(recovery)
+    }
+
+    /// A new organization recovery key, when its sheet is lost: the organization's private key is
+    /// encrypted again under it, and the old sheet stops working. For an admin.
+    pub fn new_organization_recovery_key(&mut self) -> Result<RecoveryKey> {
+        self.admin()?;
+        // The key it encrypts must be the one the key file names.
+        self.finish_organization_change()?;
+        let organization = self.admin()?;
+        let vault_id = self.keyring.vault_id;
+        let recovery = RecoveryKey::generate();
+        let mut keyring = self.keyring.clone();
+        let kept = keyring.organization.as_mut().ok_or(Error::NotATeam)?;
+        kept.private_key_by_recovery = crypto::encrypt(
+            &crypto::recovery_key(&recovery.entropy(), vault_id.as_bytes()),
+            &organization.secret,
+            &keyring::organization_recovery_aad(&vault_id),
+        );
+        keyring.write(&self.dir.join(KEYRING_FILE))?;
+        self.keyring = keyring;
+        Ok(recovery)
+    }
+
+    /// Finishes a change of organization key in this session's key file, if one is waiting.
+    fn finish_organization_change(&mut self) -> Result<()> {
+        let mut keyring = self.keyring.clone();
+        finish_organization_change(&self.conn, &mut keyring, &self.dir)?;
+        self.keyring = keyring;
+        Ok(())
+    }
+
     /// Makes a collection to share, which only admins can open until they give others roles on it.
     pub fn create_collection(&mut self, name: &str) -> Result<Collection> {
         let organization = self.admin()?.public.clone();
@@ -394,6 +477,7 @@ impl Vault {
             name,
             owner: None,
             role: Role::Admin,
+            changes: Kind::ALL.to_vec(),
         })
     }
 
@@ -420,11 +504,18 @@ impl Vault {
     ) -> Result<(Vault, RecoveryKey)> {
         check_password(new_password)?;
         let mut keyring = super::read_keyring(dir)?;
-        let (organization, database_key) = open_by_organization_recovery(&keyring, words)?;
+        let (mut organization, database_key) = open_by_organization_recovery(&keyring, words)?;
+        let conn = crate::store::open(&dir.join(super::DATABASE_FILE), &database_key)?;
+        // A change of organization key that stopped part way is finished first, and then only
+        // the new organization's sheet opens it.
+        let before = keyring.organization.as_ref().map(|o| o.public_key.clone());
+        finish_organization_change(&conn, &mut keyring, dir)?;
+        if keyring.organization.as_ref().map(|o| o.public_key.clone()) != before {
+            organization = open_by_organization_recovery(&keyring, words)?.0;
+        }
         if keyring.user(&admin)?.organization_key.is_none() {
             return Err(Error::NotAllowed);
         }
-        let conn = crate::store::open(&dir.join(super::DATABASE_FILE), &database_key)?;
         rekey_person(
             &conn,
             &mut keyring,
@@ -547,6 +638,12 @@ impl Vault {
     /// then reload the collections. Returns the new key.
     fn rotate_collection_key_in(&self, tx: &Connection, collection: &Uuid) -> Result<Key> {
         let organization = self.admin()?.public.clone();
+        self.rotate_collection_key_for(tx, collection, &organization)
+    }
+
+    /// As [`Vault::rotate_collection_key_in`], sealing the new key to `organization`: a new
+    /// organization key's, while it is changing.
+    fn rotate_collection_key_for(&self, tx: &Connection, collection: &Uuid, organization: &[u8]) -> Result<Key> {
         let vault_id = self.keyring.vault_id;
         let old = self.readable(collection)?.key.clone();
         let new = crypto::random_key();
@@ -664,7 +761,7 @@ impl Vault {
                 "DELETE FROM organization_grants WHERE collection_id = ?1",
                 params![collection.to_string()],
             )?;
-            insert_organization_grant(tx, &vault_id, &organization, collection, &new)?;
+            insert_organization_grant(tx, &vault_id, organization, collection, &new)?;
         }
         Ok(new)
     }
@@ -932,6 +1029,80 @@ fn seal_organization_key(vault_id: &Uuid, user: &KeyringUser, organization: &Key
     )
 }
 
+/// The organization part of the key file for a key pair: its private key under its recovery key,
+/// and the database key sealed to it.
+fn new_organization(
+    vault_id: &Uuid,
+    organization: &KeyPair,
+    recovery: &RecoveryKey,
+    database_key: &Key,
+) -> Organization {
+    Organization {
+        public_key: organization.public.clone(),
+        private_key_by_recovery: crypto::encrypt(
+            &crypto::recovery_key(&recovery.entropy(), vault_id.as_bytes()),
+            &organization.secret,
+            &keyring::organization_recovery_aad(vault_id),
+        ),
+        database_key: crypto::seal_key(
+            &organization.public,
+            database_key,
+            &keyring::organization_database_key_info(vault_id),
+        ),
+    }
+}
+
+const PENDING_ORGANIZATION: &str = "pending_organization";
+
+/// A new organization key on its way into the key file, kept in the database with the
+/// collections sealed to it (Vault::take_admin_away). Nothing in it opens without an admin's own
+/// key or the new recovery key.
+#[derive(Serialize, Deserialize)]
+struct PendingOrganization {
+    organization: Organization,
+    /// The new organization key, sealed to each admin it stays with.
+    admins: Vec<(Uuid, SealedBox)>,
+    /// The admin it no longer goes to.
+    demoted: Uuid,
+}
+
+/// Puts a new organization key waiting in the database into the key file, and forgets it there.
+/// Run on unlocking, so a change of organization key that stopped part way is finished before the
+/// organization key is opened.
+pub(super) fn finish_organization_change(conn: &Connection, keyring: &mut Keyring, dir: &Path) -> Result<()> {
+    let Some(text) = conn
+        .query_row(
+            "SELECT value FROM meta WHERE name = ?1",
+            params![PENDING_ORGANIZATION],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    else {
+        return Ok(());
+    };
+    let pending: PendingOrganization = serde_json::from_str(&text)?;
+    if keyring.organization.as_ref().map(|o| &o.public_key) != Some(&pending.organization.public_key) {
+        let mut changed = keyring.clone();
+        changed.organization = Some(pending.organization);
+        for user in &mut changed.users {
+            user.organization_key = if user.id == pending.demoted {
+                None
+            } else {
+                pending
+                    .admins
+                    .iter()
+                    .find(|(id, _)| *id == user.id)
+                    .map(|(_, sealed)| sealed.clone())
+                    .or(user.organization_key.take())
+            };
+        }
+        changed.write(&dir.join(KEYRING_FILE))?;
+        *keyring = changed;
+    }
+    conn.execute("DELETE FROM meta WHERE name = ?1", params![PENDING_ORGANIZATION])?;
+    Ok(())
+}
+
 /// Makes a collection and its key.
 fn create_collection(conn: &Connection, name: &str, owner: Option<Uuid>) -> Result<(Uuid, Key)> {
     let id = Uuid::new_v4();
@@ -965,7 +1136,7 @@ fn insert_grant(
             collection.to_string(),
             sealed.enc,
             sealed.ciphertext,
-            role.as_str()
+            role.code()
         ],
     )?;
     Ok(())
@@ -1411,6 +1582,160 @@ mod tests {
             Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME),
             Err(Error::NoSuchPerson)
         ));
+    }
+
+    #[test]
+    fn taking_admin_away_gives_the_organization_and_every_collection_new_keys() {
+        let (dir, mut ana, organization_sheet) = team();
+        let ana_id = ana.me().id;
+        let shared = shared(&ana);
+        let ben = ana.add_person("Ben", ONE_TIME, &[(shared, Role::Formulator)]).unwrap();
+        ana.make_admin(ben.id).unwrap();
+        let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME).unwrap();
+        as_ben.set_own_password(BENS).unwrap();
+        assert!(as_ben.me().admin);
+        drop(as_ben);
+        // One person signs in at a time, as in the app.
+        drop(ana);
+        let mut ana = Vault::unlock_as(dir.path(), Some(ana_id), PASSWORD).unwrap();
+        let kept_key = ana.readable(&shared).unwrap().key.clone();
+
+        assert!(matches!(ana.take_admin_away(ana_id), Err(Error::NotAllowed)));
+        assert!(matches!(ana.remove_person(ben.id), Err(Error::RemovingAdmin)));
+        let new_sheet = ana.take_admin_away(ben.id).unwrap();
+        assert!(matches!(ana.take_admin_away(ben.id), Err(Error::NotAnAdmin)));
+        assert_ne!(*ana.readable(&shared).unwrap().key, *kept_key);
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
+        assert!(!ana.people().unwrap().iter().find(|p| p.id == ben.id).unwrap().admin);
+
+        // Ben keeps his role on Shared, and nothing more.
+        let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), BENS).unwrap();
+        assert!(!as_ben.me().admin);
+        assert_eq!(names(&as_ben, Kind::Recipe), ["Shino"]);
+        as_ben
+            .save_in(Kind::Recipe, shared, &json!({ "name": "Ben's" }))
+            .unwrap();
+        assert!(matches!(as_ben.people(), Err(Error::NotAllowed)));
+        assert!(
+            as_ben
+                .collections()
+                .iter()
+                .all(|c| c.id == shared || c.owner == Some(ben.id))
+        );
+        drop(as_ben);
+
+        // The old organization sheet no longer opens anything; the new one does.
+        drop(ana);
+        let old = organization_sheet.words().join(" ");
+        assert!(matches!(
+            Vault::recover_organization(dir.path(), &old, ana_id, "anas new password"),
+            Err(Error::WrongRecoveryKey)
+        ));
+        let (mut ana, _) =
+            Vault::recover_organization(dir.path(), &new_sheet.words().join(" "), ana_id, "anas new password").unwrap();
+        assert_eq!(names(&ana, Kind::Recipe), ["Ben's", "Shino"]);
+
+        // And now he can be removed.
+        ana.remove_person(ben.id).unwrap();
+        assert!(matches!(
+            Vault::unlock_as(dir.path(), Some(ben.id), BENS),
+            Err(Error::NoSuchPerson)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_change_of_organization_key_that_stopped_is_finished_at_the_next_unlock() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut ana, _) = team();
+        let ana_id = ana.me().id;
+        let ben = ana.add_person("Ben", ONE_TIME, &[]).unwrap();
+        ana.make_admin(ben.id).unwrap();
+        // The collections change, and then the key file cannot be written.
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = ana.take_admin_away(ben.id);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(failed.is_err());
+        // Still open, with the new key, so what is saved now is sealed as the collections are.
+        ana.save(Kind::Recipe, None, &json!({ "name": "Tenmoku" })).unwrap();
+        drop(ana);
+
+        let mut ana = Vault::unlock_as(dir.path(), Some(ana_id), PASSWORD).unwrap();
+        assert!(ana.me().admin);
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino", "Tenmoku"]);
+        assert!(
+            !Vault::people_in(dir.path())
+                .unwrap()
+                .iter()
+                .find(|p| p.id == ben.id)
+                .unwrap()
+                .admin
+        );
+        // The sheet that was not shown is replaced.
+        let sheet = ana.new_organization_recovery_key().unwrap();
+        drop(ana);
+        Vault::recover_organization(dir.path(), &sheet.words().join(" "), ana_id, "anas new password").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn after_a_change_of_organization_key_stopped_the_next_one_builds_on_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut ana, old_sheet) = team();
+        let ana_id = ana.me().id;
+        let ben = ana.add_person("Ben", ONE_TIME, &[]).unwrap();
+        let cara = ana.add_person("Cara", ONE_TIME, &[]).unwrap();
+        ana.make_admin(ben.id).unwrap();
+        ana.make_admin(cara.id).unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let failed = ana.take_admin_away(ben.id);
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(failed.is_err());
+
+        // In the same session: Ben's change goes into the key file before Cara's starts, so he
+        // does not get the newest organization key back.
+        ana.take_admin_away(cara.id).unwrap();
+        let admins: Vec<Uuid> = ana.people().unwrap().iter().filter(|p| p.admin).map(|p| p.id).collect();
+        assert_eq!(admins, [ana_id]);
+        // And a new sheet made now opens the organization the key file names.
+        let sheet = ana.new_organization_recovery_key().unwrap();
+        drop(ana);
+        assert!(matches!(
+            Vault::recover_organization(dir.path(), &old_sheet.words().join(" "), ana_id, "anas new password"),
+            Err(Error::WrongRecoveryKey)
+        ));
+        let (ana, _) =
+            Vault::recover_organization(dir.path(), &sheet.words().join(" "), ana_id, "anas new password").unwrap();
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_old_organization_sheet_does_not_open_a_change_that_stopped() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, mut ana, old_sheet) = team();
+        let ana_id = ana.me().id;
+        let ben = ana.add_person("Ben", ONE_TIME, &[]).unwrap();
+        ana.make_admin(ben.id).unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        assert!(ana.take_admin_away(ben.id).is_err());
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        drop(ana);
+        // Nobody has unlocked since: recovering finishes the change, and the old sheet is refused.
+        assert!(matches!(
+            Vault::recover_organization(dir.path(), &old_sheet.words().join(" "), ana_id, "anas new password"),
+            Err(Error::WrongRecoveryKey)
+        ));
+        let ana = Vault::unlock_as(dir.path(), Some(ana_id), PASSWORD).unwrap();
+        assert!(
+            !Vault::people_in(dir.path())
+                .unwrap()
+                .iter()
+                .find(|p| p.id == ben.id)
+                .unwrap()
+                .admin
+        );
+        assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
     }
 
     #[test]

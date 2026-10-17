@@ -66,6 +66,14 @@ const MIGRATIONS: &[&str] = &[
         ciphertext BLOB NOT NULL
     );
     CREATE INDEX attachments_by_record ON attachments(record_id);",
+    // 5: roles admins make (ADR 4): a name and the kinds of record it changes, comma-separated.
+    // Each reads everything in its collections, as a chemist does.
+    "CREATE TABLE roles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        changes TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+    );",
 ];
 
 pub fn open(path: &Path, key: &Key) -> Result<Connection> {

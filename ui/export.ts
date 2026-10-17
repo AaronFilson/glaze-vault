@@ -1,9 +1,10 @@
 // Exports: every recipe and the person's own materials as CSV (for spreadsheets) or JSON (for
-// other programs), and the recipes as Insight XML (for Insight-live and Glazy). None is
-// encrypted; the Settings screen says so before saving.
+// other programs), the recipes as Insight XML (for Insight-live and Glazy), and the firing log as
+// CSV. None is encrypted; the Settings screen says so before saving.
 import type { MaterialHead, RecipeHead } from './api';
 import { baseOf, usableLines } from './batch';
 import { MATERIAL_CATEGORIES } from './chemistry';
+import { barResults, FLAWS, type Firing } from './firing';
 import { ATMOSPHERES, details, labelOf, RECIPE_TYPES, SURFACES, TRANSPARENCIES } from './recipeFields';
 
 export const EXPORT_FORMAT = 'glaze-vault-export';
@@ -62,6 +63,8 @@ const CSV_COLUMNS = [
   'Transparency',
   'Color',
   'Tags',
+  'Gravity',
+  'Viscosity',
   'Notes',
   'Revision',
   'Saved'
@@ -84,6 +87,8 @@ export function exportCsv(recipes: RecipeHead[]): string {
       labelOf(TRANSPARENCIES, kept.transparency),
       kept.color ?? '',
       (kept.tags ?? []).join(', '),
+      kept.gravity ?? '',
+      kept.viscosity ?? '',
       recipe.content.notes,
       String(recipe.number),
       new Date(recipe.savedAt).toISOString()
@@ -126,6 +131,89 @@ export function exportMaterialsCsv(materials: MaterialHead[]): string {
     lines.forEach(([oxide, percent, moles], i) =>
       rows.push([name, i === 0 ? label(category) : '', oxide, percent, moles, ...(i === 0 ? first : ['', '', ''])])
     );
+  }
+  return '\uFEFF' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
+}
+
+const FIRING_COLUMNS = [
+  'Recipe',
+  'Recipe revision',
+  'Fired on',
+  'Cone',
+  'Atmosphere',
+  'Kiln',
+  'Peak',
+  'Schedule',
+  'Surface',
+  'Transparency',
+  'Color',
+  'Flaws',
+  'Marks mm',
+  'Dry mm',
+  'Fired mm',
+  'Fired g',
+  'Soaked g',
+  'In water g',
+  'Drying shrinkage %',
+  'Firing shrinkage %',
+  'Total shrinkage %',
+  'Absorption %',
+  'Porosity %',
+  'Bulk density g/cm3',
+  'Specific gravity',
+  'Ford cup s',
+  'Gel',
+  'Photos',
+  'Notes',
+  'Revision',
+  'Saved'
+];
+
+/** One row per firing, oldest first: how it was fired, what came out, the bar's readings and what
+ * they show, and the slip as applied. Photos are named by their captions, since the file cannot
+ * hold them. */
+export function exportFiringsCsv(firings: Firing[]): string {
+  const rows = [FIRING_COLUMNS];
+  const sorted = [...firings].sort(
+    (a, b) => a.content.firedOn.localeCompare(b.content.firedOn) || a.savedAt - b.savedAt
+  );
+  const fixed = (value: number | undefined, decimals: number) => (value === undefined ? '' : value.toFixed(decimals));
+  for (const firing of sorted) {
+    const f = firing.content;
+    const results = barResults(f.bar);
+    rows.push([
+      f.recipeName,
+      f.recipeNumber === null ? '' : String(f.recipeNumber),
+      f.firedOn,
+      f.cone ?? '',
+      labelOf(ATMOSPHERES, f.atmosphere),
+      f.kiln ?? '',
+      f.peak ? `${f.peak} °${f.peakUnit ?? 'C'}` : '',
+      f.schedule ?? '',
+      labelOf(SURFACES, f.surface),
+      labelOf(TRANSPARENCIES, f.transparency),
+      f.color ?? '',
+      (f.flaws ?? []).map((flaw) => labelOf(FLAWS, flaw)).join(', '),
+      f.bar?.mark ?? '',
+      f.bar?.dry ?? '',
+      f.bar?.fired ?? '',
+      f.bar?.firedWeight ?? '',
+      f.bar?.soakedWeight ?? '',
+      f.bar?.suspendedWeight ?? '',
+      fixed(results.dryingShrinkage, 2),
+      fixed(results.firingShrinkage, 2),
+      fixed(results.totalShrinkage, 2),
+      fixed(results.absorption, 2),
+      fixed(results.porosity, 2),
+      fixed(results.density, 3),
+      f.slip?.gravity ?? '',
+      f.slip?.viscosity ?? '',
+      f.slip?.gel ?? '',
+      f.photos.map((photo, i) => photo.caption.trim() || `Photo ${i + 1}`).join('; '),
+      f.notes,
+      String(firing.number),
+      new Date(firing.savedAt).toISOString()
+    ]);
   }
   return '\uFEFF' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
 }

@@ -1,7 +1,7 @@
 // What the screens need to know about a team's vault (docs/adr/0012-teams-on-one-computer.md):
 // which collection a record is in, what to call it, and whether this person may change it. The
 // core decides; these only keep the screens from offering what it would refuse.
-import type { Access, Collection } from './api';
+import type { Access, Collection, Kind } from './api';
 
 /** A collection's name as the lists show it. Private collections have no name of their own. */
 export function collectionLabel(collection: Collection, access: Access, names: Record<string, string>): string {
@@ -10,25 +10,24 @@ export function collectionLabel(collection: Collection, access: Access, names: R
   return `From ${names[collection.owner] ?? 'someone'}`;
 }
 
-/** Whether this person may change records in a collection. Always, in a one-person vault. */
-export function canEdit(access: Access | null, collectionId: string | null | undefined): boolean {
+/** Whether this person may change records of a kind in a collection. Always, in a one-person
+ * vault. */
+export function canEdit(access: Access | null, collectionId: string | null | undefined, kind: Kind = 'recipe'): boolean {
   if (!access?.team) return true;
   const collection = access.collections.find((c) => c.id === collectionId);
-  return !!collection && changes(collection);
+  return !!collection && collection.changes.includes(kind);
 }
 
-const changes = (collection: Collection) => collection.role === 'formulator' || collection.role === 'admin';
-
-/** The collections new records can go into. */
-export function editableCollections(access: Access | null): Collection[] {
-  return (access?.collections ?? []).filter(changes);
+/** The collections new records of a kind can go into. */
+export function editableCollections(access: Access | null, kind: Kind = 'recipe'): Collection[] {
+  return (access?.collections ?? []).filter((c) => c.changes.includes(kind));
 }
 
-/** Where a new record goes unless the person chooses: the first shared collection they may change,
- * else their private one. */
-export function defaultCollection(access: Access | null): string | null {
+/** Where a new record of a kind goes unless the person chooses: the first shared collection they
+ * may change it in, else their private one. */
+export function defaultCollection(access: Access | null, kind: Kind = 'recipe'): string | null {
   if (!access?.team) return null;
-  const editable = editableCollections(access);
+  const editable = editableCollections(access, kind);
   return (editable.find((c) => !c.owner) ?? editable.find((c) => c.owner === access.me.id) ?? editable[0])?.id ?? null;
 }
 

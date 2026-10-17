@@ -1,9 +1,10 @@
 // The price list, in Settings, and a recipe's cost below its unity formula
 // (docs/adr/0015-chemistry-tools.md).
-import { useState } from 'react';
-import { api, errorText, type Revision } from '../api';
+import { useId, useState } from 'react';
+import { api, errorText, type Access, type Revision } from '../api';
 import type { MaterialLibrary, RecipeLine } from '../chemistry';
 import { EMPTY_PRICES, money, recipeCost, type PricesContent } from '../prices';
+import { canEdit, collectionLabel, editableCollections } from '../team';
 
 /** What the recipe costs, from the price list, if it has prices for any of it. */
 export function CostLine({ lines, list }: { lines: RecipeLine[]; list: PricesContent | null }) {
@@ -17,7 +18,70 @@ export function CostLine({ lines, list }: { lines: RecipeLine[]; list: PricesCon
   );
 }
 
-/** Settings: what each material costs. */
+/** Settings: the price lists. A one-person vault has one; in a team's, each collection may have
+ * its own, and a recipe is costed by its collection's, or the newest the person can open. */
+export function PriceLists({
+  lists,
+  access,
+  names,
+  library,
+  onSaved
+}: {
+  lists: Revision<PricesContent>[];
+  access: Access | null;
+  names: Record<string, string>;
+  library: MaterialLibrary;
+  onSaved: (saved: Revision<PricesContent>) => void;
+}) {
+  const id = useId();
+  // Collections whose prices this person may read: not those where they only weigh batches.
+  const readable = (access?.collections ?? []).filter((c) => c.role !== 'operator');
+  const [chosen, setChosen] = useState<string | null>(
+    () =>
+      lists.find((l) => readable.some((c) => c.id === l.collectionId))?.collectionId ??
+      editableCollections(access, 'prices').find((c) => !c.owner)?.id ??
+      readable[0]?.id ??
+      null
+  );
+  if (!access?.team) {
+    const list = lists[0] ?? null;
+    return <PriceList list={list} library={library} canEdit collection={null} onSaved={onSaved} />;
+  }
+  const list = lists.find((l) => l.collectionId === chosen) ?? null;
+  const editable = canEdit(access, chosen, 'prices');
+  return (
+    <>
+      <div className="row">
+        <label htmlFor={id}>Prices for</label>
+        <select id={id} value={chosen ?? ''} onChange={(e) => setChosen(e.target.value)}>
+          {readable.map((collection) => (
+            <option key={collection.id} value={collection.id}>
+              {collectionLabel(collection, access, names)}
+              {lists.some((l) => l.collectionId === collection.id) ? '' : ' (no prices yet)'}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="hint">
+        A recipe is costed by its own collection’s prices, or, where that has none, by the newest list you can open.
+      </p>
+      {list || editable ? (
+        <PriceList
+          key={chosen ?? 'none'}
+          list={list}
+          library={library}
+          canEdit={editable}
+          collection={chosen}
+          onSaved={onSaved}
+        />
+      ) : (
+        <p className="hint">This collection has no prices of its own.</p>
+      )}
+    </>
+  );
+}
+
+/** What each material costs, in one list. */
 export function PriceList({
   list,
   library,
