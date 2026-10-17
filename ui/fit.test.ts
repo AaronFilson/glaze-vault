@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { analyse, STANDARD_LIBRARY } from './chemistry';
-import { fitInto, fitRecipe, moveInto, targetFrom, type FitChoice } from './fit';
+import { select } from './choose';
+import { analyse, fitPool, STANDARD_LIBRARY } from './chemistry';
+import { chooseLines, chosenFrom, fitInto, fitRecipe, moveInto, targetFrom, type FitChoice } from './fit';
 import { BUILT_IN_LIMITS, checkLimits } from './limits';
 
 const leach: FitChoice[] = [
@@ -94,5 +95,41 @@ describe('moving a formula into a limit set', () => {
     if (!('lines' in outcome)) throw new Error(outcome.problem);
     expect(outcome.outside).toEqual([]);
     expect(checkLimits(umfOf(outcome.lines), cone6).filter((c) => c.outside)).toEqual([]);
+  });
+});
+
+describe('choosing materials for a fit', () => {
+  // Leach 4321 with boron and magnesia it has no material for.
+  const target = targetFrom({ ...umfOf(leach), B2O3: 0.3, MgO: 0.15 });
+  const pool = ['Gerstley Borate', 'Ferro Frit 3134', 'Talc', 'Dolomite', 'Silica', 'Nepheline Syenite'];
+
+  it('brings in what the target needs from the pool, and says what each is for', async () => {
+    const job = chooseLines(leach, target, STANDARD_LIBRARY, pool, { extras: 2 });
+    if ('problem' in job) throw new Error(job.problem);
+    const chosen = chosenFrom(job, await select(job));
+    const brought = chosen.lines.filter((l) => !leach.some((c) => c.material === l.material)).map((l) => l.material);
+    expect(brought.length).toBeGreaterThan(0);
+    expect(brought.length).toBeLessThanOrEqual(2);
+    const boron = Object.entries(chosen.supplies).find(([, s]) => s.some((part) => part.oxide === 'B2O3'))?.[0];
+    expect(boron && brought).toContain(boron);
+    expect(umfOf(chosen.lines).B2O3).toBeGreaterThan(0.15);
+  });
+
+  it('leaves out what it is told not to use, and names what nothing has', async () => {
+    const job = chooseLines(leach, [...target, { oxide: 'Li2O', moles: '0.05' }], STANDARD_LIBRARY, pool, {
+      avoid: ['Ferro Frit 3134', 'gerstley borate']
+    });
+    if ('problem' in job) throw new Error(job.problem);
+    const chosen = chosenFrom(job, await select(job));
+    expect(chosen.lines.some((l) => /3134|Gerstley/.test(l.material))).toBe(false);
+    expect(chosen.unreachable).toEqual(expect.arrayContaining(['Li2O', 'B2O3']));
+  });
+
+  it('chooses from raw materials and frits, never colorants or lead', () => {
+    const pool = fitPool(STANDARD_LIBRARY);
+    expect(pool).toContain('Ferro Frit 3134');
+    expect(pool).not.toContain('Red iron oxide');
+    expect(STANDARD_LIBRARY.names.some((n) => n.name === 'Litharge')).toBe(true);
+    expect(pool.some((name) => /^lead|litharge/i.test(name))).toBe(false);
   });
 });

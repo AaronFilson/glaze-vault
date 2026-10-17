@@ -48,6 +48,11 @@ mostly in the app.
   and so on) and optional **data-sheet values**, kept as text like other fields. A slip's water
   per 100 dry is worked out with its solids' density by volume, each material's from its data
   sheet, its class, a short table of typical standard ones, or 2.6 g/cm³.
+- Added after: **fitting can choose materials**, with Glazecalc's `selectMaterials`, from the
+  person's raw materials and frits and the standard ones, never colorants, additions or lead,
+  adding at most a number of new ones (3 by default). Over the whole library it takes seconds, so
+  it runs in a worker, and on the page's thread where none can start. It shows what each material
+  supplies and which could stand in for another, and the person can leave any out and fit again.
 
 ## Consequences
 

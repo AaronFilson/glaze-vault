@@ -258,6 +258,36 @@ export function materialInput(library: MaterialLibrary, name: string): MaterialI
   return material;
 }
 
+/** Oxides fitting never brings in: lead, which no glaze needs. */
+const NEVER_CHOSEN = ['PbO'];
+
+/**
+ * What fitting may choose from: the raw materials and frits the library has, the person's own
+ * first, and none with lead. Colorants and other additions are left out, as nobody wants a fit to
+ * reach for iron oxide to make up its iron.
+ */
+export function fitPool(library: MaterialLibrary): string[] {
+  const additives = new Set(STANDARD_ADDITIVES.map((m) => normalize(m.name)));
+  return library.names
+    .filter(({ name, yours }) => {
+      if (yours) {
+        const category = library.own.find((m) => sameName(m.name, name))?.category;
+        if (category !== 'material' && category !== 'frit') return false;
+      } else if (additives.has(normalize(name))) {
+        return false;
+      }
+      const input = materialInput(library, name);
+      if (!input || 'problem' in input) return false;
+      try {
+        const moles = molesPerGram(input);
+        return !NEVER_CHOSEN.some((oxide) => (moles[oxide] ?? 0) > 0);
+      } catch {
+        return false;
+      }
+    })
+    .map(({ name }) => name);
+}
+
 export function analyse(lines: RecipeLine[], library: MaterialLibrary = STANDARD_LIBRARY): Analysis {
   const used = lines.filter((line) => line.material.trim() && line.amount.trim());
   if (!used.length) return null;

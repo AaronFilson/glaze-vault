@@ -34,11 +34,6 @@ Work decided on but not done yet, with the reason it waits.
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
 
-## Chemistry tools ([ADR 15](adr/0015-chemistry-tools.md))
-
-- Fitting could choose materials itself from the whole library, with Glazecalc's
-  `selectMaterials`, rather than only those the recipe has and those added to try.
-
 ## Engineering
 
 - Nobody has installed the app on Windows or Linux yet: the end-to-end tests run the development
