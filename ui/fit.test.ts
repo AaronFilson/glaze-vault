@@ -129,6 +129,7 @@ describe('choosing materials for a fit', () => {
     const pool = fitPool(STANDARD_LIBRARY);
     expect(pool).toContain('Ferro Frit 3134');
     expect(pool).not.toContain('Red iron oxide');
+    expect(pool).not.toContain('Potassium Bichromate');
     expect(STANDARD_LIBRARY.names.some((n) => n.name === 'Litharge')).toBe(true);
     expect(pool.some((name) => /^lead|litharge/i.test(name))).toBe(false);
   });

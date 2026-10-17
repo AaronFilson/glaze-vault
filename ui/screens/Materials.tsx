@@ -341,6 +341,7 @@ export function Materials({
           </div>
 
           <DataSheetFields
+            key={viewing?.revisionId ?? current?.recordId ?? 'new'}
             sheet={shown.sheet}
             clay={isClay(shown.class)}
             onChange={(sheet) => setDraft({ ...draft, sheet: tidySheet(sheet) })}
@@ -463,8 +464,15 @@ function DataSheetFields({
   clay: boolean;
   onChange: (sheet: DataSheet) => void;
 }) {
+  // Open to start with for a clay, or once something is in it; then as the person leaves it.
+  const [open, setOpen] = useState(() => clay || hasSheet(sheet));
+  const [wasClay, setWasClay] = useState(clay);
+  if (clay !== wasClay) {
+    setWasClay(clay);
+    if (clay) setOpen(true);
+  }
   return (
-    <details className="data-sheet" open={clay || hasSheet(sheet)}>
+    <details className="data-sheet" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>Data sheet</summary>
       <p className="hint">All optional: what the supplier’s sheet gives, for clays most of all.</p>
       <div className="details">

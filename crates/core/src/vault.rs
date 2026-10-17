@@ -870,7 +870,10 @@ impl Vault {
         vault.summaries = vault.meta(summaries::META)?.is_some();
         vault.load_roles()?;
         vault.load_collections()?;
-        vault.change_to_summaries()?;
+        // A change-over that fails, as over a record that does not decrypt, is tried again at the
+        // next unlock; it does not keep anyone out. Until it is done, nobody can be given a role
+        // that reads without chemistry.
+        let _ = vault.change_to_summaries();
         Ok(vault)
     }
 

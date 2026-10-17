@@ -1,7 +1,7 @@
 // Fitting a recipe to a formula (docs/adr/0015-chemistry-tools.md): a target, from a limit set or
 // typed in, the materials the fit may use, and the amounts it finds, to put in the editor or save
 // as a recipe of their own.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { errorText } from '../api';
 import { select } from '../choose';
 import {
@@ -67,10 +67,14 @@ export function Fit({
   const [extras, setExtras] = useState(MOST_EXTRAS);
   const [avoid, setAvoid] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  /** Counts the runs, so a choice that comes back after its inputs changed, or the screen closed, is
+   * dropped. */
+  const runs = useRef(0);
+  useEffect(() => () => void (runs.current += 1), []);
   /** A new target: what was fitted to the last one goes. */
   const aim = (next: 'limits' | 'formula') => {
     setGoal(next);
-    setFitted(null);
+    stale();
   };
   const [problem, setProblem] = useState('');
   const [saved, setSaved] = useState(false);
@@ -80,6 +84,8 @@ export function Fit({
   const result = useMemo(() => (fitted ? analyse(fitted.lines, library) : null), [fitted, library]);
 
   const show = (outcome: Fitted | { problem: string }) => {
+    runs.current += 1;
+    setBusy(false);
     if ('problem' in outcome) {
       setProblem(outcome.problem);
       setFitted(null);
@@ -101,23 +107,31 @@ export function Fit({
     }
     setBusy(true);
     setFitted(null);
+    const mine = ++runs.current;
+    const current = () => mine === runs.current;
     void select(job)
       .then((selection) => {
+        if (!current()) return;
         const { lines, changed, ...chosen } = chosenFrom(job, selection);
         const umfFitted = analyse(lines, library)?.result?.umf;
         const outside = goal === 'limits' && set && umfFitted ? checkLimits(umfFitted, set).filter((c) => c.outside) : [];
         show({ lines, changed, chosen, outside: outside.map((c) => c.oxide) });
       })
-      .catch((e) => show({ problem: errorText(e) }))
-      .finally(() => setBusy(false));
+      .catch((e) => current() && show({ problem: errorText(e) }));
   };
   const leaveOut = (material: string) => {
     setAvoid([...avoid, material]);
+    stale();
+  };
+  /** Anything changed while choosing drops what it is choosing for. */
+  const stale = () => {
+    runs.current += 1;
+    setBusy(false);
     setFitted(null);
   };
   const change = (next: FitChoice[]) => {
     setChoices(next);
-    setFitted(null);
+    stale();
   };
 
   if (!umf) {
@@ -169,7 +183,7 @@ export function Fit({
               value={setId}
               onChange={(e) => {
                 setSetId(e.target.value);
-                setFitted(null);
+                stale();
               }}
             >
               {sets.map((s) => (
@@ -214,7 +228,7 @@ export function Fit({
                       value={line.oxide}
                       onChange={(e) => {
                         setTyped(withEmpty(typed.map((t, j) => (j === i ? { ...t, oxide: e.target.value } : t))));
-                        setFitted(null);
+                        stale();
                       }}
                     >
                       <option value="">—</option>
@@ -232,7 +246,7 @@ export function Fit({
                       value={line.moles}
                       onChange={(e) => {
                         setTyped(withEmpty(typed.map((t, j) => (j === i ? { ...t, moles: e.target.value } : t))));
-                        setFitted(null);
+                        stale();
                       }}
                     />
                   </td>
@@ -244,7 +258,7 @@ export function Fit({
             type="button"
             onClick={() => {
               setTyped(withEmpty(targetFrom(umf)));
-              setFitted(null);
+              stale();
             }}
           >
             Start from the recipe’s formula
@@ -298,7 +312,9 @@ export function Fit({
         onSubmit={(e) => {
           e.preventDefault();
           if (!trying.trim()) return;
-          change([...choices, { material: trying.trim(), amount: '', change: true }]);
+          if (!choices.some((c) => sameName(c.material, trying))) {
+            change([...choices, { material: trying.trim(), amount: '', change: true }]);
+          }
           setTrying('');
         }}
       >
@@ -321,7 +337,7 @@ export function Fit({
             checked={choosing}
             onChange={(e) => {
               setChoosing(e.target.checked);
-              setFitted(null);
+              stale();
             }}
           />
           Let it choose other materials too, from yours and the standard ones
@@ -334,7 +350,7 @@ export function Fit({
               value={extras}
               onChange={(e) => {
                 setExtras(Number(e.target.value));
-                setFitted(null);
+                stale();
               }}
             >
               {[1, 2, 3, 4, 5].map((n) => (
@@ -358,7 +374,7 @@ export function Fit({
                   aria-label={`Use ${material} again`}
                   onClick={() => {
                     setAvoid(avoid.filter((a) => a !== material));
-                    setFitted(null);
+                    stale();
                   }}
                 >
                   (use again)
@@ -422,10 +438,10 @@ export function Fit({
                 </tr>
               </thead>
               <tbody>
-                {rows(choices, fitted.lines).map(({ material, now, then, brought }) => {
+                {rows(choices, fitted.lines).map(({ material, now, then, brought }, i) => {
                   const supplies = fitted.chosen?.supplies[material];
                   return (
-                    <tr key={material}>
+                    <tr key={i}>
                       <th scope="row">{material}</th>
                       <td className="num">{now || '—'}</td>
                       <td className="num">{then ?? '—'}</td>

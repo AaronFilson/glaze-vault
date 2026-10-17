@@ -161,6 +161,9 @@ impl Vault {
         self.admin()?;
         let name = self.role_name(name, None)?;
         check(changes, may)?;
+        if !may.chemistry {
+            self.ready_for(Held::Summary)?;
+        }
         let role = CustomRole {
             id: Uuid::new_v4(),
             name,
@@ -189,6 +192,9 @@ impl Vault {
         self.admin()?;
         let name = self.role_name(name, Some(id))?;
         check(changes, may)?;
+        if !may.chemistry {
+            self.ready_for(Held::Summary)?;
+        }
         let index = self.roles.iter().position(|r| r.id == id).ok_or(Error::NoSuchRole)?;
         let before = self.roles[index].clone();
         let role = Role::Custom(id);

@@ -267,7 +267,11 @@ const NEVER_CHOSEN = ['PbO'];
  * reach for iron oxide to make up its iron.
  */
 export function fitPool(library: MaterialLibrary): string[] {
-  const additives = new Set(STANDARD_ADDITIVES.map((m) => normalize(m.name)));
+  const additives = new Set(
+    [...STANDARD_ADDITIVES, ...STANDARD_MATERIALS.filter((m) => categoryOf(m) !== 'material' && categoryOf(m) !== 'frit')].map(
+      (m) => normalize(m.name)
+    )
+  );
   return library.names
     .filter(({ name, yours }) => {
       if (yours) {

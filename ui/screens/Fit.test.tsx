@@ -70,4 +70,17 @@ describe('fitting on screen', () => {
     fireEvent.click(leaveOut[0]);
     expect(screen.getByText(/Not to use:/).textContent).toContain(brought);
   }, 20000);
+
+  it('drops a choice whose inputs changed while it was choosing', async () => {
+    render(<Fit recipe={lime} library={STANDARD_LIBRARY} sets={[]} initialSet="" onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText(/Let it choose other materials too/));
+    fireEvent.change(screen.getByLabelText('New materials, at most'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
+    // Before the choice comes back, the target changes.
+    const moles = screen.getAllByLabelText(/^Target moles/)[0] as HTMLInputElement;
+    fireEvent.change(moles, { target: { value: String(Number(moles.value) + 0.1) } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Fit' })).toBeTruthy();
+  }, 20000);
 });

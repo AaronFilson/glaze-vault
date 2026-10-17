@@ -871,7 +871,7 @@ export function Recipes({
             }}
           />
         )}
-        {printing && view === 'recipes' && (
+        {printing && view === 'recipes' && may(access, shownIn, 'print') && (
           <PrintOptions job={printJob} onPrint={print} onCancel={() => setPrinting(false)} />
         )}
         {update && !updateHidden && (
@@ -1002,7 +1002,7 @@ export function Recipes({
         />
       ) : view === 'compare' && comparing ? (
         <Compare
-          recipes={recipes}
+          recipes={recipes.filter((r) => may(access, r.collectionId, 'chemistry'))}
           unsaved={recipe.changed ? { recordId: recipe.current?.recordId ?? null, content: recipe.draft } : null}
           library={library}
           initial={comparing}
@@ -1010,10 +1010,11 @@ export function Recipes({
         />
       ) : view === 'blend' ? (
         <Blend
-          recipes={recipes}
+          recipes={recipes.filter((r) => may(access, r.collectionId, 'chemistry'))}
           library={library}
           initial={blendFrom}
           canSave={mayCreate}
+          canPrint={(ids) => ids.every((id) => may(access, recipes.find((r) => r.recordId === id)?.collectionId, 'print'))}
           onSave={async (content) => {
             const saved = await api.saveRecipe(null, content, newCollection);
             setRecipes((list) => [saved, ...list]);

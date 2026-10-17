@@ -226,6 +226,7 @@ impl Vault {
         insert_organization_grant(&tx, &vault_id, &organization_public, &private.0, &private.1)?;
         for (collection, role) in roles {
             self.known_role(*role)?;
+            self.ready_for(self.held(*role))?;
             let collection = self.readable(collection)?;
             insert_grant(
                 &tx,
@@ -274,6 +275,8 @@ impl Vault {
         keyring.write(&self.dir.join(KEYRING_FILE))?;
         self.keyring = keyring;
         self.load_collections()?;
+        // An admin signing in for the first time may be the first who can change the vault over.
+        let _ = self.change_to_summaries();
         Ok(recovery)
     }
 
@@ -305,6 +308,7 @@ impl Vault {
         match role {
             Some(role) => {
                 self.known_role(role)?;
+                self.ready_for(self.held(role))?;
                 let tx = self.conn.unchecked_transaction()?;
                 tx.execute(
                     "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
@@ -324,14 +328,18 @@ impl Vault {
                 insert_grant(&tx, &vault_id, &person, &user.public_key, &collection, &key, role, held)?;
                 tx.commit()?;
             }
+            // In one transaction, so a failure part way leaves them their role, and trying again
+            // takes it away and changes the key.
             None => {
-                let removed = self.conn.execute(
+                let tx = self.conn.unchecked_transaction()?;
+                let removed = tx.execute(
                     "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
                     params![person.to_string(), collection.to_string()],
                 )?;
                 if removed > 0 {
-                    self.rotate_collection_key(&collection)?;
+                    self.rotate_collection_key_in(&tx, &collection)?;
                 }
+                tx.commit()?;
             }
         }
         self.load_collections()
@@ -695,7 +703,8 @@ impl Vault {
             return Err(Error::NotATeam);
         }
         let open = self.readable(collection)?;
-        if self.organization.is_none() && !self.capabilities(open.role).manage {
+        // Nobody but an admin manages a person's private collection.
+        if self.organization.is_none() && (open.owner.is_some() || !self.capabilities(open.role).manage) {
             return Err(Error::NotAllowed);
         }
         Ok(open)

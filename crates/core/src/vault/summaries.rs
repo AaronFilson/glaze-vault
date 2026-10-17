@@ -49,6 +49,15 @@ pub(super) fn open(key: &Key, sealed: &Sealed, aad: &[u8]) -> Option<serde_json:
 }
 
 impl Vault {
+    /// Fails for a grant of the summary key until the vault is changed over: its firings would
+    /// still be under the collection's key.
+    pub(super) fn ready_for(&self, held: Held) -> Result<()> {
+        if held == Held::Summary && !self.summaries {
+            return Err(Error::NotChangedOver);
+        }
+        Ok(())
+    }
+
     /// Changes a vault from before summaries over, all or none: firings and their photos go under
     /// each collection's summary key, and every recipe revision gets its summary. Only someone
     /// who holds every collection's key can: the person of a one-person vault, or an admin. Until
@@ -363,5 +372,35 @@ mod tests {
         let as_ben = Vault::unlock_as(dir.path(), Some(ben.id), BENS).unwrap();
         assert_eq!(as_ben.heads(Kind::Recipe).unwrap()[0].content["lines"], json!([1]));
         assert_eq!(as_ben.history(Kind::Recipe, recipe.record_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn nobody_reads_without_chemistry_until_the_vault_is_changed_over() {
+        let (dir, mut ana, shared) = team();
+        ana.conn
+            .execute("DELETE FROM meta WHERE name = ?1", params![META])
+            .unwrap();
+        ana.summaries = false;
+        let recipe = ana.save_in(Kind::Recipe, shared, &json!({ "name": "Ash" })).unwrap();
+        ana.save_in(Kind::Firing, shared, &json!({ "recipe": recipe.record_id }))
+            .unwrap();
+        assert!(matches!(
+            ana.create_role("Sales", &[], SALES),
+            Err(Error::NotChangedOver)
+        ));
+        let dana = ana.add_person("Dana", ONE_TIME, &[]).unwrap();
+        ana.make_admin(dana.id).unwrap();
+        drop(ana);
+
+        // Dana, a new admin, changes it over when she first signs in, and can then give the role.
+        let mut as_dana = signed_in(&dir, dana.id);
+        assert!(as_dana.summaries);
+        let sales = as_dana.create_role("Sales", &[], SALES).unwrap();
+        let ben = as_dana
+            .add_person("Ben", ONE_TIME, &[(shared, Role::Custom(sales.id))])
+            .unwrap();
+        drop(as_dana);
+        let as_ben = signed_in(&dir, ben.id);
+        assert_eq!(as_ben.heads(Kind::Firing).unwrap().len(), 1);
     }
 }
