@@ -74,10 +74,10 @@ describe('batch sheets', () => {
     expect(codeProblem(materials, codes, [])).toBeNull();
     expect(codeProblem(materials, ['M-104', '', 'M-310', 'M-401'], [])).toBe('Give each material a code.');
     expect(codeProblem(materials, ['M-104', 'm-104', 'M-310', 'M-401'], [])).toBe(
-      'M-104 is the code for Silica too. Give each material its own.'
+      'm-104 is already the code for Custer Feldspar. Give each material its own.'
     );
     expect(codeProblem(materials, codes, [{ material: 'Talc', code: 'M-401' }])).toBe(
-      'M-401 is the code for Talc too. Give each material its own.'
+      'M-401 is already the code for Talc. Give each material its own.'
     );
     // The same material twice in a recipe has one code.
     expect(codeProblem(['Silica', 'silica'], ['M-200', 'M-200'], [])).toBeNull();

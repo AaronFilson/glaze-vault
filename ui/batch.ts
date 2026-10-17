@@ -102,9 +102,9 @@ export function codeProblem(materials: string[], codes: string[], known: CodePai
   if (codes.some((code) => !code.trim())) return 'Give each material a code.';
   for (const [i, code] of codes.entries()) {
     const other =
-      materials.find((material, j) => sameCode(codes[j], code) && !sameName(material, materials[i])) ??
+      materials.find((material, j) => j < i && sameCode(codes[j], code) && !sameName(material, materials[i])) ??
       known.find((k) => sameCode(k.code, code) && !sameName(k.material, materials[i]))?.material;
-    if (other) return `${code.trim()} is the code for ${other} too. Give each material its own.`;
+    if (other) return `${code.trim()} is already the code for ${other}. Give each material its own.`;
   }
   return null;
 }

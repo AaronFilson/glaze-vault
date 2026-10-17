@@ -23,6 +23,13 @@ if (process.platform === 'darwin' && /"CGSSessionScreenIsLocked"=Yes/.test(spawn
 const dir = mkdtempSync(join(tmpdir(), 'glaze-vault-e2e-'));
 const app = new App(dir);
 const vault: Vault = { password: '', recoveryWords: [], organizationWords: [] };
+/** In GitHub Actions, the failure goes on the run as an annotation too, which can be read without
+ * the job's log. */
+const annotate = (text: string) => {
+  if (!process.env.GITHUB_ACTIONS) return;
+  const escaped = text.slice(0, 6000).replaceAll('%', '%25').replaceAll('\r', '').replaceAll('\n', '%0A');
+  console.log(`::error title=End-to-end tests::${escaped}`);
+};
 const seconds = (since: number) => `${((Date.now() - since) / 1000).toFixed(1)}s`;
 
 let failed = false;
@@ -41,6 +48,7 @@ try {
       failed = true;
       console.log(`  FAIL  ${scenario.name} (${seconds(at)})\n`);
       console.log((e as Error).message);
+      annotate(`${scenario.name}: ${(e as Error).message}`);
       const rest = scenarios.length - index - 1;
       if (rest) console.log(`\n${rest} more not run: each starts where the one before left off.`);
       break;
@@ -49,6 +57,7 @@ try {
 } catch (e) {
   failed = true;
   console.log((e as Error).message);
+  annotate((e as Error).message);
 } finally {
   await app.stop();
 }

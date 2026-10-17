@@ -471,7 +471,7 @@ export const scenarios: Scenario[] = [
         'type "Code for Whiting" "M-310"',
         'type "Code for EPK" "M-104"',
         'click "Save batch sheet"',
-        'expect "M-104 is the code for Custer too."',
+        'expect "M-104 is already the code for Custer."',
         'type "Code for EPK" "M-401"',
         'type "Notes for weighing" "Sieve through 80 mesh"',
         'click "Save batch sheet"',
