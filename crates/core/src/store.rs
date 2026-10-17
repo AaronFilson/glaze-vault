@@ -51,6 +51,21 @@ const MIGRATIONS: &[&str] = &[
         enc BLOB NOT NULL,
         ciphertext BLOB NOT NULL
     );",
+    // 4: attachments (ADR 14): a record's photos and other files, each encrypted with its
+    // collection's key and kept apart from the record's revisions, which only name them.
+    "CREATE TABLE attachments (
+        id TEXT PRIMARY KEY,
+        record_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        collection_id TEXT NOT NULL REFERENCES collections(id),
+        media_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        author_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        nonce BLOB NOT NULL,
+        ciphertext BLOB NOT NULL
+    );
+    CREATE INDEX attachments_by_record ON attachments(record_id);",
 ];
 
 pub fn open(path: &Path, key: &Key) -> Result<Connection> {

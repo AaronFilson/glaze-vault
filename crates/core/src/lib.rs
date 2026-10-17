@@ -17,6 +17,6 @@ pub use backup::EXTENSION as BACKUP_EXTENSION;
 pub use error::Error;
 pub use recovery::RecoveryKey;
 pub use vault::{
-    BackupInfo, Collection, Credential, Grant, Kind, LastBackup, MIN_PASSWORD_CHARS, Person, Revision, SetAside,
-    Settings, Vault,
+    Attachment, BackupInfo, Collection, Credential, Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS,
+    Person, Revision, SetAside, Settings, Vault,
 };

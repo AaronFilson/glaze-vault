@@ -3,8 +3,8 @@
 //! page never chooses where files are written.
 
 use glaze_vault_core::{
-    BACKUP_EXTENSION, Collection, Credential, Error, Grant, Kind, LastBackup, Person, Revision, Role, SetAside,
-    Settings, Vault,
+    Attachment, BACKUP_EXTENSION, Collection, Credential, Error, Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, Person,
+    Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -306,6 +306,71 @@ fn deleted_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revi
 #[tauri::command(async)]
 fn erase_record(state: State<AppState>, kind: Kind, record_id: Uuid) -> CommandResult<usize> {
     with_vault(&state, |vault| vault.erase(kind, record_id))
+}
+
+/// Asks for a photo, and hands its bytes to the page, which makes it smaller before adding it
+/// (ui/photos.ts). The bytes go as they are, not as JSON; none means the person cancelled.
+#[tauri::command(async)]
+fn choose_photo(window: WebviewWindow, state: State<AppState>) -> CommandResult<tauri::ipc::Response> {
+    if state.vault.lock().unwrap().is_none() {
+        return Err(locked());
+    }
+    let Some(path) = open_dialog(
+        &window,
+        "Choose a photo",
+        "Photos",
+        &["jpg", "jpeg", "png", "heic", "heif", "webp", "gif"],
+    )?
+    else {
+        return Ok(tauri::ipc::Response::new(Vec::new()));
+    };
+    if fs::metadata(&path).map_err(file_error)?.len() > MAX_PHOTO_BYTES {
+        return Err(CommandError::new(
+            "too-large",
+            "That photo is too large. Choose one under 80 MB.",
+        ));
+    }
+    Ok(tauri::ipc::Response::new(fs::read(&path).map_err(file_error)?))
+}
+
+/// The largest photo file the page is given to make smaller.
+const MAX_PHOTO_BYTES: u64 = 80 * 1024 * 1024;
+
+/// Adds a file to a record. The body is the file's bytes; the headers say which record (kind
+/// and record-id) and what it is (media-type).
+#[tauri::command(async)]
+fn add_attachment(state: State<AppState>, request: tauri::ipc::Request<'_>) -> CommandResult<Attachment> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(CommandError::new(
+            "bad-request",
+            "The attachment came without its bytes.",
+        ));
+    };
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err(Error::TooLarge.into());
+    }
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+            .ok_or_else(|| CommandError::new("bad-request", format!("The attachment came without {name}.")))
+    };
+    let kind: Kind = serde_json::from_value(serde_json::Value::String(header("kind")?))
+        .map_err(|_| CommandError::new("bad-request", "Unknown kind of record."))?;
+    let record_id =
+        Uuid::parse_str(&header("record-id")?).map_err(|_| CommandError::new("bad-request", "Unknown record."))?;
+    let media_type = header("media-type")?;
+    with_vault(&state, |vault| {
+        vault.add_attachment(kind, record_id, &media_type, bytes)
+    })
+}
+
+/// An attachment's bytes, as they are, not as JSON.
+#[tauri::command(async)]
+fn get_attachment(state: State<AppState>, id: Uuid) -> CommandResult<tauri::ipc::Response> {
+    with_vault(&state, |vault| vault.attachment(id)).map(|(_, bytes)| tauri::ipc::Response::new(bytes.to_vec()))
 }
 
 #[tauri::command(async)]
@@ -824,6 +889,9 @@ pub fn run() {
             delete_record,
             deleted_records,
             erase_record,
+            choose_photo,
+            add_attachment,
+            get_attachment,
             get_settings,
             set_settings,
             lock_with_draft,

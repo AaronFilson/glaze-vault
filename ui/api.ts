@@ -1,7 +1,8 @@
 // The Rust core's commands (crates/app/src/lib.rs). The UI makes no access decisions: it shows
 // what these return.
-import { invoke as tauriInvoke, type InvokeArgs } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core';
 import type { BatchSheet } from './batch';
+import type { Firing } from './firing';
 import type { MaterialContent, RecipeContent } from './chemistry';
 
 /** Calls to the core not answered yet, by when they were made; the development tools show any
@@ -9,10 +10,10 @@ import type { MaterialContent, RecipeContent } from './chemistry';
 export const pendingCalls = new Map<number, { command: string; at: number }>();
 let nextCall = 0;
 
-function invoke<T>(command: string, args?: InvokeArgs): Promise<T> {
+function invoke<T>(command: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
   const id = ++nextCall;
   pendingCalls.set(id, { command, at: Date.now() });
-  return tauriInvoke<T>(command, args).finally(() => pendingCalls.delete(id));
+  return tauriInvoke<T>(command, args, options).finally(() => pendingCalls.delete(id));
 }
 
 export interface VaultStatus {
@@ -126,7 +127,16 @@ export interface RestoreResult {
   recoveryWords: string[] | null;
 }
 
-export type Kind = 'recipe' | 'material' | 'batch';
+export type Kind = 'recipe' | 'material' | 'batch' | 'firing';
+
+/** A file kept with a record, such as a firing's photo. */
+export interface Attachment {
+  id: string;
+  recordId: string;
+  mediaType: string;
+  size: number;
+  createdAt: number;
+}
 
 /** One saved revision of a record. A list holds each record's newest. */
 export interface Revision<Content> {
@@ -188,6 +198,14 @@ export const api = {
     invoke<RecipeHead>('save_record', { kind: 'recipe', parent, collection, content }),
   materials: () => invoke<MaterialHead[]>('list_records', { kind: 'material' }),
   batchSheets: () => invoke<BatchSheet[]>('list_records', { kind: 'batch' }),
+  firings: () => invoke<Firing[]>('list_records', { kind: 'firing' }),
+  /** Asks for a photo and returns its bytes; empty if cancelled. */
+  choosePhoto: () => invoke<ArrayBuffer>('choose_photo').then((buffer) => new Uint8Array(buffer)),
+  addAttachment: (kind: Kind, recordId: string, mediaType: string, bytes: Uint8Array) =>
+    invoke<Attachment>('add_attachment', bytes, {
+      headers: { kind, 'record-id': recordId, 'media-type': mediaType }
+    }),
+  attachment: (id: string) => invoke<ArrayBuffer>('get_attachment', { id }),
   saveMaterial: (parent: string | null, content: MaterialContent, collection: string | null = null) =>
     invoke<MaterialHead>('save_record', { kind: 'material', parent, collection, content }),
   saveRecord: <Content>(kind: Kind, parent: string | null, content: Content, collection: string | null = null) =>

@@ -27,6 +27,8 @@ import { restorePart, useEditor, type Editor } from '../useEditor';
 import { useIdleLock } from '../useIdleLock';
 import { BatchSheetForm, BatchSheets } from './BatchSheets';
 import { Compare, type Side } from './Compare';
+import { FiringLog, type FiringEditing } from './FiringLog';
+import { newFiring, type Firing } from '../firing';
 import { ConfirmNotice } from './Deleted';
 import { Import } from './Import';
 import type { ImportPlan } from '../importFormats';
@@ -85,9 +87,13 @@ export function Recipes({
   // window.confirm(), so the question is asked in the page.
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
   const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
-  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches'>(
+  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings'>(
     'recipes'
   );
+  // The firing log (ADR 14): every firing, the one being edited, and the recipe it is showing.
+  const [firings, setFirings] = useState<Firing[]>([]);
+  const [firing, setFiring] = useState<FiringEditing | null>(null);
+  const [firingsOf, setFiringsOf] = useState<string | null>(null);
   // Batch sheets (ADR 12): the one open, and whether the open recipe's is being made.
   const [sheets, setSheets] = useState<BatchSheet[]>([]);
   const [sheet, setSheet] = useState<BatchSheet | null>(null);
@@ -136,18 +142,20 @@ export function Recipes({
 
   /** After growing or changing the team: access, and the lists, which now show collections. */
   const reloadAccess = () => {
-    Promise.all([loadAccess(), api.recipes(), api.materials(), api.batchSheets()])
-      .then(([, heads, ownMaterials, batchSheets]) => {
+    Promise.all([loadAccess(), api.recipes(), api.materials(), api.batchSheets(), api.firings()])
+      .then(([, heads, ownMaterials, batchSheets, allFirings]) => {
         setRecipes(heads);
         setMaterials(ownMaterials);
         setSheets(batchSheets);
+        setFirings(allFirings);
       })
       .catch((e) => setError(errorText(e)));
   };
 
   useEffect(() => {
     (async () => {
-      const [now, heads, ownMaterials, gone, goneMaterials, settings, last, draft, batchSheets] = await Promise.all([
+      const [now, heads, ownMaterials, gone, goneMaterials, settings, last, draft, batchSheets, allFirings] =
+        await Promise.all([
         loadAccess(),
         api.recipes(),
         api.materials(),
@@ -156,10 +164,12 @@ export function Recipes({
         api.settings(),
         api.lastBackup(),
         api.draft(),
-        api.batchSheets()
+        api.batchSheets(),
+        api.firings()
       ]);
       setRecipes(heads);
       setSheets(batchSheets);
+      setFirings(allFirings);
       // Someone who only weighs batches starts on the batch sheets.
       if (onlyWeighs(now)) setView('batches');
       setMaterials(ownMaterials);
@@ -576,7 +586,44 @@ export function Recipes({
     );
   };
 
-  const viewButton = (name: 'materials' | 'settings' | 'batches', label: string) => (
+  /** Below a saved recipe: its firings, and logging another. */
+  const firingsPart = () => {
+    const current = recipe.current;
+    if (!current || recipe.viewing) return null;
+    const count = firings.filter((f) => f.content.recipe === current.recordId).length;
+    const show = (editing: FiringEditing | null) => {
+      setFiringsOf(current.recordId);
+      if (editing) setFiring(editing);
+      setView('firings');
+    };
+    return (
+      <div className="row">
+        {count > 0 && (
+          <button type="button" onClick={() => show(null)}>
+            Firings ({count})
+          </button>
+        )}
+        {canEdit(access, current.collectionId) && (
+          <button
+            type="button"
+            onClick={() =>
+              show({
+                current: null,
+                draft: newFiring(
+                  { recordId: current.recordId, number: current.number, name: current.content.name },
+                  new Date()
+                )
+              })
+            }
+          >
+            Log a firing…
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const viewButton = (name: 'materials' | 'settings' | 'batches' | 'firings', label: string) => (
     <button type="button" aria-pressed={view === name} onClick={() => setView(view === name ? 'recipes' : name)}>
       {label}
     </button>
@@ -592,6 +639,7 @@ export function Recipes({
               Print…
             </button>
           )}
+          {viewButton('firings', 'Firing log')}
           {team && viewButton('batches', 'Batch sheets')}
           {viewButton('materials', 'Materials')}
           {viewButton('settings', 'Settings')}
@@ -772,6 +820,18 @@ export function Recipes({
           initial={comparing}
           onClose={() => setView('recipes')}
         />
+      ) : view === 'firings' ? (
+        <FiringLog
+          firings={firings}
+          recipes={recipes}
+          access={access}
+          editing={firing}
+          onEdit={setFiring}
+          forRecipe={firingsOf}
+          onForRecipe={setFiringsOf}
+          onSaved={(saved) => setFirings((list) => [saved, ...list.filter((f) => f.recordId !== saved.recordId)])}
+          onErased={(recordId) => setFirings((list) => list.filter((f) => f.recordId !== recordId))}
+        />
       ) : view === 'batches' && access ? (
         <BatchSheets
           sheets={sheets}
@@ -838,7 +898,12 @@ export function Recipes({
           canCreate={mayCreate}
           groups={team && access ? byCollection(recipes, access, names) : undefined}
           newIn={picker || undefined}
-          batchSheet={batchSheetPart()}
+          batchSheet={
+            <>
+              {firingsPart()}
+              {batchSheetPart()}
+            </>
+          }
         />
       )}
 

@@ -15,12 +15,14 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 3. [Your recovery key](recovery-key.md): what it is, where to keep it, and how to use it
 4. [Recipes and their chemistry](recipes.md)
 5. [Your own materials](materials.md): your supplier's analyses, stains and additives
-6. [Printing](printing.md): a recipe, or a batch sheet for weighing out
-7. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
-8. [Importing](importing.md): recipes and materials from other programs and spreadsheets
-9. [Sharing a vault with others](sharing.md): people, roles and collections
-10. [Settings](settings.md): locking by itself, your password, updates
-11. [How your recipes are protected](security.md)
+6. [The firing log](firing-log.md): how each firing went, a test bar's shrinkage and
+   absorption, and photos
+7. [Printing](printing.md): a recipe, or a batch sheet for weighing out
+8. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
+9. [Importing](importing.md): recipes and materials from other programs and spreadsheets
+10. [Sharing a vault with others](sharing.md): people, roles and collections
+11. [Settings](settings.md): locking by itself, your password, updates
+12. [How your recipes are protected](security.md)
 
 ## Coming later
 

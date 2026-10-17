@@ -589,6 +589,40 @@ impl Vault {
                     params![sealed.nonce, sealed.ciphertext, id],
                 )?;
             }
+            // Attachments, one at a time: there may be many photos.
+            let mut statement =
+                tx.prepare("SELECT id, record_id, kind, media_type FROM attachments WHERE collection_id = ?1")?;
+            let attachments = statement
+                .query_map(params![collection.to_string()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, record_id, kind, media_type) in attachments {
+                let (old, new) = if kind == "batch" {
+                    (super::batch_key(&old, collection), super::batch_key(&new, collection))
+                } else {
+                    (old.clone(), new.clone())
+                };
+                let aad =
+                    super::attachments::aad(&parse_id(&id)?, &parse_id(&record_id)?, &kind, collection, &media_type);
+                let (nonce, ciphertext): (Vec<u8>, Vec<u8>) = tx.query_row(
+                    "SELECT nonce, ciphertext FROM attachments WHERE id = ?1",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let plaintext = crypto::decrypt(&old, &crypto::Sealed { nonce, ciphertext }, &aad)
+                    .ok_or_else(|| Error::Corrupt(format!("attachment {id} does not decrypt")))?;
+                let sealed = crypto::encrypt(&new, &plaintext, &aad);
+                tx.execute(
+                    "UPDATE attachments SET nonce = ?1, ciphertext = ?2 WHERE id = ?3",
+                    params![sealed.nonce, sealed.ciphertext, id],
+                )?;
+            }
             // Drafts kept under this collection's key, each bound to its person (Vault::draft_aad).
             let mut statement = tx.prepare("SELECT name, value FROM meta WHERE name LIKE 'draft %'")?;
             let drafts = statement

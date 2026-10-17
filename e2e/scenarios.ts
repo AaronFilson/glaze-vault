@@ -584,6 +584,43 @@ export const scenarios: Scenario[] = [
         'expect "[x] \\"Material 3 is an addition\\""'
       );
     }
+  },
+  {
+    name: 'Log a firing with a test bar and a photo',
+    async run(app) {
+      // A photo of one red pixel: enough to be read, made smaller and shown.
+      const photo = fileIn(app, 'tile.png');
+      writeFileSync(
+        photo,
+        Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+          'base64'
+        )
+      );
+      await app.run(
+        'click "Iron slip"',
+        'click "Log a firing…"',
+        'expect "# Iron slip"',
+        'type "Cone" "04"',
+        'select "Atmosphere" "Oxidation"',
+        'check "Crazed"',
+        // A slip's firing opens with its test bar.
+        'type "Dry length, mm" "95"',
+        'type "Fired length, mm" "90"',
+        'expect "| Total shrinkage | 10.0% |"',
+        'click "Save"',
+        'expect "revision 1" 10000',
+        `pick ${quote(photo)}`,
+        'click "Add photo…"',
+        'expect "[image \\"Photo 1\\"]" 20000',
+        'type "Caption for photo 1" "Front of the tile"',
+        'click "Save"',
+        'expect "revision 3" 10000',
+        'expect "[image \\"Front of the tile\\"]"',
+        'click "Firing log"',
+        'expect "Firings (1)"'
+      );
+    }
   }
 ];
 

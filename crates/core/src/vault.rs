@@ -3,8 +3,10 @@
 //! A vault starts with one person and one collection (docs/adr/0006-one-person-first.md), stored the
 //! way a team's is, so it can grow into one (docs/adr/0012-teams-on-one-computer.md, in `team`).
 
+mod attachments;
 mod team;
 
+pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
 pub use team::{Collection, Grant, Person};
 
 use crate::access::Role;
@@ -78,6 +80,9 @@ pub enum Kind {
     /// A batch sheet: a recipe's lines with its materials named by in-house codes, for a batch
     /// operator to weigh out (ADR 4).
     Batch,
+    /// A firing of a recipe in the firing log: how it was fired, what came out, measurements and
+    /// photos (ADR 14).
+    Firing,
 }
 
 impl Kind {
@@ -86,7 +91,14 @@ impl Kind {
             Kind::Recipe => "recipe",
             Kind::Material => "material",
             Kind::Batch => "batch",
+            Kind::Firing => "firing",
         }
+    }
+
+    fn parse(text: &str) -> Option<Kind> {
+        [Kind::Recipe, Kind::Material, Kind::Batch, Kind::Firing]
+            .into_iter()
+            .find(|kind| kind.as_str() == text)
     }
 }
 
@@ -509,10 +521,16 @@ impl Vault {
             return Err(Error::NotDeleted);
         };
         self.editable(&record.collection_id)?;
-        let erased = self.conn.execute(
+        let tx = self.conn.unchecked_transaction()?;
+        let erased = tx.execute(
             "DELETE FROM revisions WHERE record_id = ?1 AND kind = ?2",
             params![record_id.to_string(), kind.as_str()],
         )?;
+        tx.execute(
+            "DELETE FROM attachments WHERE record_id = ?1 AND kind = ?2",
+            params![record_id.to_string(), kind.as_str()],
+        )?;
+        tx.commit()?;
         // secure_delete has zeroed the freed pages; this empties the write-ahead log of them too.
         self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(erased)

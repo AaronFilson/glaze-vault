@@ -34,6 +34,14 @@ Work decided on but not done yet, with the reason it waits.
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
 
+## Firing log ([ADR 14](adr/0014-firing-log-and-photos.md))
+
+- Keep unsaved edits to a firing as a draft when the vault locks, as recipes are.
+- A vitrification chart: absorption and shrinkage against cone across a recipe's firings.
+- Slips: specific gravity, viscosity (Ford cup seconds) and gel, measured and target.
+- Export the log as CSV, with the bar's results.
+- A role for someone who logs firings without changing recipes.
+
 ## Engineering
 
 - Nobody has installed the app on Windows or Linux yet: the end-to-end tests run the development
