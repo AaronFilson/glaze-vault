@@ -15,6 +15,7 @@ import {
 } from '../api';
 import { BATCH_UNITS, type BatchSheet, type BatchUnit } from '../batch';
 import {
+  amountOf,
   analyse,
   materialLibrary,
   sameName,
@@ -1037,7 +1038,7 @@ function PrintOptions({
   const [kind, setKind] = useState<PrintJob['kind']>(job.kind);
   const [size, setSize] = useState(job.kind === 'batch' ? String(job.size) : '1000');
   const [unit, setUnit] = useState<BatchUnit>(job.kind === 'batch' ? job.unit : 'g');
-  const amount = Number(size.trim().replace(',', '.'));
+  const amount = amountOf(size);
   const ready = kind === 'recipe' || (Number.isFinite(amount) && amount > 0);
 
   const submit = (event: React.FormEvent) => {

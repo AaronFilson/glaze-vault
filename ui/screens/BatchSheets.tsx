@@ -13,7 +13,7 @@ import {
   type BatchUnit,
   type CodePair
 } from '../batch';
-import { sameName } from '../chemistry';
+import { amountOf, sameName } from '../chemistry';
 import { byCollection, canEdit } from '../team';
 import { ConfirmNotice } from './Deleted';
 import { BatchTable } from './PrintView';
@@ -40,7 +40,7 @@ export function BatchSheets({
   const [unit, setUnit] = useState<BatchUnit>('g');
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState('');
-  const amount = Number(size.trim().replace(',', '.'));
+  const amount = amountOf(size);
   const ready = Number.isFinite(amount) && amount > 0;
 
   const remove = async () => {

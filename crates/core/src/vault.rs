@@ -374,7 +374,7 @@ impl Vault {
     pub fn backup_info(path: &Path) -> Result<BackupInfo> {
         let backup = Backup::open(path)?;
         let admins = match backup.header.keyring.organization {
-            Some(_) => team::people_of(&backup.header.keyring)
+            Some(_) => team::people(&backup.header.keyring)
                 .into_iter()
                 .filter(|p| p.admin)
                 .collect(),
@@ -828,7 +828,7 @@ impl Vault {
         let mut collections = Vec::new();
         for (id, name, owner, role, enc, ciphertext) in rows {
             let id = parse_id(&id)?;
-            let role = Role::parse(&role).ok_or_else(|| Error::Corrupt(format!("unknown role {role}")))?;
+            let role = parse_role(&role)?;
             let key = crypto::open_key(
                 &self.keys,
                 &crypto::SealedBox { enc, ciphertext },
@@ -1208,6 +1208,10 @@ fn file_name_of(path: &Path) -> String {
 
 fn parse_id(text: &str) -> Result<Uuid> {
     Uuid::parse_str(text).map_err(|_| Error::Corrupt(format!("bad id {text}")))
+}
+
+fn parse_role(text: &str) -> Result<Role> {
+    Role::parse(text).ok_or_else(|| Error::Corrupt(format!("unknown role {text}")))
 }
 
 fn now_ms() -> i64 {

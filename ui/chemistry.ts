@@ -231,6 +231,12 @@ export function amountOf(text: string): number {
   return Number(text.trim().replace(',', '.'));
 }
 
+/** As amountOf, but null when nothing is typed or it is not a number. */
+export function numberOf(text: string): number | null {
+  const value = amountOf(text);
+  return text.trim() && Number.isFinite(value) ? value : null;
+}
+
 export function analyse(lines: RecipeLine[], library: MaterialLibrary = STANDARD_LIBRARY): Analysis {
   const used = lines.filter((line) => line.material.trim() && line.amount.trim());
   if (!used.length) return null;

@@ -8,8 +8,8 @@ lies between them: a clear and a matte, a glaze with and without a colorant.
 1. Open a recipe and choose **Line blend…** below it.
 2. Choose the **Second recipe**, how many **Steps** (3 to 11), and how much each test weighs.
 3. Each column is a step, such as **75 : 25**: three parts of the first recipe to one of the second,
-   each recipe counted as 100 parts. Below the parts are each step's unity formula, SiO₂ : Al₂O₃
-   and expansion.
+   each recipe's base counted as 100 parts, with its additions on top. Below the parts are each
+   step's unity formula, SiO₂ : Al₂O₃ and expansion.
 4. **Save 75 : 25** keeps a step as a recipe of its own, named after both, such as
    *Clear 75 · Matte 25*. **Print the weights…** prints a sheet of what to weigh for each test.
 

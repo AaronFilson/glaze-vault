@@ -1,7 +1,9 @@
 //! A team on one computer (docs/adr/0012-teams-on-one-computer.md): growing a one-person vault,
 //! people, collections and what each person may do in them.
 
-use super::{KEYRING_FILE, OpenCollection, Vault, check_password, grant_info, now_ms, parse_id, revision_aad};
+use super::{
+    KEYRING_FILE, OpenCollection, Vault, check_password, grant_info, now_ms, parse_id, parse_role, revision_aad,
+};
 use crate::access::Role;
 use crate::crypto::{self, Key, KeyPair, PasswordKdf, SealedBox};
 use crate::error::{Error, Result};
@@ -106,7 +108,7 @@ impl Vault {
                 Ok(Grant {
                     person: parse_id(&person)?,
                     collection: parse_id(&collection)?,
-                    role: Role::parse(&role).ok_or_else(|| Error::Corrupt(format!("unknown role {role}")))?,
+                    role: parse_role(&role)?,
                 })
             })
             .collect()
@@ -578,11 +580,7 @@ impl Vault {
                     parent.as_ref(),
                     deleted,
                 );
-                let (old, new) = if kind == "batch" {
-                    (super::batch_key(&old, collection), super::batch_key(&new, collection))
-                } else {
-                    (old.clone(), new.clone())
-                };
+                let (old, new) = (kind_key(&old, &kind, collection), kind_key(&new, &kind, collection));
                 let plaintext = crypto::decrypt(&old, &crypto::Sealed { nonce, ciphertext }, &aad)
                     .ok_or_else(|| Error::Corrupt(format!("revision {id} does not decrypt")))?;
                 let sealed = crypto::encrypt(&new, &plaintext, &aad);
@@ -605,11 +603,7 @@ impl Vault {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             for (id, record_id, kind, media_type) in attachments {
-                let (old, new) = if kind == "batch" {
-                    (super::batch_key(&old, collection), super::batch_key(&new, collection))
-                } else {
-                    (old.clone(), new.clone())
-                };
+                let (old, new) = (kind_key(&old, &kind, collection), kind_key(&new, &kind, collection));
                 let aad =
                     super::attachments::aad(&parse_id(&id)?, &parse_id(&record_id)?, &kind, collection, &media_type);
                 let (nonce, ciphertext): (Vec<u8>, Vec<u8>) = tx.query_row(
@@ -655,7 +649,7 @@ impl Vault {
             for (person, role) in grants {
                 let person = parse_id(&person)?;
                 let user = self.keyring.user(&person)?;
-                let role = Role::parse(&role).ok_or_else(|| Error::Corrupt(format!("unknown role {role}")))?;
+                let role = parse_role(&role)?;
                 insert_grant(
                     tx,
                     &vault_id,
@@ -759,7 +753,7 @@ fn rekey_person(
             .find(|c| c.id == collection)
             .ok_or_else(|| Error::Corrupt("a collection is not sealed to the organization".into()))?
             .key;
-        let role = Role::parse(&role).ok_or_else(|| Error::Corrupt(format!("unknown role {role}")))?;
+        let role = parse_role(&role)?;
         insert_grant(&tx, &vault_id, &person, &keys.public, &collection, key, role)?;
     }
     let old = keyring.user(&person)?.clone();
@@ -846,11 +840,17 @@ pub(super) fn organization_collections(
         .collect()
 }
 
-pub(super) fn people_of(keyring: &Keyring) -> Vec<Person> {
-    people(keyring)
+/// What a record of `kind` in a collection is encrypted with: batch sheets under the batch key,
+/// which operators hold, and everything else under the collection's.
+fn kind_key(collection_key: &Key, kind: &str, collection: &Uuid) -> Key {
+    if kind == "batch" {
+        super::batch_key(collection_key, collection)
+    } else {
+        collection_key.clone()
+    }
 }
 
-fn people(keyring: &Keyring) -> Vec<Person> {
+pub(super) fn people(keyring: &Keyring) -> Vec<Person> {
     let mut people: Vec<Person> = keyring.users.iter().map(person).collect();
     people.sort_by_key(|p| p.name.to_lowercase());
     people

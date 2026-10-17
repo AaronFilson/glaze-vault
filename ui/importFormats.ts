@@ -8,6 +8,7 @@
 // - A materials CSV with a column of names and one per oxide, as supplier data sheets are typed
 //   up and as Insight-live imports: a header of oxide symbols, optionally with LOI, Kind, Notes.
 import {
+  amountOf,
   FORMULA_PARTS,
   MATERIAL_CATEGORIES,
   normalize,
@@ -432,7 +433,7 @@ function readCsv(text: string): ImportPlan {
         category: categoryOf(at(row, kind)),
         oxides: oxideColumns
           .map(({ oxide, index }) => ({ oxide, percent: tidy(at(row, index)) }))
-          .filter((line) => line.percent && Number(line.percent.replace(',', '.')) !== 0),
+          .filter((line) => line.percent && amountOf(line.percent) !== 0),
         loi: tidy(at(row, loi)),
         notes: at(row, notes)
       })

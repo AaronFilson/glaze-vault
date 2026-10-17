@@ -1,7 +1,7 @@
 // What materials cost, and so what a recipe costs (docs/adr/0015-chemistry-tools.md). Prices are
 // per kilogram or per pound of the dry material, in whatever currency the person writes.
 import { usableLines } from './batch';
-import { normalize, type RecipeLine } from './chemistry';
+import { normalize, numberOf, type RecipeLine } from './chemistry';
 
 export interface PriceLine {
   material: string;
@@ -30,8 +30,8 @@ export function recipeCost(lines: RecipeLine[], list: PricesContent | null): Rec
   if (!list) return null;
   const prices = new Map<string, number>();
   for (const line of list.prices) {
-    const price = Number(line.price.trim().replace(',', '.'));
-    if (line.material.trim() && line.price.trim() && Number.isFinite(price) && price >= 0) {
+    const price = numberOf(line.price);
+    if (line.material.trim() && price !== null && price >= 0) {
       prices.set(normalize(line.material), price);
     }
   }

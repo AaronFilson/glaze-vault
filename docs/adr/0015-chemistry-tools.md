@@ -11,8 +11,9 @@ mostly in the app.
 
 ## Decision
 
-- **Line blends** mix two recipes in 3 to 11 steps, each recipe counted as 100 parts, the same
-  material in both as one line. Every step shows its parts, unity formula, SiO₂ : Al₂O₃ and
+- **Line blends** mix two recipes in 3 to 11 steps, each recipe's base counted as 100 parts and
+  its additions on top, as batches and comparisons count them, the same material in both as one
+  line. Every step shows its parts, unity formula, SiO₂ : Al₂O₃ and
   expansion. A step can be saved as a recipe of its own, and the weights for small test batches
   printed. Nothing about a blend is kept but the recipes saved from it.
 - **Limit formulas** are ranges of moles in a unity formula, KNaO counting K₂O and Na₂O together.

@@ -1,7 +1,7 @@
 // Line blends: two recipes mixed in steps, from all of the first to all of the second, to test
-// what lies between them. Each recipe counts as 100 parts, so a step's parts are its share of
-// each; the same material in both is one line.
-import { usableLines } from './batch';
+// what lies between them. Each recipe's base counts as 100 parts, its additions on top as
+// everywhere else, so a step's parts are its share of each; the same material in both is one line.
+import { baseOf, usableLines } from './batch';
 import { normalize, type RecipeLine } from './chemistry';
 
 export interface BlendStep {
@@ -16,21 +16,21 @@ export function blendShares(steps: number): number[] {
   return Array.from({ length: count }, (_, i) => 100 - (100 * i) / (count - 1));
 }
 
-/** Each recipe as 100 parts, mixed `first` to 100 - `first`. */
+/** Each recipe's base as 100 parts, mixed `first` to 100 - `first`. */
 export function blendLines(a: RecipeLine[], b: RecipeLine[], first: number): RecipeLine[] {
   const mixed = new Map<string, { material: string; amount: number; addition: boolean }>();
   const add = (lines: RecipeLine[], share: number) => {
     const usable = usableLines(lines);
-    const total = usable.reduce((sum, line) => sum + line.amount, 0);
+    const base = baseOf(usable);
     // A recipe's materials are lines at every step, at 0 where it has no share, so the steps
     // line up material by material.
-    if (!total) return;
+    if (!base) return;
     for (const line of usable) {
       const key = normalize(line.material) || line.material;
       const before = mixed.get(key);
       mixed.set(key, {
         material: before?.material ?? line.material,
-        amount: (before?.amount ?? 0) + (line.amount / total) * share,
+        amount: (before?.amount ?? 0) + (line.amount / base) * share,
         addition: before ? before.addition && line.addition : line.addition
       });
     }

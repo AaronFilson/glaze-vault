@@ -370,7 +370,10 @@ fn add_attachment(state: State<AppState>, request: tauri::ipc::Request<'_>) -> C
 /// An attachment's bytes, as they are, not as JSON.
 #[tauri::command(async)]
 fn get_attachment(state: State<AppState>, id: Uuid) -> CommandResult<tauri::ipc::Response> {
-    with_vault(&state, |vault| vault.attachment(id)).map(|(_, bytes)| tauri::ipc::Response::new(bytes.to_vec()))
+    // Moved out of the wiped buffer rather than copied, so there is one plaintext copy, not two.
+    // Tauri frees it once the page has it, without wiping it.
+    with_vault(&state, |vault| vault.attachment(id))
+        .map(|(_, mut bytes)| tauri::ipc::Response::new(std::mem::take(&mut *bytes)))
 }
 
 #[tauri::command(async)]

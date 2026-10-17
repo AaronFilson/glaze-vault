@@ -2,9 +2,9 @@
 // recipe of its own or print the weights for test batches.
 import { useMemo, useState } from 'react';
 import type { RecipeHead } from '../api';
-import { usableLines } from '../batch';
+import { baseOf, usableLines } from '../batch';
 import { blendName, blendSteps } from '../blend';
-import { analyse, oxideLabel, OXIDES, type MaterialLibrary, type RecipeContent } from '../chemistry';
+import { amountOf, analyse, oxideLabel, OXIDES, type MaterialLibrary, type RecipeContent } from '../chemistry';
 
 export function Blend({
   recipes,
@@ -38,8 +38,9 @@ export function Blend({
   );
   const analyses = useMemo(() => blend.map((step) => analyse(step.lines, library)), [blend, library]);
   const materials = blend[0]?.lines.map((line) => line.material) ?? [];
+  const additions = blend[0]?.lines.some((line) => line.addition) ?? false;
   const oxides = OXIDES.filter((oxide) => analyses.some((x) => (x?.result?.umf[oxide] ?? 0) > 0));
-  const size = Number(testSize.replace(',', '.'));
+  const size = amountOf(testSize);
   const names = blend.map((step) => blendName(a?.content.name ?? '', b?.content.name ?? '', step.first));
 
   const save = async (index: number) => {
@@ -196,7 +197,9 @@ export function Blend({
           <h1>
             Line blend: {a?.content.name} and {b?.content.name}
           </h1>
-          <p className="meta">Each test {size} g, weights in grams</p>
+          <p className="meta">
+            Each test {size} g{additions ? ' of base, additions on top' : ''}, weights in grams
+          </p>
           <table className="paper-table">
             <thead>
               <tr>
@@ -213,11 +216,11 @@ export function Blend({
                 <tr key={material}>
                   <td>{material}</td>
                   {blend.map((step, i) => {
-                    const total = usableLines(step.lines).reduce((sum, line) => sum + line.amount, 0);
+                    const base = baseOf(usableLines(step.lines));
                     const parts = Number(step.lines[row].amount);
                     return (
                       <td key={i} className="num">
-                        {parts && total ? ((parts / total) * size).toFixed(1) : '—'}
+                        {parts && base ? ((parts / base) * size).toFixed(1) : '—'}
                       </td>
                     );
                   })}

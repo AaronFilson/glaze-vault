@@ -1,6 +1,7 @@
 // Limit formulas (docs/adr/0015-chemistry-tools.md): ranges of moles in a unity formula that a
 // kind of glaze usually falls in, to check a recipe against. They are guides from experience, not
 // rules: published sets disagree, and a recipe outside one can be a fine glaze.
+import { numberOf } from './chemistry';
 
 /** An oxide's range, in moles of a unity formula. KNaO is K₂O and Na₂O together. */
 export interface LimitRange {
@@ -74,11 +75,6 @@ export interface LimitCheck {
   outside: 'below' | 'above' | null;
 }
 
-const number = (text: string) => {
-  const value = Number(text.trim().replace(',', '.'));
-  return text.trim() && Number.isFinite(value) ? value : null;
-};
-
 /** The recipe's moles of an oxide, with KNaO as K₂O and Na₂O together. */
 export function molesOf(umf: Record<string, number>, oxide: string): number {
   if (oxide === 'KNaO') return (umf.K2O ?? 0) + (umf.Na2O ?? 0);
@@ -88,10 +84,10 @@ export function molesOf(umf: Record<string, number>, oxide: string): number {
 /** Each range of the set against the recipe's unity formula. */
 export function checkLimits(umf: Record<string, number>, set: LimitsContent): LimitCheck[] {
   return set.ranges
-    .filter((r) => r.oxide && (number(r.min) !== null || number(r.max) !== null))
+    .filter((r) => r.oxide && (numberOf(r.min) !== null || numberOf(r.max) !== null))
     .map((r) => {
       const value = molesOf(umf, r.oxide);
-      const [min, max] = [number(r.min), number(r.max)];
+      const [min, max] = [numberOf(r.min), numberOf(r.max)];
       // Compared as shown, to three places, so 0.2849 against a minimum of 0.285 is within.
       const shown = Math.round(value * 1000) / 1000;
       const outside = min !== null && shown < min ? 'below' : max !== null && shown > max ? 'above' : null;
