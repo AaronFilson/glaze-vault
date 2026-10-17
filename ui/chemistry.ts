@@ -237,6 +237,20 @@ export function numberOf(text: string): number | null {
   return text.trim() && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * A line's material as the chemistry's fitting takes it: an object, not a name, so a formula
+ * material is given its formula. Null when it adds nothing once fired.
+ */
+export function materialInput(library: MaterialLibrary, name: string): MaterialInput | null | { problem: string } {
+  const material = library.resolve(name);
+  if (typeof material === 'string') {
+    const formula = formulasByName.get(normalize(material));
+    return formula ? { name: formula.name, formula: formula.formula } : { problem: `${name.trim()} is not a material Glaze Vault knows.` };
+  }
+  if ('noOxides' in material) return null;
+  return material;
+}
+
 export function analyse(lines: RecipeLine[], library: MaterialLibrary = STANDARD_LIBRARY): Analysis {
   const used = lines.filter((line) => line.material.trim() && line.amount.trim());
   if (!used.length) return null;

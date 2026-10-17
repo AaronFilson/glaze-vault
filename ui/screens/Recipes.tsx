@@ -29,6 +29,7 @@ import { restorePart, useEditor, type Editor } from '../useEditor';
 import { useIdleLock } from '../useIdleLock';
 import { BatchSheetForm, BatchSheets } from './BatchSheets';
 import { Blend } from './Blend';
+import { Fit } from './Fit';
 import { LimitSets, LimitsPanel, limitSets, savedLimitChoice } from './Limits';
 import type { LimitsContent } from '../limits';
 import type { PricesContent } from '../prices';
@@ -95,9 +96,9 @@ export function Recipes({
   // window.confirm(), so the question is asked in the page.
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
   const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
-  const [view, setView] = useState<'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'blend'>(
-    'recipes'
-  );
+  const [view, setView] = useState<
+    'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'blend' | 'fit'
+  >('recipes');
   // The firing log (ADR 14): every firing, the one being edited, and the recipe it is showing.
   const [firings, setFirings] = useState<Firing[]>([]);
   const [firing, setFiring] = useState<FiringEditing | null>(null);
@@ -932,6 +933,30 @@ export function Recipes({
           }}
           onClose={() => setView('recipes')}
         />
+      ) : view === 'fit' ? (
+        <Fit
+          recipe={shownRecipe}
+          library={library}
+          sets={limitSets(ownLimits)}
+          initialSet={limitChoice}
+          onUse={
+            !recipe.viewing && canEdit(access, recipe.current ? recipe.current.collectionId : newCollection)
+              ? (lines) => {
+                  recipe.edit({ ...recipe.draft, lines });
+                  setView('recipes');
+                }
+              : undefined
+          }
+          onSaveNew={
+            mayCreate
+              ? async (content) => {
+                  const saved = await api.saveRecipe(null, content, newCollection);
+                  setRecipes((list) => [saved, ...list]);
+                }
+              : undefined
+          }
+          onClose={() => setView('recipes')}
+        />
       ) : view === 'firings' ? (
         <FiringLog
           firings={firings}
@@ -1019,6 +1044,11 @@ export function Recipes({
                 onChoose={setLimitChoice}
                 umf={analysis?.result?.umf ?? null}
               />
+              {analysis?.result && (
+                <button type="button" className="fit-button" onClick={() => setView('fit')}>
+                  Fit to a formula…
+                </button>
+              )}
             </>
           }
           batchSheet={
@@ -1030,7 +1060,7 @@ export function Recipes({
         />
       )}
 
-      {view === 'blend' ? null : view === 'batches' && sheet ? (
+      {view === 'blend' || view === 'fit' ? null : view === 'batches' && sheet ? (
         <PrintView job={printJob} content={sheet.content} saved={sheet} changed={false} analysis={null} sheet />
       ) : (
         <PrintView

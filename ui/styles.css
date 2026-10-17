@@ -1018,3 +1018,7 @@ input.short {
   font-weight: 600;
   font-size: 12px;
 }
+
+.fit-button {
+  margin-top: 0.5rem;
+}

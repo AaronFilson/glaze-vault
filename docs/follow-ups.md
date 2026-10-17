@@ -42,8 +42,8 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Chemistry tools ([ADR 15](adr/0015-chemistry-tools.md))
 
-- Work out a recipe from a target formula, or move one into a limit set, with Glazecalc's
-  `fitAmounts`.
+- Fitting could choose materials itself from the whole library, with Glazecalc's
+  `selectMaterials`, rather than only those the recipe has and those added to try.
 
 ## Engineering
 

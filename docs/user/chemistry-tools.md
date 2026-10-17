@@ -43,6 +43,25 @@ To make your own, from a book or your own tests, open **Settings** › **Limit f
 oxide on each line with **At least** and **At most** (either can be empty), and **Save limit
 formula**. In a [shared vault](sharing.md) your sets are shared like recipes.
 
+## Fitting a recipe to a formula
+
+**Fit to a formula…**, below the limit formula, works out new amounts for a recipe's materials so
+that its unity formula comes as near a target as they allow, changing the recipe as little as
+that does.
+
+1. Choose the target: **Move it into a limit formula**, which brings each oxide outside the set
+   just inside it, or **A unity formula I give**, which starts from the recipe's own to change.
+2. Under **Materials**, clear **May change** for any the fit should leave alone. Additions, such as
+   a colorant, are left alone unless you tick them. **Also try** brings in a material the recipe
+   does not have, such as Talc for magnesia.
+3. **Fit**. The amounts and the unity formula are shown now, as the target, and fitted. If the
+   materials cannot reach the limits, it says which oxides are still outside: try another material.
+4. **Use these amounts** puts them in the editor as unsaved changes, to look over and **Save** as a
+   new revision; **Save as a new recipe** keeps them as *Name, fitted*.
+
+The fit uses Glazecalc's chemistry. It keeps the batch about its size, and leaves out a material it
+brings in but does not use.
+
 ## Costs
 
 Open **Settings** › **Prices**. Choose the currency as you write it (`$`, `€`, `SEK`) and whether
