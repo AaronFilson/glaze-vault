@@ -787,6 +787,7 @@ impl Vault {
             keyring.users.iter_mut().for_each(|u| u.previous_database_key = None);
             keyring.write(&dir.join(KEYRING_FILE))?;
         }
+        team::finish_organization_change(&conn, &mut keyring, dir)?;
         let default_collection: String =
             conn.query_row("SELECT value FROM meta WHERE name = 'default_collection'", [], |row| {
                 row.get(0)

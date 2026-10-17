@@ -48,8 +48,10 @@ pub enum Error {
     RoleNameTaken,
     #[error("Some people have that role. Give them another before deleting it.")]
     RoleInUse,
-    #[error("An admin cannot be removed in this version: it needs a new organization key, which comes later.")]
+    #[error("Take admin away from them first: that gives the organization a new key and recovery sheet.")]
     RemovingAdmin,
+    #[error("That person is not an admin.")]
+    NotAnAdmin,
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -87,6 +89,7 @@ impl Error {
             Error::RoleNameTaken => "role-name-taken",
             Error::RoleInUse => "role-in-use",
             Error::RemovingAdmin => "removing-admin",
+            Error::NotAnAdmin => "not-an-admin",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",

@@ -104,6 +104,7 @@ export function Settings({
           ) : access.me.admin ? (
             <People
               access={access}
+              onOrganizationKey={onShared}
               onChanged={onTeamChanged}
               onShrunk={(backup) => {
                 setShrunkTo(backup);

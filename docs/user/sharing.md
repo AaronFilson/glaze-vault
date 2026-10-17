@@ -117,9 +117,17 @@ chosen on this computer.
 
 ## More than one admin
 
-**Make admin…** makes someone an admin. Admins can do everything, so choose them with care: in
-this version an admin cannot be made an ordinary member again, or removed. That needs a new
-organization key, which comes later.
+**Make admin…** makes someone an admin. Admins can do everything, so choose them with care.
+
+**Take admin away…** makes an admin an ordinary member again, keeping their roles on collections.
+An admin could open every collection, so the organization gets a new key and every collection a
+new one, which takes a moment, and then Glaze Vault shows the new **organization recovery
+sheet** to print and check. The old sheet stops working: put it out of use. **Remove…** on an
+admin does the same first, then removes them.
+
+If the organization's sheet is lost, **New organization recovery sheet…** makes a new one to
+print; the old one stops working. Nobody can take admin away from themselves, so there is always
+an admin left.
 
 ## If every admin is locked out
 

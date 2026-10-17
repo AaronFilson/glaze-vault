@@ -219,6 +219,18 @@ fn make_admin(state: State<AppState>, person: Uuid) -> CommandResult<()> {
     with_vault(&state, |vault| vault.make_admin(person))
 }
 
+/// Takes admin away; returns the organization's new recovery words, to print.
+#[tauri::command(async)]
+fn take_admin_away(state: State<AppState>, person: Uuid) -> CommandResult<Vec<String>> {
+    with_vault(&state, |vault| Ok(vault.take_admin_away(person)?.words()))
+}
+
+/// A new organization recovery key, for a lost sheet; returns its words, to print.
+#[tauri::command(async)]
+fn new_organization_recovery_key(state: State<AppState>) -> CommandResult<Vec<String>> {
+    with_vault(&state, |vault| Ok(vault.new_organization_recovery_key()?.words()))
+}
+
 /// Makes a team's vault this admin's alone again (ADR 6). Returns where the backup made first is.
 #[tauri::command(async)]
 fn go_back_to_one_person(state: State<AppState>) -> CommandResult<String> {
@@ -909,6 +921,8 @@ pub fn run() {
             remove_person,
             reset_person,
             make_admin,
+            take_admin_away,
+            new_organization_recovery_key,
             go_back_to_one_person,
             create_collection,
             rename_collection,

@@ -48,8 +48,13 @@ decides the steps people take and what is built first.
 - **Removing a person** takes them out of the key file and removes their grants. Every collection
   they could open, and the database, get new keys and are re-encrypted, since they may have kept
   the old ones. Their private collection stays, for admins, under "From name". An admin holds the
-  organization key, which opens every collection key, so removing an admin, or taking admin away,
-  waits for changing the organization key.
+  organization key, which opens every collection key, so **taking admin away** gives the
+  organization a new key pair and recovery key, seals it to the admins left, and gives every
+  collection a new key sealed to it; the person keeps their roles, an admin grant becoming a
+  formulator's. The collections' keys and the new organization key, as public and sealed parts
+  only, go into the database in one transaction, then into the key file; an unlock finishes a
+  change that stopped between them. Removing an admin takes admin away first. A new organization
+  recovery sheet can be made for a lost one.
 - **Lost passwords:** someone with their recovery sheet uses it as in a one-person vault. For
   someone who lost both, an admin gives them new keys and a one-time password, as when they were
   added; the admin holds every collection key through the organization key, so nothing else is

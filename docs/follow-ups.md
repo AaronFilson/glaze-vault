@@ -27,8 +27,6 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Teams ([ADR 12](adr/0012-teams-on-one-computer.md))
 
-- Removing an admin, or taking admin away: needs a new organization key, sealed to the admins
-  left, every collection key sealed to it again, and a new organization recovery sheet.
 - Capabilities that are not about changing a kind of record, such as exporting, or reading
   recipes without their chemistry, for roles admins make (ADR 4).
 - Moving a material to another collection, as recipes move.

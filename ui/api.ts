@@ -199,6 +199,9 @@ export const api = {
   resetPerson: (person: string, oneTimePassword: string) =>
     invoke<void>('reset_person', { person, oneTimePassword }),
   makeAdmin: (person: string) => invoke<void>('make_admin', { person }),
+  /** Returns the organization's new recovery words: the old sheet stops working. */
+  takeAdminAway: (person: string) => invoke<string[]>('take_admin_away', { person }),
+  newOrganizationRecoveryKey: () => invoke<string[]>('new_organization_recovery_key'),
   /** Removes everyone else and the organization key; returns where the backup made first is. */
   goBackToOnePerson: () => invoke<string>('go_back_to_one_person'),
   createCollection: (name: string) => invoke<Collection>('create_collection', { name }),

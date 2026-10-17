@@ -198,19 +198,22 @@ function customLabel(role: CustomRole): string {
 export function People({
   access,
   onChanged,
-  onShrunk
+  onShrunk,
+  onOrganizationKey
 }: {
   access: Access;
   onChanged: () => void;
   /** The vault is one person's again; with where the backup made first is. */
   onShrunk: (backup: string) => void;
+  /** The organization has a new recovery key, to print: after admin is taken away, or for a lost sheet. */
+  onOrganizationKey: (words: string[]) => void;
 }) {
   const [shrinking, setShrinking] = useState(false);
   const [team, setTeam] = useState<Team | null>(null);
   const [roles, setRoles] = useState<CustomRole[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [asking, setAsking] = useState<{ person: string; action: 'remove' | 'reset' | 'admin' } | null>(null);
+  const [asking, setAsking] = useState<{ person: string; action: Question } | null>(null);
   const [newName, setNewName] = useState('');
   const [oneTime, setOneTime] = useState('');
   const [collectionName, setCollectionName] = useState('');
@@ -311,7 +314,11 @@ export function People({
               <td>
                 {person.id !== access.me.id && (
                   <div className="row">
-                    {!person.admin && (
+                    {person.admin ? (
+                      <button type="button" className="link" onClick={() => setAsking({ person: person.id, action: 'unadmin' })}>
+                        Take admin away…
+                      </button>
+                    ) : (
                       <button type="button" className="link" onClick={() => setAsking({ person: person.id, action: 'admin' })}>
                         Make admin…
                       </button>
@@ -319,15 +326,13 @@ export function People({
                     <button type="button" className="link" onClick={() => setAsking({ person: person.id, action: 'reset' })}>
                       Reset password…
                     </button>
-                    {!person.admin && (
-                      <button
-                        type="button"
-                        className="link danger"
-                        onClick={() => setAsking({ person: person.id, action: 'remove' })}
-                      >
-                        Remove…
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="link danger"
+                      onClick={() => setAsking({ person: person.id, action: person.admin ? 'remove-admin' : 'remove' })}
+                    >
+                      Remove…
+                    </button>
                   </div>
                 )}
               </td>
@@ -345,20 +350,26 @@ export function People({
           onConfirm={async (password) => {
             const { person, action } = asking;
             const name = nameOf(person);
+            // Taking admin away gives the organization a new recovery sheet, shown even if
+            // removing them afterwards does not work.
+            let words: string[] | null = null;
             const done = await change(
-              () =>
-                action === 'remove'
-                  ? api.removePerson(person)
-                  : action === 'reset'
-                    ? api.resetPerson(person, password)
-                    : api.makeAdmin(person),
-              action === 'remove'
+              async () => {
+                if (action === 'unadmin' || action === 'remove-admin') words = await api.takeAdminAway(person);
+                if (action === 'remove' || action === 'remove-admin') await api.removePerson(person);
+                else if (action === 'reset') await api.resetPerson(person, password);
+                else if (action === 'admin') await api.makeAdmin(person);
+              },
+              action === 'remove' || action === 'remove-admin'
                 ? `${name} was removed. Collections they could open have new keys.`
                 : action === 'reset'
                   ? `Pass the one-time password on to ${name}. They choose their own when they sign in.`
-                  : `${name} is now an admin.`
+                  : action === 'unadmin'
+                    ? `${name} is not an admin any more, and keeps their roles. Every collection has a new key.`
+                    : `${name} is now an admin.`
             );
             if (done) setAsking(null);
+            if (words) onOrganizationKey(words);
           }}
         />
       )}
@@ -454,6 +465,25 @@ export function People({
           onSave={(name, changes) => change(() => api.createRole(name, changes), `${name} made. Give it to people above.`)}
         />
       </ul>
+
+      <h3>Organization recovery sheet</h3>
+      <p>
+        If the organization recovery sheet is lost, make a new one to print and keep safe. The old sheet stops working.
+      </p>
+      <div className="row">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            let words: string[] | null = null;
+            void change(async () => {
+              words = await api.newOrganizationRecoveryKey();
+            }).then(() => words && onOrganizationKey(words));
+          }}
+        >
+          New organization recovery sheet…
+        </button>
+      </div>
 
       <h3>Going back to one person</h3>
       <p>
@@ -574,6 +604,8 @@ function RoleEditor({
   );
 }
 
+type Question = 'remove' | 'remove-admin' | 'reset' | 'admin' | 'unadmin';
+
 function PersonQuestion({
   name,
   action,
@@ -582,25 +614,41 @@ function PersonQuestion({
   onCancel
 }: {
   name: string;
-  action: 'remove' | 'reset' | 'admin';
+  action: Question;
   busy: boolean;
   onConfirm: (oneTimePassword: string) => void;
   onCancel: () => void;
 }) {
   const [password, setPassword] = useState('');
-  const confirm = action === 'remove' ? `Remove ${name}` : action === 'reset' ? 'Reset password' : 'Make admin';
+  const removing = action === 'remove' || action === 'remove-admin';
+  const confirm = removing
+    ? `Remove ${name}`
+    : action === 'reset'
+      ? 'Reset password'
+      : action === 'unadmin'
+        ? 'Take admin away'
+        : 'Make admin';
   return (
     <div className="notice warning" role="alertdialog" aria-label={confirm}>
-      {action === 'remove' && (
+      {removing && (
         <p>
           Remove {name}? They can no longer sign in. Every collection they could open gets a new key, which takes a
           moment. Their private collection stays, for admins.
+          {action === 'remove-admin' &&
+            ` ${name} is an admin, so admin is taken away first: the organization gets a new key and a new recovery sheet, which you print next. The old sheet stops working.`}
+        </p>
+      )}
+      {action === 'unadmin' && (
+        <p>
+          Take admin away from {name}? They keep their roles on collections. The organization gets a new key, and every
+          collection a new one, since an admin could open them all; then you print the new organization recovery sheet.
+          The old sheet stops working.
         </p>
       )}
       {action === 'admin' && (
         <p>
-          Make {name} an admin? They can open and change everything, and manage people. In this version, an admin
-          cannot be made an ordinary member again, or removed.
+          Make {name} an admin? They can open and change everything, and manage people. Taking admin away later gives
+          every collection a new key and the organization a new recovery sheet.
         </p>
       )}
       {action === 'reset' && (
@@ -622,7 +670,7 @@ function PersonQuestion({
       <div className="row">
         <button
           type="button"
-          className={action === 'remove' ? 'danger' : 'primary'}
+          className={removing || action === 'unadmin' ? 'danger' : 'primary'}
           disabled={busy || (action === 'reset' && [...password].length < MIN_PASSWORD_CHARS)}
           onClick={() => onConfirm(password)}
         >
