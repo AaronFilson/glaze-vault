@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, errorText, type RecipeHead } from '../api';
 import { analyse, oxideLabel, type MaterialLibrary, type RecipeContent } from '../chemistry';
 import { change, compareLines, compareUmf } from '../compare';
+import { describeDetails } from '../recipeFields';
 
 /** One side of a comparison: a recipe's newest revision, an earlier one by number, or the unsaved
  * changes in the editor. */
@@ -113,7 +114,7 @@ export function Compare({
             <tbody>
               {lines.map((line) => (
                 <tr key={line.material}>
-                  <th scope="row">{line.material}</th>
+                  <th scope="row">{line.addition ? `+ ${line.material} (addition)` : line.material}</th>
                   <td className="num">{line.a === null ? '—' : line.a.toFixed(1)}</td>
                   <td className="num">{line.b === null ? '—' : line.b.toFixed(1)}</td>
                   <td className="num change">{change(line.a, line.b, 1)}</td>
@@ -161,6 +162,18 @@ export function Compare({
               )
           )}
 
+          {detailsText(a) !== detailsText(b) && (
+            <div className="compare-notes">
+              <h2>Details</h2>
+              {[a, b].map((content, i) => (
+                <div key={i}>
+                  <h3>{titleOf(sides[i])}</h3>
+                  <p className="pre">{detailsText(content) || '—'}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
           {a.notes.trim() !== b.notes.trim() && (
             <div className="compare-notes">
               <h2>Notes</h2>
@@ -176,6 +189,13 @@ export function Compare({
       )}
     </main>
   );
+}
+
+/** A recipe's details and tags, as Compare shows them. */
+function detailsText(content: RecipeContent): string {
+  return [describeDetails(content), content.tags?.length ? `Tags: ${content.tags.join(', ')}` : '']
+    .filter(Boolean)
+    .join('\n');
 }
 
 function Fact({ label, a, b, places }: { label: string; a?: number | null; b?: number | null; places: number }) {

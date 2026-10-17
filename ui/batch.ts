@@ -13,8 +13,10 @@ export const BATCH_UNITS: { unit: BatchUnit; label: string; decimals: number }[]
 
 export interface BatchLine {
   material: string;
+  /** Of the base: additions are on top of its 100. */
   percent: number;
   weight: number;
+  addition: boolean;
 }
 
 export interface Batch {
@@ -23,26 +25,32 @@ export interface Batch {
 }
 
 /** The lines that have a material and a positive amount, with the amounts as numbers. */
-export function usableLines(lines: RecipeLine[]): { material: string; amount: number }[] {
+export function usableLines(lines: RecipeLine[]): { material: string; amount: number; addition: boolean }[] {
   return lines
-    .map((line) => ({ material: line.material.trim(), amount: amountOf(line.amount) }))
+    .map((line) => ({ material: line.material.trim(), amount: amountOf(line.amount), addition: !!line.addition }))
     .filter((line) => line.material && Number.isFinite(line.amount) && line.amount > 0);
 }
 
-/** Every line's share of the recipe, and its weight in a batch of `size`. The lines' weights add up
- * to `size`, so colorants and additives are part of the batch, not added on top. */
+/** What the percentages are of: the base, without the lines added on top. When every line is
+ * marked as an addition, there is no base, and they are all counted. */
+export function baseOf(lines: { amount: number; addition: boolean }[]): number {
+  const base = lines.filter((line) => !line.addition).reduce((total, line) => total + line.amount, 0);
+  return base || lines.reduce((total, line) => total + line.amount, 0);
+}
+
+/** Every line's share of the base, and its weight in a batch whose base weighs `size`. Additions
+ * go on top, so the batch weighs more than `size` when there are any. */
 export function scaleBatch(lines: RecipeLine[], size: number): Batch | null {
   const usable = usableLines(lines);
-  const sum = usable.reduce((total, line) => total + line.amount, 0);
-  if (!sum || !(size > 0)) return null;
-  return {
-    lines: usable.map((line) => ({
-      material: line.material,
-      percent: (line.amount / sum) * 100,
-      weight: (line.amount / sum) * size
-    })),
-    total: size
-  };
+  const base = baseOf(usable);
+  if (!base || !(size > 0)) return null;
+  const scaled = usable.map((line) => ({
+    material: line.material,
+    percent: (line.amount / base) * 100,
+    weight: (line.amount / base) * size,
+    addition: line.addition
+  }));
+  return { lines: scaled, total: scaled.reduce((total, line) => total + line.weight, 0) };
 }
 
 export function formatWeight(weight: number, unit: BatchUnit): string {
@@ -73,7 +81,8 @@ export function sheetFrom(recipe: RecipeHead, codes: string[], name: string, not
     notes,
     lines: usableLines(recipe.content.lines).map((line, i) => ({
       material: codes[i].trim(),
-      amount: String(line.amount)
+      amount: String(line.amount),
+      ...(line.addition ? { addition: true } : {})
     })),
     recipe: recipe.recordId,
     recipeNumber: recipe.number

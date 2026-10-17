@@ -544,6 +544,46 @@ export const scenarios: Scenario[] = [
         'expect "Leach 4321" 30000'
       );
     }
+  },
+  {
+    name: 'Give recipes details and additions, then find them',
+    async run(app) {
+      await app.run(
+        'click "Leach 4321"',
+        'select "Type" "Glaze"',
+        'type "Cone" "10"',
+        'select "Atmosphere" "Reduction"',
+        'select "Surface" "Satin"',
+        'type "Tags" "base, production"',
+        'click "Save"',
+        'expect "[button \\"Save\\" (disabled)]" 10000',
+        'click "New recipe"',
+        'type "Recipe name" "Iron slip"',
+        'select "Type" "Slip"',
+        'type "Cone" "04-1"',
+        ...recipeLines([
+          ['EPK', '60'],
+          ['Silica', '40'],
+          ['Red Iron Oxide', '5']
+        ]),
+        'check "Material 3 is an addition"',
+        'click "Save"',
+        'expect "revision 1"',
+        'type "Search recipes" "production"',
+        'expect "[button \\"Leach 4321\\""',
+        'expect not "[button \\"Iron slip\\""',
+        'type "Search recipes" "^04"',
+        'expect "[button \\"Iron slip\\""',
+        'expect not "[button \\"Leach 4321\\""',
+        'type "Search recipes" "nothing like this"',
+        'expect "No recipe has nothing like this."',
+        'type "Search recipes" ""',
+        'select "Sort by" "Cone"',
+        'expect "[button \\"Leach 4321\\""',
+        'click "Iron slip"',
+        'expect "[x] \\"Material 3 is an addition\\""'
+      );
+    }
   }
 ];
 

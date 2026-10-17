@@ -7,9 +7,10 @@ glaze chemistry. No account, no cloud, nothing for users to install but the app.
 > Early development. A vault works for one person, or a team on one computer: recipes and their
 > unity formula, your own materials, revisions, comparing, printing, backups, import and export,
 > and people with roles on shared and private collections, including batch operators who weigh
-> from coded batch sheets without the recipe. See the [user guide](docs/user/README.md) and the
-> [decision records](docs/adr/README.md) for what comes next: recipe fields and search, a firing
-> log, chemistry tools, a LAN host with offline laptops, signed revisions, and the first release.
+> from coded batch sheets without the recipe, and recipe details, additions on top of the base,
+> and search. See the [user guide](docs/user/README.md) and the
+> [decision records](docs/adr/README.md) for what comes next: a firing log with photos, chemistry
+> tools, a LAN host with offline laptops, signed revisions, and the first release.
 
 | Part      | Built with                                                                         |
 | --------- | ---------------------------------------------------------------------------------- |

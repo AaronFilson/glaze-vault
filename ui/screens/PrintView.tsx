@@ -1,6 +1,7 @@
 import type { RecipeHead } from '../api';
-import { BATCH_UNITS, formatWeight, scaleBatch, usableLines, type BatchUnit } from '../batch';
+import { BATCH_UNITS, baseOf, formatWeight, scaleBatch, usableLines, type BatchUnit } from '../batch';
 import type { Analysis, RecipeContent } from '../chemistry';
+import { describeDetails } from '../recipeFields';
 import { AnalysisPanel } from './AnalysisPanel';
 
 export type PrintJob = { kind: 'recipe' } | { kind: 'batch'; size: number; unit: BatchUnit };
@@ -38,6 +39,8 @@ export function PrintView({
         {content.name || 'Untitled'}
       </h1>
       {status && <p className="meta">{status}</p>}
+      {!sheet && describeDetails(content) && <p className="meta">{describeDetails(content)}</p>}
+      {!sheet && !!content.tags?.length && <p className="meta">Tags: {content.tags.join(', ')}</p>}
       {job.kind === 'batch' ? <BatchTable content={content} size={job.size} unit={job.unit} heading={sheet ? 'Code' : 'Material'} /> : <RecipeTable content={content} />}
       {content.notes.trim() && (
         <>
@@ -64,9 +67,14 @@ export function PrintView({
   );
 }
 
+/** A line's name, marked when it is added on top of the base. */
+const lineName = (line: { material: string; addition: boolean }) =>
+  line.addition ? `+ ${line.material} (addition)` : line.material;
+
 function RecipeTable({ content }: { content: RecipeContent }) {
   const lines = usableLines(content.lines);
   const sum = lines.reduce((total, line) => total + line.amount, 0);
+  const base = baseOf(lines);
   return (
     <table className="paper-table">
       <thead>
@@ -83,9 +91,9 @@ function RecipeTable({ content }: { content: RecipeContent }) {
       <tbody>
         {lines.map((line, i) => (
           <tr key={i}>
-            <td>{line.material}</td>
+            <td>{lineName(line)}</td>
             <td className="num">{line.amount.toLocaleString()}</td>
-            <td className="num">{((line.amount / sum) * 100).toFixed(2)}</td>
+            <td className="num">{((line.amount / base) * 100).toFixed(2)}</td>
           </tr>
         ))}
       </tbody>
@@ -93,7 +101,7 @@ function RecipeTable({ content }: { content: RecipeContent }) {
         <tr>
           <th scope="row">Total</th>
           <td className="num">{sum.toLocaleString()}</td>
-          <td className="num">100.00</td>
+          <td className="num">{((sum / base) * 100).toFixed(2)}</td>
         </tr>
       </tfoot>
     </table>
@@ -143,7 +151,7 @@ export function BatchTable({
         <tbody>
           {batch.lines.map((line, i) => (
             <tr key={i}>
-              <td>{line.material}</td>
+              <td>{lineName(line)}</td>
               <td className="num">{line.percent.toFixed(2)}</td>
               <td className="num weight">{formatWeight(line.weight, unit)}</td>
               <td className="num">{formatWeight(runningTotals[i], unit)}</td>
@@ -155,7 +163,7 @@ export function BatchTable({
         <tfoot>
           <tr>
             <th scope="row">Total</th>
-            <td className="num">100.00</td>
+            <td className="num">{batch.lines.reduce((total, line) => total + line.percent, 0).toFixed(2)}</td>
             <td className="num weight">{formatWeight(batch.total, unit)}</td>
             <td />
             <td />

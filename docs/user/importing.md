@@ -14,6 +14,12 @@ Glaze Vault can add recipes and materials from other programs and from spreadshe
 | `.mat` | GlazeChem | Materials |
 | `.csv` | A spreadsheet, such as a supplier's data sheet typed up | Materials |
 
+A recipe's [details](recipes.md#details) and [additions](recipes.md#additions) come with it from
+a Glaze Vault export. From Insight XML, lines marked as added are additions and the keywords are
+tags. From GlazeChem, additions are additions, and the cone range, firing, type, color, quality
+and transparency fill in the details where Glaze Vault has a match; what it has none for goes in
+the notes.
+
 A spreadsheet of materials needs a column of names and a column for each oxide, headed with its
 symbol: `SiO2`, `Al2O3`, `K2O` and so on (`SiO2 %` and `SiO2_percent` work too). A column headed
 `LOI` is the loss on ignition, and columns headed `Kind` and `Notes` are read if they are there.

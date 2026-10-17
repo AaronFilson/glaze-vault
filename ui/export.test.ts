@@ -35,15 +35,39 @@ describe('exportCsv', () => {
     const csv = exportCsv([recipe('Leach 4321', [['Custer Feldspar', '40'], ['Silica', '60']], 'Cone 10, reduction')]);
     expect(csv.startsWith('﻿')).toBe(true);
     expect(csv.slice(1).split('\r\n')).toEqual([
-      'Recipe,Material,Amount,Percent,Notes,Revision,Saved',
-      'Leach 4321,Custer Feldspar,40,40.00,"Cone 10, reduction",3,2026-10-14T12:00:00.000Z',
-      'Leach 4321,Silica,60,60.00,,,',
+      'Recipe,Material,Amount,Percent,Added,Type,Cone,Atmosphere,Surface,Transparency,Color,Tags,Notes,Revision,Saved',
+      'Leach 4321,Custer Feldspar,40,40.00,,,,,,,,,"Cone 10, reduction",3,2026-10-14T12:00:00.000Z',
+      'Leach 4321,Silica,60,60.00,,,,,,,,,,,',
       ''
     ]);
   });
 
   it('keeps a recipe with no materials', () => {
-    expect(exportCsv([recipe('Empty', [])]).split('\r\n')[1]).toBe('Empty,,,,,3,2026-10-14T12:00:00.000Z');
+    expect(exportCsv([recipe('Empty', [])]).split('\r\n')[1]).toBe('Empty,,,,,,,,,,,,,3,2026-10-14T12:00:00.000Z');
+  });
+
+  it('writes details on the first row, and additions as a percent of the base', () => {
+    const body = recipe('Stoneware', [['Ball clay', '60'], ['Silica', '40'], ['Grog', '10']]);
+    body.content.lines[2].addition = true;
+    Object.assign(body.content, { type: 'clay body', cone: '6', atmosphere: 'reduction', color: 'Toasty', tags: ['throwing', 'R&D'] });
+    const rows = exportCsv([body]).slice(1).split('\r\n');
+    expect(rows[1]).toBe('Stoneware,Ball clay,60,60.00,,Clay body,6,Reduction,,,Toasty,"throwing, R&D",,3,2026-10-14T12:00:00.000Z');
+    expect(rows[3]).toBe('Stoneware,Grog,10,10.00,yes,,,,,,,,,,');
+    // And back again.
+    expect(readImport('recipes.csv', exportCsv([body])).recipes[0]).toEqual({
+      name: 'Stoneware',
+      lines: [
+        { material: 'Ball clay', amount: '60' },
+        { material: 'Silica', amount: '40' },
+        { material: 'Grog', amount: '10', addition: true }
+      ],
+      notes: '',
+      type: 'clay body',
+      cone: '6',
+      atmosphere: 'reduction',
+      color: 'Toasty',
+      tags: ['throwing', 'R&D']
+    });
   });
 });
 

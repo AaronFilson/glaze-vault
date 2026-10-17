@@ -11,8 +11,39 @@ the middle, and its unity formula is on the right. On a narrow window they are s
    Amounts can be grams, pounds, parts or percent: the calculation only uses the proportions.
    Decimals can be written `12.5` or `12,5`.
 4. **Add material** adds a line, and **×** removes one.
-5. Add any notes: firing, application, results.
-6. Choose **Save**.
+5. Tick **Added** on a line that goes on top of the rest, such as grog, a colorant or a
+   suspender: see [Additions](#additions).
+6. Add any notes: application, results.
+7. Choose **Save**.
+
+### Details
+
+Under the name are details you can fill in or leave empty, in any recipe:
+
+- **Type:** glaze, clay body, slip, engobe, casting slip or terra sigillata.
+- **Cone:** one cone, such as `6` or `04`, or a range, such as `9-10`.
+- **Atmosphere:** oxidation, neutral, reduction, salt or soda, wood, or raku.
+- **Surface** and **Transparency**, and the **Color** in your own words.
+- **Tags:** any words you sort recipes by, separated by commas: `production, celadon, R&D`.
+
+They are kept with each revision, printed with the recipe, and go with it in exports.
+
+### Additions
+
+Clay bodies and many glazes are written as a base that adds up to 100, with some materials
+added on top: grog, bentonite, a stain, iron oxide. Tick **Added** on those lines.
+
+- The percentages printed and compared are then of the base, so the base adds up to 100 and the
+  additions show as their percentage on top.
+- A batch sheet weighs the base to the batch size, and the additions on top of it.
+- The unity formula counts every line, additions too, as Insight does.
+
+## Finding a recipe
+
+With more than one recipe, **Search** above the list finds recipes that have every word you
+type, in their name, details, tags, materials or notes: `celadon production`, `reduction`,
+`^6` or `cone6` for cone 6. **Sort by** orders the list by when each recipe last changed, by
+name, or by cone, from the coolest; recipes with no cone come last.
 
 ### Materials
 
@@ -22,7 +53,8 @@ as *Potash Feldspar*, *Kaolin* and *Whiting*, worked out from their chemical for
 material's other names work too: typing *ABSLIP* finds Alberta Slip.
 
 It also has Glazecalc's colorants, opacifiers and suspenders, such as *Chromium Oxide*, *Rutile*
-and *Bentonite*. Add them as lines like any other material: they are part of the batch.
+and *Bentonite*. Add them as lines like any other material, and tick **Added** if they go on top
+of the base.
 
 If a theoretical material and a commercial one share a name, the name you type means the
 theoretical one; choose the commercial one by its own name.

@@ -96,9 +96,10 @@ describe('Insight XML', () => {
         lines: [
           { material: 'Minspar 200', amount: '8.6' },
           { material: 'Ferro Frit 3134', amount: '20' },
-          { material: 'Zircopax', amount: '5' }
+          { material: 'Zircopax', amount: '5', addition: true }
         ],
-        notes: 'Code: G1216M\nKeywords: clear, base\nDated 2015-10-30\nOur base clear.\nRecipe page: https://digitalfire.com/recipe/g1216m'
+        tags: ['clear', 'base'],
+        notes: 'Code: G1216M\nDated 2015-10-30\nOur base clear.\nRecipe page: https://digitalfire.com/recipe/g1216m'
       }
     ]);
     expect(plan.warnings).toEqual([]);
@@ -176,9 +177,12 @@ describe('GlazeChem', () => {
         lines: [
           { material: 'Gerstley borate', amount: '50' },
           { material: 'EPK', amount: '33.33' },
-          { material: 'Copper carbonate', amount: '2' }
+          { material: 'Copper carbonate', amount: '2', addition: true }
         ],
-        notes: 'Cone 08 - 06. Raku. Transparent Clear. Dated 7/19/95\n\nquantities are given in parts\n  by weight'
+        cone: '08-06',
+        atmosphere: 'raku',
+        color: 'Transparent Clear',
+        notes: 'Dated 7/19/95\n\nquantities are given in parts\n  by weight'
       },
       { name: 'Second', lines: [{ material: 'Silica', amount: '10' }], notes: '' }
     ]);

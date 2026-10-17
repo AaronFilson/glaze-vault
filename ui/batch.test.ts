@@ -30,7 +30,17 @@ describe('scaleBatch', () => {
       { material: 'Talc', amount: 'lots' },
       { material: 'Zinc Oxide', amount: '-2' }
     ];
-    expect(usableLines(lines)).toEqual([{ material: 'Silica', amount: 12.5 }]);
+    expect(usableLines(lines)).toEqual([{ material: 'Silica', amount: 12.5, addition: false }]);
+  });
+
+  it('weighs additions on top of the base', () => {
+    const batch = scaleBatch([...leach, { material: 'Grog', amount: '10', addition: true }], 1000)!;
+    expect(batch.lines.map((l) => l.weight)).toEqual([400, 300, 200, 100, 100]);
+    expect(batch.lines[4]).toMatchObject({ percent: 10, addition: true });
+    expect(batch.total).toBe(1100);
+    // With every line an addition there is no base, and they are all counted.
+    const all = scaleBatch([{ material: 'Grog', amount: '5', addition: true }], 100)!;
+    expect(all.lines[0].weight).toBe(100);
   });
 
   it('has nothing to scale without amounts or a size', () => {

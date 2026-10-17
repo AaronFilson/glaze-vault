@@ -729,3 +729,43 @@ button.link.danger {
 .import-warnings summary {
   cursor: pointer;
 }
+
+/* A recipe's optional details, in a grid under its name. */
+.details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.25rem 0.75rem;
+  margin: 0.75rem 0 0;
+}
+
+.details .detail label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.details .detail input,
+.details .detail select {
+  width: 100%;
+}
+
+.details .wide {
+  grid-column: span 2;
+}
+
+table.lines td.added {
+  width: 3.5rem;
+  text-align: center;
+}
+
+/* Searching and sorting the recipe list. */
+.find {
+  display: flex;
+  gap: 0.35rem;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.find input {
+  flex: 1;
+  min-width: 0;
+}

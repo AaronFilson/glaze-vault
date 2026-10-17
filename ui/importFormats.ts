@@ -20,6 +20,16 @@ import {
   type RecipeLine
 } from './chemistry';
 import { EXPORT_FORMAT } from './export';
+import {
+  ATMOSPHERES,
+  details,
+  optionNamed,
+  parseTags,
+  RECIPE_TYPES,
+  SURFACES,
+  TRANSPARENCIES,
+  type RecipeDetails
+} from './recipeFields';
 
 /** What a file holds, read and ready to choose from. */
 export interface ImportPlan {
@@ -68,9 +78,19 @@ function readJson(text: string): ImportPlan {
   const str = (value: unknown) => (typeof value === 'string' ? value : value == null ? '' : String(value));
   const recipes = (Array.isArray(file.recipes) ? file.recipes : []).map((r: Record<string, unknown>) => ({
     name: str(r.name),
+    ...readDetails({
+      type: str(r.type),
+      cone: str(r.cone),
+      atmosphere: str(r.atmosphere),
+      surface: str(r.surface),
+      transparency: str(r.transparency),
+      color: str(r.color),
+      tags: Array.isArray(r.tags) ? r.tags.map(str).join(', ') : str(r.tags)
+    }),
     lines: (Array.isArray(r.lines) ? r.lines : []).map((l: Record<string, unknown>) => ({
       material: str(l.material),
-      amount: str(l.amount)
+      amount: str(l.amount),
+      ...(l.addition === true ? { addition: true } : {})
     })),
     notes: str(r.notes)
   }));
@@ -120,18 +140,22 @@ function readInsightXml(text: string): ImportPlan {
     }
     const notes = [
       attribute(recipe, 'codenum') && `Code: ${attribute(recipe, 'codenum')}`,
-      attribute(recipe, 'keywords') && `Keywords: ${attribute(recipe, 'keywords')}`,
       attribute(recipe, 'date') && `Dated ${attribute(recipe, 'date')}`,
       ...['notes', 'comments', 'comment'].flatMap((tag) => elements(recipe, tag).map((e) => e.textContent?.trim() ?? '')),
       ...elements(recipe, 'url').map((url) => [attribute(url, 'descrip'), attribute(url, 'url')].filter(Boolean).join(': '))
     ].filter(Boolean);
     return {
       name,
+      ...readDetails({ tags: attribute(recipe, 'keywords') }),
       lines: lines.map((line) => {
         const amount = attribute(line, 'amount');
         const conversion = Number(attribute(line, 'conversion') || '1');
         const converted = units.size > 1 && Number.isFinite(conversion) ? Number(amount) * conversion : Number(amount);
-        return { material: attribute(line, 'material'), amount: tidy(Number.isFinite(converted) ? String(converted) : amount) };
+        return {
+          material: attribute(line, 'material'),
+          amount: tidy(Number.isFinite(converted) ? String(converted) : amount),
+          ...(['1', 'true', 'yes'].includes(attribute(line, 'added').toLowerCase()) ? { addition: true } : {})
+        };
       }),
       notes: notes.join('\n')
     };
@@ -200,24 +224,32 @@ function readGlazeChem(text: string): ImportPlan {
     // Components and additions each have their amount on the line after them.
     const lines: RecipeLine[] = [];
     for (const [key, value] of record) {
-      if (key === 'component' || key === 'addition') lines.push({ material: value, amount: '' });
+      if (key === 'component') lines.push({ material: value, amount: '' });
+      else if (key === 'addition') lines.push({ material: value, amount: '', addition: true });
       else if ((key === 'amount' || key === 'addamount') && lines.length) lines[lines.length - 1].amount = tidy(value);
     }
     if (first('by_vol').toLowerCase() === 'y') {
       warnings.push(`${name || 'A recipe'} gives its amounts by volume, not weight.`);
     }
+    // Details that match Glaze Vault's are kept as details, and the rest in the notes.
+    const found = readDetails({
+      cone: first('range'),
+      atmosphere: first('firetype'),
+      type: first('type'),
+      color: first('color'),
+      surface: first('quality'),
+      transparency: first('transparency')
+    });
     const about = [
-      first('range') && `Cone ${first('range')}`,
-      first('firetype'),
-      first('type'),
-      first('color'),
-      first('quality'),
-      first('transparency'),
+      !found.atmosphere && first('firetype'),
+      !found.type && first('type'),
+      !found.surface && first('quality'),
+      !found.transparency && first('transparency'),
       first('source') && `Source: ${first('source')}`,
       first('date') && `Dated ${first('date')}`
     ].filter(Boolean);
     const notes = [about.join('. '), noteText(values(record, 'note'))].filter(Boolean).join('\n\n');
-    recipes.push({ name, lines, notes });
+    recipes.push({ name, ...found, lines, notes });
   }
   return { format: 'GlazeChem', recipes: recipes.map(withLine), materials, warnings };
 }
@@ -323,15 +355,29 @@ function readCsv(text: string): ImportPlan {
   // Glaze Vault's recipe export: a row per line, the recipe's notes on its first.
   const recipeColumn = column('recipe');
   if (recipeColumn >= 0 && column('material') >= 0 && column('amount') >= 0) {
-    const [material, amount, notes] = [column('material'), column('amount'), column('notes')];
+    const [material, amount, notes, added] = [column('material'), column('amount'), column('notes'), column('added')];
+    const detail = (row: string[]) =>
+      readDetails({
+        type: at(row, column('type')),
+        cone: at(row, column('cone')),
+        atmosphere: at(row, column('atmosphere')),
+        surface: at(row, column('surface')),
+        transparency: at(row, column('transparency')),
+        color: at(row, column('color', 'colour')),
+        tags: at(row, column('tags'))
+      });
     const recipes: RecipeContent[] = [];
     let last: string | null = null;
     for (const row of body) {
       const name = at(row, recipeColumn);
-      if (name !== last || !recipes.length) recipes.push({ name, lines: [], notes: at(row, notes) });
+      if (name !== last || !recipes.length) recipes.push({ name, ...detail(row), lines: [], notes: at(row, notes) });
       last = name;
       if (at(row, material) || at(row, amount)) {
-        recipes[recipes.length - 1].lines.push({ material: at(row, material), amount: at(row, amount) });
+        recipes[recipes.length - 1].lines.push({
+          material: at(row, material),
+          amount: at(row, amount),
+          ...(['yes', 'y', 'true', '1', 'x'].includes(at(row, added).toLowerCase()) ? { addition: true } : {})
+        });
       }
     }
     return { format: 'Glaze Vault recipes (CSV)', recipes: recipes.map(withLine), materials: [], warnings: [] };
@@ -421,6 +467,19 @@ function tidy(text: string): string {
 }
 
 /** An editor always has a line to type in. */
+/** A recipe's details from text as files give them; what matches no option is left out. */
+function readDetails(text: { [Field in keyof RecipeDetails]?: string }): RecipeDetails {
+  return details({
+    type: optionNamed(RECIPE_TYPES, text.type ?? ''),
+    cone: (text.cone ?? '').replace(/\s*-\s*/g, '-'),
+    atmosphere: optionNamed(ATMOSPHERES, text.atmosphere ?? ''),
+    surface: optionNamed(SURFACES, text.surface ?? ''),
+    transparency: optionNamed(TRANSPARENCIES, text.transparency ?? ''),
+    color: text.color,
+    tags: parseTags(text.tags ?? '')
+  });
+}
+
 function withLine(recipe: RecipeContent): RecipeContent {
   return recipe.lines.length ? recipe : { ...recipe, lines: [{ material: '', amount: '' }] };
 }

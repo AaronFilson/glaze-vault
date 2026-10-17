@@ -2,8 +2,9 @@
 // other programs), and the recipes as Insight XML (for Insight-live and Glazy). None is
 // encrypted; the Settings screen says so before saving.
 import type { MaterialHead, RecipeHead } from './api';
-import { usableLines } from './batch';
+import { baseOf, usableLines } from './batch';
 import { MATERIAL_CATEGORIES } from './chemistry';
+import { ATMOSPHERES, details, labelOf, RECIPE_TYPES, SURFACES, TRANSPARENCIES } from './recipeFields';
 
 export const EXPORT_FORMAT = 'glaze-vault-export';
 
@@ -22,6 +23,7 @@ export function exportJson(
         appVersion,
         recipes: recipes.map((recipe) => ({
           name: recipe.content.name,
+          ...details(recipe.content),
           lines: recipe.content.lines.filter((line) => line.material.trim() || line.amount.trim()),
           notes: recipe.content.notes,
           revision: recipe.number,
@@ -47,24 +49,55 @@ export function exportJson(
   );
 }
 
-const CSV_COLUMNS = ['Recipe', 'Material', 'Amount', 'Percent', 'Notes', 'Revision', 'Saved'];
+const CSV_COLUMNS = [
+  'Recipe',
+  'Material',
+  'Amount',
+  'Percent',
+  'Added',
+  'Type',
+  'Cone',
+  'Atmosphere',
+  'Surface',
+  'Transparency',
+  'Color',
+  'Tags',
+  'Notes',
+  'Revision',
+  'Saved'
+];
 
-/** One row per material. A recipe's notes, revision and date are on its first row. Starts with a
- * byte order mark so Excel reads it as UTF-8. */
+/** One row per material, with its percent of the base and "yes" under Added for an addition on
+ * top. A recipe's details, notes, revision and date are on its first row. Starts with a byte
+ * order mark so Excel reads it as UTF-8. */
 export function exportCsv(recipes: RecipeHead[]): string {
   const rows = [CSV_COLUMNS];
   for (const recipe of recipes) {
     const lines = usableLines(recipe.content.lines);
-    const sum = lines.reduce((total, line) => total + line.amount, 0);
-    const first = [recipe.content.notes, String(recipe.number), new Date(recipe.savedAt).toISOString()];
-    if (!lines.length) rows.push([recipe.content.name, '', '', '', ...first]);
+    const base = baseOf(lines);
+    const kept = details(recipe.content);
+    const first = [
+      labelOf(RECIPE_TYPES, kept.type),
+      kept.cone ?? '',
+      labelOf(ATMOSPHERES, kept.atmosphere),
+      labelOf(SURFACES, kept.surface),
+      labelOf(TRANSPARENCIES, kept.transparency),
+      kept.color ?? '',
+      (kept.tags ?? []).join(', '),
+      recipe.content.notes,
+      String(recipe.number),
+      new Date(recipe.savedAt).toISOString()
+    ];
+    const rest = first.map(() => '');
+    if (!lines.length) rows.push([recipe.content.name, '', '', '', '', ...first]);
     lines.forEach((line, i) =>
       rows.push([
         recipe.content.name,
         line.material,
         String(line.amount),
-        ((line.amount / sum) * 100).toFixed(2),
-        ...(i === 0 ? first : ['', '', ''])
+        ((line.amount / base) * 100).toFixed(2),
+        line.addition ? 'yes' : '',
+        ...(i === 0 ? first : rest)
       ])
     );
   }
@@ -98,16 +131,20 @@ export function exportMaterialsCsv(materials: MaterialHead[]): string {
 }
 
 /** Recipes as Insight XML, which Digitalfire's Insight-live and Glazy import (docs/adr/0010-importing.md).
- * Amounts are parts, written as grams; each recipe is dated the day its revision was saved. */
+ * Amounts are parts, written as grams; each recipe is dated the day its revision was saved. Tags
+ * are its keywords, and additions are marked as added. */
 export function exportInsightXml(recipes: RecipeHead[]): string {
   const out = ['<?xml version="1.0" encoding="UTF-8"?>', '<recipes version="1.0" encoding="UTF-8">'];
   for (const recipe of recipes) {
     const { name, notes } = recipe.content;
-    out.push(`<recipe name="${xmlText(name)}" keywords="" id="" date="${localDate(new Date(recipe.savedAt))}" codenum="">`);
+    const keywords = xmlText((details(recipe.content).tags ?? []).join(', '));
+    out.push(
+      `<recipe name="${xmlText(name)}" keywords="${keywords}" id="" date="${localDate(new Date(recipe.savedAt))}" codenum="">`
+    );
     out.push('<recipelines>');
     for (const line of usableLines(recipe.content.lines)) {
       out.push(
-        `<recipeline material="${xmlText(line.material)}" amount="${line.amount}" unitabbr="g" conversion="1.0000" added="0"/>`
+        `<recipeline material="${xmlText(line.material)}" amount="${line.amount}" unitabbr="g" conversion="1.0000" added="${line.addition ? 1 : 0}"/>`
       );
     }
     out.push('</recipelines>');

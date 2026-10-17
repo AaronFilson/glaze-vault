@@ -1,25 +1,32 @@
 // Two recipes, or two revisions of one, side by side.
 import type { UmfResult } from '@glazecalc/chemistry';
-import { amountOf, normalize, OXIDES, type RecipeLine } from './chemistry';
+import { baseOf, usableLines } from './batch';
+import { normalize, OXIDES, type RecipeLine } from './chemistry';
 
-/** A material in either recipe, as a percent of each one's batch; null where it is not used. */
+/** A material in either recipe, as a percent of each one's base; null where it is not used. */
 export interface LineChange {
   material: string;
   a: number | null;
   b: number | null;
+  /** Added on top of the base, in the recipe that has it (the first, if both). */
+  addition: boolean;
 }
 
-/** Each line's share of its batch, by material: the same material on two lines counts once. */
-function shares(lines: RecipeLine[]): Map<string, { material: string; percent: number }> {
-  const used = lines
-    .map((line) => ({ material: line.material.trim(), amount: amountOf(line.amount) }))
-    .filter((line) => line.material && Number.isFinite(line.amount) && line.amount > 0);
-  const total = used.reduce((sum, line) => sum + line.amount, 0);
-  const found = new Map<string, { material: string; percent: number }>();
-  for (const { material, amount } of used) {
+type Share = { material: string; percent: number; addition: boolean };
+
+/** Each line's share of its base, by material: the same material on two lines counts once. */
+function shares(lines: RecipeLine[]): Map<string, Share> {
+  const used = usableLines(lines);
+  const base = baseOf(used);
+  const found = new Map<string, Share>();
+  for (const { material, amount, addition } of used) {
     const key = normalize(material) || material;
-    const share = (found.get(key)?.percent ?? 0) + (amount / total) * 100;
-    found.set(key, { material: found.get(key)?.material ?? material, percent: share });
+    const before = found.get(key);
+    found.set(key, {
+      material: before?.material ?? material,
+      percent: (before?.percent ?? 0) + (amount / base) * 100,
+      addition: before?.addition ?? addition
+    });
   }
   return found;
 }
@@ -32,7 +39,8 @@ export function compareLines(a: RecipeLine[], b: RecipeLine[]): LineChange[] {
   return keys.map((key) => ({
     material: first.get(key)?.material ?? second.get(key)!.material,
     a: first.get(key)?.percent ?? null,
-    b: second.get(key)?.percent ?? null
+    b: second.get(key)?.percent ?? null,
+    addition: (first.get(key) ?? second.get(key)!).addition
   }));
 }
 
