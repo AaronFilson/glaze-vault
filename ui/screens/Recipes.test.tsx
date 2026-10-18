@@ -220,6 +220,8 @@ describe('locking by itself', () => {
     const core = fakeCore({ settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0 } });
     const onLocked = show();
     await screen.findByRole('button', { name: 'Shino' });
+    // Lets the idle lock start listening before the key goes down.
+    await act(async () => {});
     vi.setSystemTime(Date.UTC(2026, 9, 14, 10));
     fireEvent.keyDown(window, { key: 'a' });
     await waitFor(() => expect(onLocked).toHaveBeenCalledWith('idle'));
