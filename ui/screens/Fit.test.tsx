@@ -52,4 +52,35 @@ describe('fitting on screen', () => {
     // Without permission to change the recipe or make one, the amounts are only shown.
     expect(screen.queryByRole('button', { name: 'Use these amounts' })).toBeNull();
   });
+
+  it('chooses other materials from the library, says what each is for, and leaves one out when asked', async () => {
+    render(<Fit recipe={lime} library={STANDARD_LIBRARY} sets={[]} initialSet="" onClose={() => {}} />);
+    // Boron, which nothing in the recipe has.
+    const empty = screen.getAllByLabelText(/^Target oxide/).length - 1;
+    fireEvent.change(screen.getAllByLabelText(/^Target oxide/)[empty], { target: { value: 'B2O3' } });
+    fireEvent.change(screen.getAllByLabelText(/^Target moles/)[empty], { target: { value: '0.3' } });
+    fireEvent.click(screen.getByLabelText(/Let it choose other materials too/));
+    fireEvent.change(screen.getByLabelText('New materials, at most'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
+    expect(screen.getByRole('button', { name: 'Choosing…' })).toBeTruthy();
+    const leaveOut = await screen.findAllByRole('button', { name: /^Leave .* out$/ }, { timeout: 15000 });
+    expect(leaveOut).toHaveLength(1);
+    const brought = leaveOut[0].getAttribute('aria-label')!.replace(/^Leave (.*) out$/, '$1');
+    expect(leaveOut[0].closest('tr')!.textContent).toContain('B₂O₃');
+    fireEvent.click(leaveOut[0]);
+    expect(screen.getByText(/Not to use:/).textContent).toContain(brought);
+  }, 20000);
+
+  it('drops a choice whose inputs changed while it was choosing', async () => {
+    render(<Fit recipe={lime} library={STANDARD_LIBRARY} sets={[]} initialSet="" onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText(/Let it choose other materials too/));
+    fireEvent.change(screen.getByLabelText('New materials, at most'), { target: { value: '1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Fit' }));
+    // Before the choice comes back, the target changes.
+    const moles = screen.getAllByLabelText(/^Target moles/)[0] as HTMLInputElement;
+    fireEvent.change(moles, { target: { value: String(Number(moles.value) + 0.1) } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Fit' })).toBeTruthy();
+  }, 20000);
 });

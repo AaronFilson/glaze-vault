@@ -41,7 +41,7 @@ const spar: MaterialHead = {
 const ONE_PERSON: Access = {
   team: false,
   me: { id: 'me', name: '', admin: false, mustSetPassword: false },
-  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] }]
+  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: true }]
 };
 
 /** A record the fake core refuses to save. */
@@ -220,6 +220,8 @@ describe('locking by itself', () => {
     const core = fakeCore({ settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0 } });
     const onLocked = show();
     await screen.findByRole('button', { name: 'Shino' });
+    // Lets the idle lock start listening before the key goes down.
+    await act(async () => {});
     vi.setSystemTime(Date.UTC(2026, 9, 14, 10));
     fireEvent.keyDown(window, { key: 'a' });
     await waitFor(() => expect(onLocked).toHaveBeenCalledWith('idle'));
@@ -456,6 +458,23 @@ describe('your materials', () => {
         { oxide: 'CaO', moles: '1' },
         { oxide: 'CO2', moles: '1' }
       ]
+    });
+  });
+
+  it('keep a class and a data sheet', async () => {
+    const core = fakeCore();
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Materials' }));
+    fireEvent.change(screen.getByLabelText('Material name'), { target: { value: 'Grolleg' } });
+    await user.selectOptions(screen.getByLabelText('Class'), 'kaolin');
+    fireEvent.change(screen.getByLabelText(/^Absorption/), { target: { value: '12' } });
+    fireEvent.change(screen.getByLabelText(/^Fired at cone/), { target: { value: '10' } });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(core.called('save_record')).toHaveLength(1));
+    expect(core.called('save_record')[0].args.content).toMatchObject({
+      class: 'kaolin',
+      sheet: { absorption: '12', cone: '10' }
     });
   });
 
@@ -838,4 +857,29 @@ it('says why a file cannot be imported', async () => {
   await user.click(await screen.findByRole('button', { name: 'Settings' }));
   await user.click(screen.getByRole('button', { name: 'Import from a file…' }));
   expect((await screen.findByRole('alert')).textContent).toMatch(/a column for each oxide/);
+});
+
+describe('a role without chemistry', () => {
+  it('sees a recipe’s name and details, and no lines, unity formula, comparing or printing', async () => {
+    const sales: Access = {
+      team: true,
+      me: { id: 'ben', name: 'Ben', admin: false, mustSetPassword: false },
+      collections: [
+        { id: 'shared', name: 'Shared', owner: null, role: 'role:sales', changes: ['firing'], export: false, print: false, chemistry: false, manage: false }
+      ]
+    };
+    // The core sends the summary alone.
+    const summary = { ...shino, collectionId: 'shared', content: { name: 'Shino', cone: '10' } } as unknown as RecipeHead;
+    fakeCore({ access: sales, recipes: [summary] });
+    show();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Shino' }));
+    expect(screen.getByText(/not its materials, amounts or notes/)).toBeTruthy();
+    expect((screen.getByLabelText('Cone') as HTMLInputElement).value).toBe('10');
+    expect(screen.queryByLabelText('Material 1')).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Unity formula' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Print…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Compare…' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Log a firing…' })).toBeTruthy();
+  });
 });

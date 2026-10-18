@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import type { RecipeHead } from '../api';
+import { isBody } from '../body';
 import type { Analysis, MaterialLibrary, RecipeContent, RecipeLine } from '../chemistry';
+import { recipeDensity } from '../materialData';
 import {
   ATMOSPHERES,
   matchesSearch,
@@ -60,7 +62,8 @@ export function RecipeEditor({
   groups,
   newIn,
   batchSheet,
-  limits
+  limits,
+  withoutChemistry = false
 }: {
   recipes: RecipeHead[];
   deleted: RecipeHead[];
@@ -91,6 +94,9 @@ export function RecipeEditor({
   batchSheet?: React.ReactNode;
   /** Below the unity formula: comparing it with a limit formula. */
   limits?: React.ReactNode;
+  /** This person reads the recipe's collection without its chemistry: no lines, notes or
+   * unity formula to show. */
+  withoutChemistry?: boolean;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -171,10 +177,19 @@ export function RecipeEditor({
             onCompare={onCompare && (() => onCompare(viewing.number))}
           />
         )}
-        {readOnly && current && !viewing && (
+        {withoutChemistry && current ? (
           <p className="hint" role="status">
-            You can read this recipe, but not change it. An admin can change what you may do.
+            You see this recipe’s name and details, and its firings, but not its materials, amounts or notes. An admin
+            can change what you may do.
           </p>
+        ) : (
+          readOnly &&
+          current &&
+          !viewing && (
+            <p className="hint" role="status">
+              You can read this recipe, but not change it. An admin can change what you may do.
+            </p>
+          )
         )}
         {!current && !viewing && newIn}
         <fieldset className="plain" disabled={!!viewing || readOnly}>
@@ -186,87 +201,90 @@ export function RecipeEditor({
             placeholder="Untitled"
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
           />
-          <DetailsFields shown={shown} onChange={(change) => setDraft({ ...draft, ...change })} />
-
-          <table className="lines">
-            <thead>
-              <tr>
-                <th scope="col">Material</th>
-                <th scope="col" className="num">
-                  Amount
-                </th>
-                <th scope="col" title="On top of the base, which adds up to 100">
-                  Added
-                </th>
-                <th scope="col">
-                  <span className="visually-hidden">Remove</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.lines.map((line, index) => (
-                <tr key={index}>
-                  <td>
-                    <input
-                      aria-label={`Material ${index + 1}`}
-                      list="materials"
-                      value={line.material}
-                      onChange={(e) => setLine(index, { ...line, material: e.target.value })}
-                    />
-                  </td>
-                  <td className="num">
-                    <input
-                      aria-label={`Amount ${index + 1}`}
-                      inputMode="decimal"
-                      value={line.amount}
-                      onChange={(e) => setLine(index, { ...line, amount: e.target.value })}
-                    />
-                  </td>
-                  <td className="added">
-                    <input
-                      type="checkbox"
-                      aria-label={`Material ${index + 1} is an addition`}
-                      checked={!!line.addition}
-                      onChange={(e) => {
-                        const { addition: _, ...rest } = line;
-                        setLine(index, e.target.checked ? { ...rest, addition: true } : rest);
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="link"
-                      aria-label={`Remove material ${index + 1}`}
-                      onClick={() => setDraft({ ...draft, lines: draft.lines.filter((_, i) => i !== index) })}
-                    >
-                      ×
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <datalist id="materials">
-            {library.names.map(({ name, yours }) => (
-              <option key={name} value={name} label={yours ? 'Your material' : undefined} />
-            ))}
-          </datalist>
-          <button
-            type="button"
-            onClick={() => setDraft({ ...draft, lines: [...draft.lines, { material: '', amount: '' }] })}
-          >
-            Add material
-          </button>
-
-          <label htmlFor="notes">Notes</label>
-          <textarea
-            id="notes"
-            rows={4}
-            value={shown.notes}
-            onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-          />
+          <DetailsFields shown={shown} library={library} onChange={(change) => setDraft({ ...draft, ...change })} />
         </fieldset>
+        {!withoutChemistry && (
+          <fieldset className="plain" disabled={!!viewing || readOnly}>
+            <table className="lines">
+              <thead>
+                <tr>
+                  <th scope="col">Material</th>
+                  <th scope="col" className="num">
+                    Amount
+                  </th>
+                  <th scope="col" title="On top of the base, which adds up to 100">
+                    Added
+                  </th>
+                  <th scope="col">
+                    <span className="visually-hidden">Remove</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.lines.map((line, index) => (
+                  <tr key={index}>
+                    <td>
+                      <input
+                        aria-label={`Material ${index + 1}`}
+                        list="materials"
+                        value={line.material}
+                        onChange={(e) => setLine(index, { ...line, material: e.target.value })}
+                      />
+                    </td>
+                    <td className="num">
+                      <input
+                        aria-label={`Amount ${index + 1}`}
+                        inputMode="decimal"
+                        value={line.amount}
+                        onChange={(e) => setLine(index, { ...line, amount: e.target.value })}
+                      />
+                    </td>
+                    <td className="added">
+                      <input
+                        type="checkbox"
+                        aria-label={`Material ${index + 1} is an addition`}
+                        checked={!!line.addition}
+                        onChange={(e) => {
+                          const { addition: _, ...rest } = line;
+                          setLine(index, e.target.checked ? { ...rest, addition: true } : rest);
+                        }}
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="link"
+                        aria-label={`Remove material ${index + 1}`}
+                        onClick={() => setDraft({ ...draft, lines: draft.lines.filter((_, i) => i !== index) })}
+                      >
+                        ×
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <datalist id="materials">
+              {library.names.map(({ name, yours }) => (
+                <option key={name} value={name} label={yours ? 'Your material' : undefined} />
+              ))}
+            </datalist>
+            <button
+              type="button"
+              onClick={() => setDraft({ ...draft, lines: [...draft.lines, { material: '', amount: '' }] })}
+            >
+              Add material
+            </button>
+
+            <label htmlFor="notes">Notes</label>
+            <textarea
+              id="notes"
+              rows={4}
+              value={shown.notes}
+              onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+            />
+          </fieldset>
+        )}
 
         <div className="row">
           {!readOnly && (
@@ -295,10 +313,12 @@ export function RecipeEditor({
         {current && <RevisionHistory kind="recipe" current={current} viewing={viewing} onView={editor.setViewing} />}
       </main>
 
-      <aside className="analysis no-print" aria-label="Unity formula">
-        <AnalysisPanel analysis={analysis} />
-        {limits}
-      </aside>
+      {!withoutChemistry && (
+        <aside className="analysis no-print" aria-label={isBody(shown.type) ? 'Chemistry' : 'Unity formula'}>
+          <AnalysisPanel analysis={analysis} body={isBody(shown.type)} />
+          {limits}
+        </aside>
+      )}
     </>
   );
 }
@@ -352,9 +372,11 @@ const choices = <Value extends string>(options: { value: Value; label: string }[
  * glaze the gravity and viscosity it is mixed to. */
 function DetailsFields({
   shown,
+  library,
   onChange
 }: {
   shown: RecipeContent;
+  library: MaterialLibrary;
   onChange: (change: Partial<RecipeDetails>) => void;
 }) {
   // Tags are typed as text, so a comma can be typed before the next tag.
@@ -364,7 +386,8 @@ function DetailsFields({
   const tagsShown =
     typed.length === tags.length && typed.every((tag, i) => tag === tags[i]) ? tagText : tags.join(', ');
   const mixed = !!shown.gravity || !!shown.viscosity || shown.type === 'glaze' || isSlip(shown.type);
-  const water = waterPer100(shown.gravity ?? '');
+  const solids = recipeDensity(shown.lines, library.own);
+  const water = waterPer100(shown.gravity ?? '', solids.density);
   const select = <Value extends string>(
     id: string,
     label: string,
@@ -433,7 +456,8 @@ function DetailsFields({
             />
             {water !== null && (
               <span id="recipe-water" className="hint">
-                About {Math.round(water)} g water per 100 g dry
+                About {Math.round(water)} g water per 100 g dry, with solids of {solids.density.toFixed(2)} g/cm³
+                {solids.worked ? ' from its materials' : ''}
               </span>
             )}
           </div>

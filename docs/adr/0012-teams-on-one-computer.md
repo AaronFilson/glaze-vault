@@ -75,7 +75,9 @@ decides the steps people take and what is built first.
   names them; the core does not read content). Every revision and attachment is encrypted again
   under the new collection's key and bound to it, in one transaction, and needs the right to
   change records in both collections. This rewrites revisions in place, which is fine on one
-  computer; with the LAN host a move becomes an event of its own that replicas apply.
+  computer; with the LAN host a move becomes an event of its own that replicas apply. A
+  material moves alone, by the same command; the page warns how many recipes outside the
+  collection it goes to use it, since they find it by name.
 - **Signing revisions and the audit log wait for the LAN host** (ADR 5). On one computer, anyone
   who could forge a revision or rewrite a log already holds the database key and their own
   signing key, so signatures there show little; with a host, the host checks each signature

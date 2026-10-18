@@ -26,9 +26,11 @@ Under the name are details you can fill in or leave empty, in any recipe:
 - **Surface** and **Transparency**, and the **Color** in your own words.
 - **Tags:** any words you sort recipes by, separated by commas: `production, celadon, R&D`.
 - For a glaze or slip, the **Specific gravity** it is mixed to and its **Ford cup #4** seconds. With
-  a gravity, the editor says about how much water that takes per 100 g of dry materials, taking
-  the materials' density as 2.6 g/cm³. [Firings](firing-log.md) show these beside what was
-  measured.
+  a gravity, the editor says about how much water that takes per 100 g of dry materials. It
+  works out the dry materials' density from each material's: its data sheet's density if
+  [your material](materials.md#data-sheets) gives one, else its class's, else a typical one for
+  standard materials such as zircon (4.6 g/cm³), and 2.6 g/cm³ for the rest.
+  [Firings](firing-log.md) show these beside what was measured.
 
 They are kept with each revision, printed with the recipe, and go with it in exports.
 
@@ -82,6 +84,23 @@ The panel on the right updates as you type:
 Warnings, such as a material's analysis that does not add up to 100%, are listed below. A
 material Glaze Vault does not know is named in red instead of a formula. A material with no
 oxides, such as CMC gum or a stain with no analysis, is left out of the formula, with a note.
+
+### A clay body's chemistry
+
+A recipe whose **Type** is clay body, slip, engobe, casting slip or terra sigillata shows its
+chemistry as body formulators read it, on screen and printed:
+
+- **Oxides, fired weight %**: the analysis of the fired body, largest first.
+- **Formula with Al₂O₃ = 1**: moles of each oxide per mole of alumina, the way clays and bodies
+  are compared. A glaze's unity formula puts the few fluxes a body has at 1 and makes everything
+  else look huge.
+- **KNaO** and **All fluxes**, as mole percent of every oxide: how much melts the body.
+- **Fe₂O₃ + TiO₂**: what colours a fired body most, and how white a porcelain can be.
+- **SiO₂ : Al₂O₃**, **Expansion** and **Loss on ignition**, as for a glaze. A body's expansion
+  counts every oxide as glass, but a body keeps some of its silica as quartz, and may grow
+  cristobalite, which expand far more: use it to compare bodies, not to predict glaze fit.
+
+The unity formula is still there, folded under **Unity formula**.
 
 ## Saving and revisions
 

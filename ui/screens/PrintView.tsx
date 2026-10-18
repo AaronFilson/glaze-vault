@@ -1,4 +1,5 @@
 import type { RecipeHead } from '../api';
+import { isBody } from '../body';
 import { BATCH_UNITS, baseOf, formatWeight, scaleBatch, usableLines, type BatchUnit } from '../batch';
 import type { Analysis, RecipeContent } from '../chemistry';
 import { batchCosts, money, type PricesContent } from '../prices';
@@ -54,7 +55,7 @@ export function PrintView({
       )}
       {job.kind === 'recipe' && analysis?.result && (
         <div className="paper-analysis">
-          <AnalysisPanel analysis={analysis} />
+          <AnalysisPanel analysis={analysis} body={isBody(content.type)} />
         </div>
       )}
       {job.kind === 'batch' && (

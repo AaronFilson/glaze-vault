@@ -14,6 +14,7 @@ export function Blend({
   library,
   initial,
   canSave,
+  canPrint = () => true,
   onSave,
   onClose
 }: {
@@ -22,6 +23,8 @@ export function Blend({
   /** The recipe the blend starts from. */
   initial: string | null;
   canSave: boolean;
+  /** Whether the weights of a blend of these recipes may be printed. */
+  canPrint?: (recordIds: string[]) => boolean;
   /** Saves a step as a new recipe; resolves once saved. */
   onSave: (content: RecipeContent) => Promise<void>;
   onClose: () => void;
@@ -246,11 +249,13 @@ export function Blend({
                 Saved as recipes: {saved.join(', ')}.
               </p>
             )}
-            <div className="row">
-              <button type="button" disabled={!(size > 0)} onClick={() => window.print()}>
-                Print the weights…
-              </button>
-            </div>
+            {canPrint(picked.flatMap((r) => (r ? [r.recordId] : []))) && (
+              <div className="row">
+                <button type="button" disabled={!(size > 0)} onClick={() => window.print()}>
+                  Print the weights…
+                </button>
+              </div>
+            )}
             {error && (
               <p role="alert" className="error">
                 {error}

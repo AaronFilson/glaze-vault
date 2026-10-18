@@ -48,6 +48,12 @@ pub enum Error {
     RoleNameTaken,
     #[error("Some people have that role. Give them another before deleting it.")]
     RoleInUse,
+    #[error("A role that reads recipes without their chemistry can log firings, and change and manage nothing else.")]
+    ChemistryNeeded,
+    #[error("An admin needs to unlock this vault once more before anyone can read it without chemistry.")]
+    NotChangedOver,
+    #[error("Only an admin can change an admin's roles, or a manager's.")]
+    ManagersOnlyLower,
     #[error("Take admin away from them first: that gives the organization a new key and recovery sheet.")]
     RemovingAdmin,
     #[error("That person is not an admin.")]
@@ -88,6 +94,9 @@ impl Error {
             Error::NoSuchRole => "no-such-role",
             Error::RoleNameTaken => "role-name-taken",
             Error::RoleInUse => "role-in-use",
+            Error::ChemistryNeeded => "chemistry-needed",
+            Error::NotChangedOver => "not-changed-over",
+            Error::ManagersOnlyLower => "managers-only-lower",
             Error::RemovingAdmin => "removing-admin",
             Error::NotAnAdmin => "not-an-admin",
             Error::Corrupt(_) => "corrupt",

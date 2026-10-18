@@ -47,7 +47,7 @@ import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
 import { CollectionPicker, MoveTo } from './Team';
-import { byCollection, canEdit, defaultCollection, editableCollections, onlyWeighs } from '../team';
+import { byCollection, canEdit, defaultCollection, editableCollections, may, onlyWeighs } from '../team';
 
 const DAY = 24 * 60 * 60 * 1000;
 /** How long after the last keystroke unsaved edits are kept as a draft. */
@@ -579,7 +579,10 @@ export function Recipes({
     if (current && other) return [{ recordId: current.recordId, number: null }, { recordId: other.recordId, number: null }];
     return null;
   };
-  const canCompare = !!compareFrom();
+  // What this person may do with the recipe shown, in its collection (ADR 4).
+  const shownIn = recipe.current ? recipe.current.collectionId : newCollection;
+  const chemistry = may(access, shownIn, 'chemistry');
+  const canCompare = chemistry && !!compareFrom();
 
   const confirmText = () => {
     if (!confirming) return null;
@@ -692,6 +695,40 @@ export function Recipes({
     );
   };
 
+  /** Below a saved material someone may change, in a team's vault: moving it to another
+   * collection. Recipes find it by name, so those elsewhere lose it for people who cannot open
+   * where it goes. */
+  const materialMovePart = () => {
+    const current = material.current;
+    if (!team || !access || !current || material.viewing) return null;
+    if (!canEdit(access, current.collectionId, 'material')) return null;
+    const users = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, current.content.name)));
+    return (
+      <MoveTo
+        key={`${current.recordId} ${current.collectionId}`}
+        access={access}
+        names={names}
+        from={current.collectionId!}
+        kinds={['material']}
+        name={current.content.name}
+        along={[]}
+        note={(to, there) => {
+          const elsewhere = users.filter((r) => r.collectionId !== to).length;
+          if (!elsewhere) return '';
+          const one = elsewhere === 1;
+          return `${one ? '1 recipe' : `${elsewhere} recipes`} outside ${there} ${one ? 'uses' : 'use'} it. People who cannot open ${there} will see ${one ? 'it' : 'them'} worked out without it, or with the standard material of that name.`;
+        }}
+        onMove={async (to) => {
+          await api.moveRecords([['material', current.recordId]], to);
+          setMaterials((list) =>
+            list.map((item) => (item.recordId === current.recordId ? { ...item, collectionId: to } : item))
+          );
+          material.rebase({ ...current, collectionId: to }, (draft) => draft);
+        }}
+      />
+    );
+  };
+
   /** Below a saved recipe: its firings, and logging another. */
   const firingsPart = () => {
     const current = recipe.current;
@@ -709,7 +746,7 @@ export function Recipes({
             Firings ({count})
           </button>
         )}
-        {recipes.length > 1 && (
+        {recipes.length > 1 && may(access, current.collectionId, 'chemistry') && (
           <button
             type="button"
             onClick={() =>
@@ -753,7 +790,7 @@ export function Recipes({
       <header className="bar no-print">
         <span className="brand">Glaze Vault</span>
         <div className="bar-actions">
-          {view === 'recipes' && (
+          {view === 'recipes' && may(access, shownIn, 'print') && (
             <button type="button" aria-expanded={printing} onClick={() => setPrinting(!printing)}>
               Print…
             </button>
@@ -834,7 +871,7 @@ export function Recipes({
             }}
           />
         )}
-        {printing && view === 'recipes' && (
+        {printing && view === 'recipes' && may(access, shownIn, 'print') && (
           <PrintOptions job={printJob} onPrint={print} onCancel={() => setPrinting(false)} />
         )}
         {update && !updateHidden && (
@@ -965,7 +1002,7 @@ export function Recipes({
         />
       ) : view === 'compare' && comparing ? (
         <Compare
-          recipes={recipes}
+          recipes={recipes.filter((r) => may(access, r.collectionId, 'chemistry'))}
           unsaved={recipe.changed ? { recordId: recipe.current?.recordId ?? null, content: recipe.draft } : null}
           library={library}
           initial={comparing}
@@ -973,10 +1010,11 @@ export function Recipes({
         />
       ) : view === 'blend' ? (
         <Blend
-          recipes={recipes}
+          recipes={recipes.filter((r) => may(access, r.collectionId, 'chemistry'))}
           library={library}
           initial={blendFrom}
           canSave={mayCreate}
+          canPrint={(ids) => ids.every((id) => may(access, recipes.find((r) => r.recordId === id)?.collectionId, 'print'))}
           onSave={async (content) => {
             const saved = await api.saveRecipe(null, content, newCollection);
             setRecipes((list) => [saved, ...list]);
@@ -1054,6 +1092,7 @@ export function Recipes({
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
           readOnly={!canEdit(access, material.current ? material.current.collectionId : newIn('material'), 'material')}
+          moveTo={materialMovePart()}
           canCreate={!team || editableCollections(access, 'material').length > 0}
           newIn={
             (team && access && (
@@ -1096,6 +1135,7 @@ export function Recipes({
           canCreate={mayCreate}
           groups={team && access ? byCollection(recipes, access, names) : undefined}
           newIn={picker || undefined}
+          withoutChemistry={!chemistry}
           limits={
             <>
               <CostLine lines={shownRecipe.lines} list={prices} />
@@ -1115,7 +1155,7 @@ export function Recipes({
           batchSheet={
             <>
               {firingsPart()}
-              {batchSheetPart()}
+              {chemistry && batchSheetPart()}
               {movePart()}
             </>
           }

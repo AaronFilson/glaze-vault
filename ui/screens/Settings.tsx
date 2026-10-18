@@ -15,9 +15,9 @@ import {
 import { exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJson, exportMaterialsCsv } from '../export';
 import type { Firing } from '../firing';
 import { ImportError, readImport, type ImportPlan } from '../importFormats';
-import { editableCollections } from '../team';
+import { editableCollections, may } from '../team';
 import { NewPassword } from './NewPassword';
-import { People, ShareVault } from './Team';
+import { ManagedPeople, People, ShareVault } from './Team';
 
 const LOCK_MINUTES = [1, 5, 10, 15, 30, 60, 120];
 const REMINDER_DAYS: [number, string][] = [
@@ -84,6 +84,9 @@ export function Settings({
   // In a team's vault, backups and switching vaults change everyone's, so they are for admins.
   const team = !!access?.team;
   const admin = !team || !!access?.me.admin;
+  /** What this person may export: the records in collections whose role lets them. */
+  const exportable = <Item extends { collectionId?: string }>(list: Item[]) =>
+    list.filter((item) => may(access, item.collectionId, 'export'));
   return (
     <main className="settings">
       <div className="settings-head">
@@ -111,6 +114,8 @@ export function Settings({
                 onTeamChanged();
               }}
             />
+          ) : access.collections.some((c) => c.manage) ? (
+            <ManagedPeople access={access} onChanged={onTeamChanged} />
           ) : (
             <p>
               You are signed in as <strong>{access.me.name}</strong>. An admin decides what you can see and change, and
@@ -127,7 +132,15 @@ export function Settings({
       {(!team || editableCollections(access, 'recipe').length > 0 || editableCollections(access, 'material').length > 0) && (
         <Import onImport={onImport} />
       )}
-      <Export recipes={recipes} materials={materials} firings={firings} version={status.version} />
+      {(!team || access?.collections.some((c) => c.export)) && (
+        <Export
+          recipes={exportable(recipes)}
+          materials={exportable(materials)}
+          firings={exportable(firings)}
+          version={status.version}
+          partly={[recipes, materials, firings].some((list) => exportable<{ collectionId?: string }>(list).length < list.length)}
+        />
+      )}
       <ChangePassword />
       <RecoveryKey onNewRecoveryKey={onNewRecoveryKey} />
       <Updates status={status} update={update} onUpdate={onUpdate} onInstall={onInstall} />
@@ -347,12 +360,15 @@ function Export({
   recipes,
   materials,
   firings,
-  version
+  version,
+  partly
 }: {
   recipes: RecipeHead[];
   materials: MaterialHead[];
   firings: Firing[];
   version: string;
+  /** Some records are in collections this person may not export from, and are left out. */
+  partly: boolean;
 }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -391,6 +407,7 @@ function Export({
         <strong>Exported files are not encrypted:</strong> anyone who gets the file can read your recipes. Use a
         backup to keep a safe copy.
       </p>
+      {partly && <p className="hint">Only the collections you may export from are in it.</p>}
       <div className="row">
         <button type="button" disabled={!recipes.length} onClick={() => run('csv')}>
           Export as CSV…

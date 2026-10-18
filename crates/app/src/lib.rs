@@ -3,7 +3,7 @@
 //! page never chooses where files are written.
 
 use glaze_vault_core::{
-    Attachment, BACKUP_EXTENSION, Collection, Credential, CustomRole, Error, Grant, Kind, LastBackup,
+    Attachment, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error, Grant, Kind, LastBackup,
     MAX_ATTACHMENT_BYTES, Person, Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
@@ -256,13 +256,24 @@ fn custom_roles(state: State<AppState>) -> CommandResult<Vec<CustomRole>> {
 }
 
 #[tauri::command(async)]
-fn create_role(state: State<AppState>, name: String, changes: Vec<Kind>) -> CommandResult<CustomRole> {
-    with_vault(&state, |vault| vault.create_role(&name, &changes))
+fn create_role(
+    state: State<AppState>,
+    name: String,
+    changes: Vec<Kind>,
+    may: Capabilities,
+) -> CommandResult<CustomRole> {
+    with_vault(&state, |vault| vault.create_role(&name, &changes, may))
 }
 
 #[tauri::command(async)]
-fn change_role(state: State<AppState>, id: Uuid, name: String, changes: Vec<Kind>) -> CommandResult<()> {
-    with_vault(&state, |vault| vault.change_role(id, &name, &changes))
+fn change_role(
+    state: State<AppState>,
+    id: Uuid,
+    name: String,
+    changes: Vec<Kind>,
+    may: Capabilities,
+) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.change_role(id, &name, &changes, may))
 }
 
 #[tauri::command(async)]
@@ -634,8 +645,11 @@ fn save_export(
     suggested_name: String,
     contents: String,
 ) -> CommandResult<Option<String>> {
-    if state.vault.lock().unwrap().is_none() {
-        return Err(locked());
+    // The page leaves out what this person may not export; nobody who may export nothing writes one.
+    match &*state.vault.lock().unwrap() {
+        None => return Err(locked()),
+        Some(vault) if !vault.may_export() => return Err(Error::NotAllowed.into()),
+        Some(_) => {}
     }
     let (kind, extension) = match Path::new(&suggested_name).extension().and_then(|e| e.to_str()) {
         Some("csv") => ("CSV spreadsheet", "csv"),

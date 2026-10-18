@@ -10,10 +10,10 @@ const ACCESS: Access = {
   team: true,
   me: { id: 'ben', name: 'Ben', admin: false, mustSetPassword: false },
   collections: [
-    { id: 'shared', name: 'Shared', owner: null, role: 'formulator', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] },
-    { id: 'production', name: 'Production', owner: null, role: 'formulator', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] },
-    { id: 'archive', name: 'Archive', owner: null, role: 'chemist', changes: [] },
-    { id: 'mine', name: '', owner: 'ben', role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] }
+    { id: 'shared', name: 'Shared', owner: null, role: 'formulator', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: false },
+    { id: 'production', name: 'Production', owner: null, role: 'formulator', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: false },
+    { id: 'archive', name: 'Archive', owner: null, role: 'chemist', changes: [] , export: true, print: true, chemistry: true, manage: false },
+    { id: 'mine', name: '', owner: 'ben', role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: true }
   ]
 };
 
@@ -36,5 +36,24 @@ describe('moving a recipe to another collection', () => {
     const one: Access = { ...ACCESS, collections: ACCESS.collections.slice(0, 1) };
     const { container } = render(<MoveTo access={one} names={{}} from="shared" kinds={['recipe']} name="Shino" along={[]} onMove={async () => {}} />);
     expect(container.textContent).toBe('');
+  });
+
+  it('says what else a move changes, for the collection chosen', () => {
+    render(
+      <MoveTo
+        access={ACCESS}
+        names={{}}
+        from="shared"
+        kinds={['material']}
+        name="Grolleg"
+        along={[]}
+        note={(to, there) => (to === 'production' ? `2 recipes outside ${there} use it.` : '')}
+        onMove={async () => {}}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Move…' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain(
+      'It goes with every revision. People who can open Shared but not Production will no longer see it. 2 recipes outside Production use it.'
+    );
   });
 });

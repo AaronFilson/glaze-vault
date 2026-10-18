@@ -1,13 +1,34 @@
 // Fitting a recipe to a formula (docs/adr/0015-chemistry-tools.md): a target, from a limit set or
 // typed in, the materials the fit may use, and the amounts it finds, to put in the editor or save
 // as a recipe of their own.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { errorText } from '../api';
-import { analyse, oxideLabel, OXIDES, type MaterialLibrary, type RecipeContent, type RecipeLine } from '../chemistry';
-import { fitInto, fitRecipe, moveInto, targetFrom, type FitChoice, type TargetLine } from '../fit';
+import { select } from '../choose';
+import {
+  analyse,
+  fitPool,
+  oxideLabel,
+  OXIDES,
+  sameName,
+  type MaterialLibrary,
+  type RecipeContent,
+  type RecipeLine
+} from '../chemistry';
+import {
+  chooseLines,
+  chosenFrom,
+  fitInto,
+  fitRecipe,
+  moveInto,
+  MOST_EXTRAS,
+  targetFrom,
+  type Chosen,
+  type FitChoice,
+  type TargetLine
+} from '../fit';
 import { checkLimits, type LimitSet } from '../limits';
 
-type Fitted = { lines: RecipeLine[]; changed: boolean; outside?: string[] };
+type Fitted = { lines: RecipeLine[]; changed: boolean; outside?: string[]; chosen?: Omit<Chosen, 'lines' | 'changed'> };
 
 export function Fit({
   recipe,
@@ -41,10 +62,19 @@ export function Fit({
   );
   const [trying, setTrying] = useState('');
   const [fitted, setFitted] = useState<Fitted | null>(null);
+  /** Whether the fit may bring in materials of its own choosing, and how many at most. */
+  const [choosing, setChoosing] = useState(false);
+  const [extras, setExtras] = useState(MOST_EXTRAS);
+  const [avoid, setAvoid] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  /** Counts the runs, so a choice that comes back after its inputs changed, or the screen closed, is
+   * dropped. */
+  const runs = useRef(0);
+  useEffect(() => () => void (runs.current += 1), []);
   /** A new target: what was fitted to the last one goes. */
   const aim = (next: 'limits' | 'formula') => {
     setGoal(next);
-    setFitted(null);
+    stale();
   };
   const [problem, setProblem] = useState('');
   const [saved, setSaved] = useState(false);
@@ -53,9 +83,9 @@ export function Fit({
   const target = goal === 'limits' ? (moved?.target ?? []) : typed;
   const result = useMemo(() => (fitted ? analyse(fitted.lines, library) : null), [fitted, library]);
 
-  const run = () => {
-    setSaved(false);
-    const outcome = goal === 'limits' && set ? fitInto(choices, set, library) : fitRecipe(choices, typed, library);
+  const show = (outcome: Fitted | { problem: string }) => {
+    runs.current += 1;
+    setBusy(false);
     if ('problem' in outcome) {
       setProblem(outcome.problem);
       setFitted(null);
@@ -64,9 +94,44 @@ export function Fit({
       setFitted(outcome);
     }
   };
+  const run = () => {
+    setSaved(false);
+    if (!choosing) {
+      show(goal === 'limits' && set ? fitInto(choices, set, library) : fitRecipe(choices, typed, library));
+      return;
+    }
+    const job = chooseLines(choices, target, library, fitPool(library), { extras, avoid });
+    if ('problem' in job) {
+      show(job);
+      return;
+    }
+    setBusy(true);
+    setFitted(null);
+    const mine = ++runs.current;
+    const current = () => mine === runs.current;
+    void select(job)
+      .then((selection) => {
+        if (!current()) return;
+        const { lines, changed, ...chosen } = chosenFrom(job, selection);
+        const umfFitted = analyse(lines, library)?.result?.umf;
+        const outside = goal === 'limits' && set && umfFitted ? checkLimits(umfFitted, set).filter((c) => c.outside) : [];
+        show({ lines, changed, chosen, outside: outside.map((c) => c.oxide) });
+      })
+      .catch((e) => current() && show({ problem: errorText(e) }));
+  };
+  const leaveOut = (material: string) => {
+    setAvoid([...avoid, material]);
+    stale();
+  };
+  /** Anything changed while choosing drops what it is choosing for. */
+  const stale = () => {
+    runs.current += 1;
+    setBusy(false);
+    setFitted(null);
+  };
   const change = (next: FitChoice[]) => {
     setChoices(next);
-    setFitted(null);
+    stale();
   };
 
   if (!umf) {
@@ -118,7 +183,7 @@ export function Fit({
               value={setId}
               onChange={(e) => {
                 setSetId(e.target.value);
-                setFitted(null);
+                stale();
               }}
             >
               {sets.map((s) => (
@@ -163,7 +228,7 @@ export function Fit({
                       value={line.oxide}
                       onChange={(e) => {
                         setTyped(withEmpty(typed.map((t, j) => (j === i ? { ...t, oxide: e.target.value } : t))));
-                        setFitted(null);
+                        stale();
                       }}
                     >
                       <option value="">—</option>
@@ -181,7 +246,7 @@ export function Fit({
                       value={line.moles}
                       onChange={(e) => {
                         setTyped(withEmpty(typed.map((t, j) => (j === i ? { ...t, moles: e.target.value } : t))));
-                        setFitted(null);
+                        stale();
                       }}
                     />
                   </td>
@@ -193,7 +258,7 @@ export function Fit({
             type="button"
             onClick={() => {
               setTyped(withEmpty(targetFrom(umf)));
-              setFitted(null);
+              stale();
             }}
           >
             Start from the recipe’s formula
@@ -247,7 +312,9 @@ export function Fit({
         onSubmit={(e) => {
           e.preventDefault();
           if (!trying.trim()) return;
-          change([...choices, { material: trying.trim(), amount: '', change: true }]);
+          if (!choices.some((c) => sameName(c.material, trying))) {
+            change([...choices, { material: trying.trim(), amount: '', change: true }]);
+          }
           setTrying('');
         }}
       >
@@ -263,9 +330,64 @@ export function Fit({
         </button>
       </form>
 
+      <fieldset className="plain">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={choosing}
+            onChange={(e) => {
+              setChoosing(e.target.checked);
+              stale();
+            }}
+          />
+          Let it choose other materials too, from yours and the standard ones
+        </label>
+        {choosing && (
+          <div className="detail">
+            <label htmlFor="fit-extras">New materials, at most</label>
+            <select
+              id="fit-extras"
+              value={extras}
+              onChange={(e) => {
+                setExtras(Number(e.target.value));
+                stale();
+              }}
+            >
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {choosing && avoid.length > 0 && (
+          <p className="hint">
+            Not to use:{' '}
+            {avoid.map((material, i) => (
+              <span key={material}>
+                {i > 0 && ', '}
+                {material}{' '}
+                <button
+                  type="button"
+                  className="link"
+                  aria-label={`Use ${material} again`}
+                  onClick={() => {
+                    setAvoid(avoid.filter((a) => a !== material));
+                    stale();
+                  }}
+                >
+                  (use again)
+                </button>
+              </span>
+            ))}
+          </p>
+        )}
+      </fieldset>
+
       <div className="row">
-        <button type="button" className="primary" disabled={goal === 'limits' && !set} onClick={run}>
-          Fit
+        <button type="button" className="primary" disabled={(goal === 'limits' && !set) || busy} onClick={run}>
+          {busy ? 'Choosing…' : 'Fit'}
         </button>
       </div>
       {problem && (
@@ -285,6 +407,21 @@ export function Fit({
                   ? `Within ${set?.name}.`
                   : 'As near the target as these materials come.'}
           </p>
+          {fitted.chosen && fitted.chosen.unreachable.length > 0 && (
+            <p className="hint">
+              Nothing it could choose from has {fitted.chosen.unreachable.map(oxideLabel).join(', ')}: add a material of your own
+              that does.
+            </p>
+          )}
+          {fitted.chosen && fitted.chosen.alike.length > 0 && (
+            <ul className="plain-list hint" aria-label="Could stand in">
+              {fitted.chosen.alike.slice(0, 5).map(([used, other]) => (
+                <li key={`${used} ${other}`}>
+                  {other} could stand in for {used}.
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="table-scroll">
             <table className="compare-table">
               <caption>Amounts</caption>
@@ -297,16 +434,35 @@ export function Fit({
                   <th scope="col" className="num">
                     Fitted
                   </th>
+                  {fitted.chosen && <th scope="col">What it is for</th>}
                 </tr>
               </thead>
               <tbody>
-                {choices.map((choice, i) => {
-                  const now = fitted.lines.find((l) => l.material === choice.material)?.amount;
+                {rows(choices, fitted.lines).map(({ material, now, then, brought }, i) => {
+                  const supplies = fitted.chosen?.supplies[material];
                   return (
                     <tr key={i}>
-                      <th scope="row">{choice.material}</th>
-                      <td className="num">{choice.amount.trim() || '—'}</td>
-                      <td className="num">{now ?? '—'}</td>
+                      <th scope="row">{material}</th>
+                      <td className="num">{now || '—'}</td>
+                      <td className="num">{then ?? '—'}</td>
+                      {fitted.chosen && (
+                        <td>
+                          {supplies?.length ? suppliesText(supplies) : ''}
+                          {brought && (
+                            <>
+                              {' '}
+                              <button
+                                type="button"
+                                className="link"
+                                aria-label={`Leave ${material} out`}
+                                onClick={() => leaveOut(material)}
+                              >
+                                Leave out
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -366,6 +522,26 @@ export function Fit({
       )}
     </main>
   );
+}
+
+/** Each material before and after: the recipe's and those tried, then those the fit brought in. */
+function rows(choices: FitChoice[], lines: RecipeLine[]) {
+  const at = (material: string) => lines.find((l) => sameName(l.material, material))?.amount;
+  return [
+    ...choices.map((c) => ({ material: c.material, now: c.amount.trim(), then: at(c.material), brought: false })),
+    ...lines
+      .filter((l) => !choices.some((c) => sameName(c.material, l.material)))
+      .map((l) => ({ material: l.material, now: '', then: l.amount, brought: true }))
+  ];
+}
+
+/** "most of the B₂O₃, 30% of the CaO" */
+function suppliesText(supplies: { oxide: string; share: number }[]): string {
+  return supplies
+    .map(({ oxide, share }) =>
+      share >= 0.95 ? `all the ${oxideLabel(oxide)}` : share >= 0.5 ? `most of the ${oxideLabel(oxide)}` : `${Math.round(share * 100)}% of the ${oxideLabel(oxide)}`
+    )
+    .join(', ');
 }
 
 /** A target always ends in an empty line to type the next oxide in. */

@@ -38,6 +38,11 @@ all its revisions, firings, photos and batch sheet, and is encrypted again for i
 collection: people who could open the old one but not the new one stop seeing it. You need to be
 able to change recipes in both.
 
+A material moves the same way, from **Move to** below it, if you can change materials in both.
+Recipes find materials by name, so a recipe in another collection that uses it is worked out
+without it, or with the standard material of that name, for people who cannot open where it
+went. Glaze Vault says how many recipes that is before it moves.
+
 Admins add collections at the bottom of **Settings** › **People**, and rename them there.
 
 ## Adding someone
@@ -66,13 +71,28 @@ Someone who can only read a recipe sees it with its fields greyed out, and no **
 
 ### Your own roles
 
-Under **Roles**, below the people, an admin can make roles of their own: a name, and what it
-changes, out of recipes, materials, batch sheets, firings, limit formulas and prices. Each reads
-everything in its collections, as a chemist does. *Costing* might change only prices; *Glaze
-tester* firings and limit formulas. Give it to people in the table like any other role.
+Under **Roles**, below the people, an admin can make roles of their own: a name, what it
+changes, out of recipes, materials, batch sheets, firings, limit formulas and prices, and what
+else it **May** do. *Costing* might change only prices; *Glaze tester* firings and limit
+formulas. Give it to people in the table like any other role.
 
-Changing a role changes it for everyone who has it, from their next sign-in. A role can be
-deleted once nobody has it.
+- **Reads recipes' chemistry**, ticked at first, reads everything in its collections, as a chemist
+  does. Without it, a role sees each recipe's name and details, such as its type, cone and color,
+  and its firings and their photos, but not its materials, amounts or notes, and no materials,
+  limit formulas, prices or batch sheets. It can log firings, and change nothing else. This is
+  kept by keys: its people are given a key that opens only those, not the recipes themselves.
+- **Exports** and **Prints**, ticked at first: without them, its people have no export or print
+  buttons for its collections. Anyone who can read a recipe can still copy it off the screen,
+  so treat these as guard rails, not locks.
+- **Manages people on its collections:** its people can give and take away roles on the
+  collections it is given on, in **Settings** › **People**: any role but an admin's or another
+  manager's, to anyone but an admin or another manager. Taking a role away gives the collection
+  a new key, as when an admin does. Adding people to the vault stays with admins. A role that
+  manages must read chemistry.
+
+Changing a role changes it for everyone who has it, from their next sign-in. Taking **Reads
+recipes' chemistry** away from a role gives every collection it is on a new key, since its
+people held the old one. A role can be deleted once nobody has it.
 
 ## Batch sheets
 

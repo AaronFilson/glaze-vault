@@ -21,6 +21,7 @@ import {
   type RecipeLine
 } from './chemistry';
 import { EXPORT_FORMAT } from './export';
+import { MATERIAL_CLASSES, SHEET_FIELDS, tidySheet } from './materialData';
 import {
   ATMOSPHERES,
   details,
@@ -110,10 +111,27 @@ function readJson(text: string): ImportPlan {
       ...(Array.isArray(m.formula)
         ? { formula: m.formula.map((f: Record<string, unknown>) => ({ oxide: str(f.oxide), moles: str(f.moles) })) }
         : {}),
+      ...readMaterialData(m.class, m.sheet),
       notes: str(m.notes)
     })
   );
   return { format: 'Glaze Vault export (JSON)', recipes: recipes.map(withLine), materials, warnings };
+}
+
+/** A material's class and data sheet from an export, keeping only what Glaze Vault knows. */
+function readMaterialData(materialClass: unknown, sheet: unknown): Pick<MaterialContent, 'class' | 'sheet'> {
+  const known = MATERIAL_CLASSES.find((c) => c.value === materialClass)?.value;
+  const values =
+    sheet && typeof sheet === 'object'
+      ? tidySheet(
+          Object.fromEntries(
+            SHEET_FIELDS.map(({ field }) => [field, (sheet as Record<string, unknown>)[field]])
+              .filter(([, value]) => typeof value === 'string' || typeof value === 'number')
+              .map(([field, value]) => [field, String(value)])
+          )
+        )
+      : undefined;
+  return { ...(known ? { class: known } : {}), ...(values ? { sheet: values } : {}) };
 }
 
 // --- Insight XML --------------------------------------------------------------------------------

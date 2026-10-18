@@ -5,6 +5,7 @@ import type { MaterialHead, RecipeHead } from './api';
 import { baseOf, usableLines } from './batch';
 import { MATERIAL_CATEGORIES } from './chemistry';
 import { barResults, FLAWS, type Firing } from './firing';
+import { hasSheet } from './materialData';
 import { ATMOSPHERES, details, labelOf, RECIPE_TYPES, SURFACES, TRANSPARENCIES } from './recipeFields';
 
 export const EXPORT_FORMAT = 'glaze-vault-export';
@@ -39,6 +40,8 @@ export function exportJson(
           ...(material.content.formula?.length
             ? { formula: material.content.formula.filter((line) => line.moles.trim()) }
             : {}),
+          ...(material.content.class ? { class: material.content.class } : {}),
+          ...(hasSheet(material.content.sheet) ? { sheet: material.content.sheet } : {}),
           notes: material.content.notes,
           revision: material.number,
           savedAt: new Date(material.savedAt).toISOString()

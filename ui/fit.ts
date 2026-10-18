@@ -2,8 +2,16 @@
 // any others to try, whose unity formula comes as near a target as they allow, changing the
 // recipe as little as that does. The target is a unity formula typed in, the recipe's own to
 // start from, or the recipe's moved into a limit set. Glazecalc's fitAmounts does the fitting.
-import { fitAmounts, OXIDE_GROUPS, oxideMoles, type FitLine, type MaterialInput } from '@glazecalc/chemistry';
-import { amountOf, analyse, materialInput, numberOf, type MaterialLibrary, type RecipeLine } from './chemistry';
+import {
+  fitAmounts,
+  OXIDE_GROUPS,
+  oxideMoles,
+  type FitLine,
+  type MaterialInput,
+  type SelectLine,
+  type Selection
+} from '@glazecalc/chemistry';
+import { amountOf, analyse, materialInput, numberOf, sameName, type MaterialLibrary, type RecipeLine } from './chemistry';
 import { checkLimits, molesOf, type LimitsContent } from './limits';
 
 /** An oxide of the target, in moles of a unity formula, as typed. */
@@ -149,13 +157,16 @@ export function fitInto(
 /** Amounts as a recipe shows them: two decimals, a token amount as none. */
 const tidy = (amount: number, size: number) => (amount < size * 0.0005 ? 0 : Math.round(amount * 100) / 100);
 
-/**
- * New amounts for the choices whose unity formula comes nearest the target. The target is scaled
- * to the recipe's own fluxes, so the batch stays about its size. Lines that may not change, and
- * materials that add nothing once fired, keep their amounts; a material brought in that the fit
- * does not use is left out, and so is one of the recipe's that it takes out.
- */
-export function fitRecipe(choices: FitChoice[], target: TargetLine[], library: MaterialLibrary): FitOutcome {
+/** A fit set up: the lines it changes or holds, and the target in moles for the batch's size. */
+interface Prepared {
+  /** In the recipe's order: the lines kept as they are, and those fitted. */
+  used: FitChoice[];
+  fitted: { choice: FitChoice; input: MaterialInput; start: number }[];
+  /** The target, scaled to the recipe's own moles of flux. */
+  absolute: Record<string, number>;
+}
+
+function prepare(choices: FitChoice[], target: TargetLine[], library: MaterialLibrary): Prepared | { problem: string } {
   const wanted: Record<string, number> = {};
   for (const line of target) {
     const moles = numberOf(line.moles);
@@ -166,8 +177,7 @@ export function fitRecipe(choices: FitChoice[], target: TargetLine[], library: M
   const targetFluxes = Object.keys(wanted).filter(isFlux).reduce((sum, oxide) => sum + wanted[oxide], 0);
   if (!(targetFluxes > 0)) return { problem: 'The target needs some flux: an oxide such as CaO, K₂O or Na₂O.' };
 
-  const fitted: { choice: FitChoice; input: MaterialInput; start: number }[] = [];
-  // In the recipe's order: the lines kept as they are, and those fitted.
+  const fitted: Prepared['fitted'] = [];
   const used: FitChoice[] = [];
   for (const choice of choices.filter((c) => c.material.trim())) {
     const start = choice.amount.trim() ? amountOf(choice.amount) : 0;
@@ -182,22 +192,19 @@ export function fitRecipe(choices: FitChoice[], target: TargetLine[], library: M
       fitted.push({ choice, input, start });
     }
   }
-  if (!fitted.some((f) => f.choice.change)) return { problem: 'Let the fit change at least one material.' };
   const own = oxideMoles(fitted.map((f) => ({ material: f.input, amount: f.start })));
   const ownFluxes = Object.keys(own).filter(isFlux).reduce((sum, oxide) => sum + own[oxide], 0);
   // With no fluxes to start from, a batch the size the recipe had.
   const scale = ownFluxes > 0 ? ownFluxes : 0.003 * Math.max(100, fitted.reduce((sum, f) => sum + f.start, 0));
   const absolute = Object.fromEntries(Object.entries(wanted).map(([oxide, m]) => [oxide, (m / targetFluxes) * scale]));
+  return { used, fitted, absolute };
+}
 
-  const lines: FitLine[] = fitted.map(({ input, start, choice }) =>
-    choice.change ? { material: input, start } : { material: input, start, least: start, most: start }
-  );
-  let amounts: number[];
-  try {
-    amounts = fitAmounts(lines, absolute).amounts;
-  } catch (e) {
-    return { problem: (e as Error).message };
-  }
+const fitLine = ({ input, start, choice }: Prepared['fitted'][number]): FitLine =>
+  choice.change ? { material: input, start } : { material: input, start, least: start, most: start };
+
+/** The fitted amounts as recipe lines, in the recipe's order, and whether any changed. */
+function linesOf({ used, fitted }: Prepared, amounts: number[]): { lines: RecipeLine[]; changed: boolean } {
   const size = fitted.reduce((sum, f) => sum + f.start, 0) || amounts.reduce((sum, a) => sum + a, 0);
   const result: RecipeLine[] = [];
   let changed = false;
@@ -212,6 +219,87 @@ export function fitRecipe(choices: FitChoice[], target: TargetLine[], library: M
     if (amount > 0) result.push(line(choice, String(amount)));
   }
   return { lines: result, changed };
+}
+
+/**
+ * New amounts for the choices whose unity formula comes nearest the target. The target is scaled
+ * to the recipe's own fluxes, so the batch stays about its size. Lines that may not change, and
+ * materials that add nothing once fired, keep their amounts; a material brought in that the fit
+ * does not use is left out, and so is one of the recipe's that it takes out.
+ */
+export function fitRecipe(choices: FitChoice[], target: TargetLine[], library: MaterialLibrary): FitOutcome {
+  const prepared = prepare(choices, target, library);
+  if ('problem' in prepared) return prepared;
+  if (!prepared.fitted.some((f) => f.choice.change)) return { problem: 'Let the fit change at least one material.' };
+  let amounts: number[];
+  try {
+    amounts = fitAmounts(prepared.fitted.map(fitLine), prepared.absolute).amounts;
+  } catch (e) {
+    return { problem: (e as Error).message };
+  }
+  return linesOf(prepared, amounts);
+}
+
+/** What choosing from the library found, beyond the lines: what each material used is there for. */
+export interface Chosen {
+  lines: RecipeLine[];
+  changed: boolean;
+  /** For each material used, the oxides it supplies most of: "most of the B₂O₃". */
+  supplies: Record<string, { oxide: string; share: number }[]>;
+  /** A material used, and another from the pool that could stand in for it. */
+  alike: [string, string][];
+  /** Oxides of the target that nothing in the pool has. */
+  unreachable: string[];
+}
+
+/** The most new materials choosing may add, unless asked for fewer. */
+export const MOST_EXTRAS = 3;
+
+/**
+ * The recipe's lines, and the fewest of the pool's materials, that bring the unity formula near the
+ * target, with Glazecalc's selectMaterials: it drops what the match does not need, the materials
+ * brought in first, and fits the amounts of what is left. The pool is everything a recipe could be
+ * made of; those named in avoid are not used.
+ */
+export function chooseLines(
+  choices: FitChoice[],
+  target: TargetLine[],
+  library: MaterialLibrary,
+  pool: string[],
+  { extras = MOST_EXTRAS, avoid = [] }: { extras?: number; avoid?: string[] } = {}
+): ChooseJob | { problem: string } {
+  const offered = pool
+    .filter((name) => !choices.some((c) => sameName(c.material, name)) && !avoid.some((a) => sameName(a, name)))
+    .map((name) => ({ material: name, amount: '', change: true }));
+  const prepared = prepare([...choices, ...offered], target, library);
+  if ('problem' in prepared) return prepared;
+  if (!prepared.fitted.some((f) => f.choice.change)) return { problem: 'Let the fit change at least one material.' };
+  return {
+    prepared,
+    lines: prepared.fitted.map((f) => ({ ...fitLine(f), ...(f.start === 0 ? {} : { must: !f.choice.change }) })),
+    target: prepared.absolute,
+    options: { extras }
+  };
+}
+
+/** What selectMaterials is given: plain data, so it can run in a worker. */
+export interface ChooseJob {
+  prepared: Prepared;
+  lines: SelectLine[];
+  target: Record<string, number>;
+  options: { extras: number };
+}
+
+/** The selection as recipe lines, and what each material used is there for. */
+export function chosenFrom(job: ChooseJob, selection: Selection): Chosen {
+  const { fitted } = job.prepared;
+  const name = (index: number) => fitted[index].choice.material;
+  return {
+    ...linesOf(job.prepared, selection.amounts),
+    supplies: Object.fromEntries(selection.contributions.map((c) => [name(c.index), c.supplies])),
+    alike: selection.alike.map((pair) => [name(pair.used), name(pair.other)]),
+    unreachable: selection.unreachable
+  };
 }
 
 const line = (choice: FitChoice, amount: string): RecipeLine => ({

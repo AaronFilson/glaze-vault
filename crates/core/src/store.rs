@@ -74,6 +74,13 @@ const MIGRATIONS: &[&str] = &[
         changes TEXT NOT NULL,
         created_at INTEGER NOT NULL
     );",
+    // 6: what else a role admins make may do (ADR 4): export, print, read recipes' chemistry, and
+    // manage the people on its collections, comma-separated. Roles made before could do all but
+    // manage. And a recipe revision's summary, its content without its chemistry, under the
+    // collection's summary key (crate::vault::summary_key), for roles that read without it.
+    "ALTER TABLE roles ADD COLUMN may TEXT NOT NULL DEFAULT 'export,print,chemistry';
+    ALTER TABLE revisions ADD COLUMN summary_nonce BLOB;
+    ALTER TABLE revisions ADD COLUMN summary BLOB;",
 ];
 
 pub fn open(path: &Path, key: &Key) -> Result<Connection> {

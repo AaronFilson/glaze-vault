@@ -16,6 +16,7 @@ import {
   type MaterialContent,
   type OxideLine
 } from '../chemistry';
+import { hasSheet, isClay, MATERIAL_CLASSES, SHEET_FIELDS, tidySheet, type DataSheet, type MaterialClass } from '../materialData';
 import type { Editor } from '../useEditor';
 import { DeletedList, DeletedNotice } from './Deleted';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
@@ -35,11 +36,17 @@ export function sameMaterial(a: MaterialContent, b: MaterialContent): boolean {
     (a.basis ?? 'analysis') === (b.basis ?? 'analysis') &&
     a.loi === b.loi &&
     a.notes === b.notes &&
+    a.class === b.class &&
+    sameSheet(a.sheet, b.sheet) &&
     a.oxides.length === b.oxides.length &&
     a.oxides.every((line, i) => line.oxide === b.oxides[i].oxide && line.percent === b.oxides[i].percent) &&
     (a.formula ?? []).length === (b.formula ?? []).length &&
     (a.formula ?? []).every((line, i) => line.oxide === b.formula![i].oxide && line.moles === b.formula![i].moles)
   );
+}
+
+function sameSheet(a: DataSheet | undefined, b: DataSheet | undefined): boolean {
+  return SHEET_FIELDS.every(({ field }) => (a?.[field] ?? '') === (b?.[field] ?? ''));
 }
 
 /** The person's own materials, colorants and additives: a list, and an editor for one. */
@@ -61,7 +68,8 @@ export function Materials({
   onRenameInRecipes,
   readOnly = false,
   canCreate = true,
-  newIn
+  newIn,
+  moveTo
 }: {
   materials: MaterialHead[];
   deleted: MaterialHead[];
@@ -84,6 +92,8 @@ export function Materials({
   canCreate?: boolean;
   /** For a new material in a team's vault, where it will be saved. */
   newIn?: React.ReactNode;
+  /** Below a saved material, in a team's vault: moving it to another collection. */
+  moveTo?: React.ReactNode;
 }) {
   const { current, draft, setDraft, changed, viewing } = editor;
   const shown = viewing?.content ?? draft;
@@ -181,6 +191,20 @@ export function Materials({
           >
             {MATERIAL_CATEGORIES.map(({ category, label }) => (
               <option key={category} value={category}>
+                {label}
+              </option>
+            ))}
+          </select>
+
+          <label htmlFor="material-class">Class</label>
+          <select
+            id="material-class"
+            value={shown.class ?? ''}
+            onChange={(e) => setDraft({ ...draft, class: (e.target.value as MaterialClass) || undefined })}
+          >
+            <option value="">—</option>
+            {MATERIAL_CLASSES.map(({ value, label }) => (
+              <option key={value} value={value}>
                 {label}
               </option>
             ))}
@@ -316,6 +340,13 @@ export function Materials({
             </datalist>
           </div>
 
+          <DataSheetFields
+            key={viewing?.revisionId ?? current?.recordId ?? 'new'}
+            sheet={shown.sheet}
+            clay={isClay(shown.class)}
+            onChange={(sheet) => setDraft({ ...draft, sheet: tidySheet(sheet) })}
+          />
+
           <label htmlFor="material-notes">Notes</label>
           <textarea
             id="material-notes"
@@ -344,6 +375,7 @@ export function Materials({
           )}
         </div>
         {error && <p role="alert" className="error">{error}</p>}
+        {moveTo}
         {current && (
           <RevisionHistory kind="material" current={current} viewing={viewing} onView={editor.setViewing} />
         )}
@@ -419,6 +451,48 @@ export function Materials({
         )}
       </aside>
     </>
+  );
+}
+
+/** A data sheet's physical values, folded away until a clay's or once any is filled in. */
+function DataSheetFields({
+  sheet,
+  clay,
+  onChange
+}: {
+  sheet: DataSheet | undefined;
+  clay: boolean;
+  onChange: (sheet: DataSheet) => void;
+}) {
+  // Open to start with for a clay, or once something is in it; then as the person leaves it.
+  const [open, setOpen] = useState(() => clay || hasSheet(sheet));
+  const [wasClay, setWasClay] = useState(clay);
+  if (clay !== wasClay) {
+    setWasClay(clay);
+    if (clay) setOpen(true);
+  }
+  return (
+    <details className="data-sheet" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary>Data sheet</summary>
+      <p className="hint">All optional: what the supplier’s sheet gives, for clays most of all.</p>
+      <div className="details">
+        {SHEET_FIELDS.map(({ field, label, unit, placeholder }) => (
+          <div key={field} className="detail">
+            <label htmlFor={`sheet-${field}`}>
+              {label}
+              {unit && <span className="hint"> ({unit})</span>}
+            </label>
+            <input
+              id={`sheet-${field}`}
+              inputMode={field === 'mesh' || field === 'dryStrength' ? undefined : 'decimal'}
+              value={sheet?.[field] ?? ''}
+              placeholder={placeholder}
+              onChange={(e) => onChange({ ...sheet, [field]: e.target.value })}
+            />
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 

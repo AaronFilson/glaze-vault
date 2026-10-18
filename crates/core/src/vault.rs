@@ -6,10 +6,11 @@
 mod attachments;
 mod moving;
 mod roles;
+mod summaries;
 mod team;
 
 pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
-pub use roles::CustomRole;
+pub use roles::{Capabilities, CustomRole};
 pub use team::{Collection, Grant, Person};
 
 use crate::access::Role;
@@ -49,6 +50,10 @@ pub struct Vault {
     organization: Option<KeyPair>,
     /// The roles admins have made, for what each lets a person change.
     roles: Vec<CustomRole>,
+    /// Whether firings are kept under each collection's summary key and every recipe revision has
+    /// a summary (summaries.rs). Vaults from before are changed over by the first person to
+    /// unlock who holds every collection's key.
+    summaries: bool,
 }
 
 /// A collection this person can open.
@@ -58,19 +63,30 @@ struct OpenCollection {
     /// The person whose private collection it is.
     owner: Option<Uuid>,
     role: Role,
-    /// The collection's key, or for a batch operator its batch key only.
+    /// Which key this person's grant holds.
+    held: Held,
+    /// That key: the collection's, or one made from it.
     key: Key,
 }
 
+/// Which of a collection's keys a grant holds. Only the collection's key leads to the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Held {
+    /// The collection's key: everything in it.
+    Collection,
+    /// The batch key (batch_key): its batch sheets, for a batch operator.
+    Batch,
+    /// The summary key (summary_key): its recipes without their chemistry, and its firings and
+    /// their photos, for a role that reads without chemistry.
+    Summary,
+}
+
 impl OpenCollection {
-    /// The key records of a kind are encrypted with here, if this person may read them: batch
-    /// sheets under the batch key, so a batch operator can open them and nothing else.
-    fn key_for(&self, kind: Kind) -> Option<Key> {
-        match (self.role, kind) {
-            (Role::Operator, Kind::Batch) => Some(self.key.clone()),
-            (Role::Operator, _) => None,
-            (_, Kind::Batch) => Some(batch_key(&self.key, &self.id)),
-            _ => Some(self.key.clone()),
+    /// The collection's own key, which only a grant of the whole collection holds.
+    fn full_key(&self) -> Result<&Key> {
+        match self.held {
+            Held::Collection => Ok(&self.key),
+            _ => Err(Error::NotAllowed),
         }
     }
 }
@@ -195,11 +211,11 @@ impl Vault {
         let sealed = crypto::seal_key(
             &keys.public,
             &collection_key,
-            &grant_info(&vault_id, &collection_id, &user_id, Role::Admin),
+            &grant_info(&vault_id, &collection_id, &user_id, Held::Collection),
         );
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO meta (name, value) VALUES ('vault_id', ?1), ('default_collection', ?2)",
+            "INSERT INTO meta (name, value) VALUES ('vault_id', ?1), ('default_collection', ?2), ('summaries', '1')",
             params![vault_id.to_string(), collection_id.to_string()],
         )?;
         tx.execute(
@@ -229,11 +245,13 @@ impl Vault {
                 name: String::new(),
                 owner: None,
                 role: Role::Admin,
+                held: Held::Collection,
                 key: collection_key,
             }],
             default_collection: collection_id,
             organization: None,
             roles: Vec::new(),
+            summaries: true,
         };
         Ok((vault, recovery))
     }
@@ -604,10 +622,13 @@ impl Vault {
                 (parse_id(&record_id)?, number + 1, parse_id(&collection_id)?)
             }
         };
-        let collection_key = self
-            .editable(&collection_id, kind)?
-            .key_for(kind)
-            .ok_or(Error::NotAllowed)?;
+        let collection = self.editable(&collection_id, kind)?;
+        let collection_key = self.key_for(collection, kind).ok_or(Error::NotAllowed)?;
+        // A recipe also keeps its summary, for roles that read without chemistry.
+        let summary_key = match kind {
+            Kind::Recipe => Some(self.summary_key_for(collection).ok_or(Error::NotAllowed)?),
+            _ => None,
+        };
         let revision_id = Uuid::new_v4();
         let saved_at = now_ms();
         let aad = revision_aad(
@@ -620,9 +641,13 @@ impl Vault {
             deleted,
         );
         let sealed = crypto::encrypt(&collection_key, &plaintext, &aad);
+        let summary = summary_key
+            .map(|key| summaries::seal(&key, content, &aad))
+            .transpose()?;
+        let (summary_nonce, summary) = summary.map(|s| (s.nonce, s.ciphertext)).unzip();
         self.conn.execute(
-            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted, summary_nonce, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 revision_id.to_string(),
                 record_id.to_string(),
@@ -635,6 +660,8 @@ impl Vault {
                 sealed.nonce,
                 sealed.ciphertext,
                 deleted,
+                summary_nonce,
+                summary,
             ],
         )?;
         Ok(Revision {
@@ -662,7 +689,7 @@ impl Vault {
     fn newest(&self, kind: Kind) -> Result<Vec<Revision>> {
         let revisions = self.read_revisions(
             "WHERE r.kind = ?1 AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)
-             ORDER BY r.created_at DESC",
+             ORDER BY r.created_at DESC, r.rowid DESC",
             params![kind.as_str()],
             kind,
         )?;
@@ -681,7 +708,7 @@ impl Vault {
     /// each has the content of the one before.
     pub fn history(&self, kind: Kind, record_id: Uuid) -> Result<Vec<Revision>> {
         let revisions = self.read_revisions(
-            "WHERE r.kind = ?1 AND r.record_id = ?2 AND r.deleted = 0 ORDER BY r.number DESC, r.created_at DESC",
+            "WHERE r.kind = ?1 AND r.record_id = ?2 AND r.deleted = 0 ORDER BY r.number DESC, r.created_at DESC, r.rowid DESC",
             params![kind.as_str(), record_id.to_string()],
             kind,
         )?;
@@ -701,7 +728,7 @@ impl Vault {
     ) -> Result<Vec<Revision>> {
         let mut statement = self.conn.prepare(&format!(
             "SELECT r.id, r.record_id, r.parent_id, r.number, r.collection_id, r.created_at, r.nonce, r.ciphertext,
-                    r.deleted
+                    r.deleted, r.summary_nonce, r.summary
              FROM revisions r {where_clause}"
         ))?;
         let rows = statement.query_map(values, |row| {
@@ -715,20 +742,29 @@ impl Vault {
                 row.get::<_, Vec<u8>>(6)?,
                 row.get::<_, Vec<u8>>(7)?,
                 row.get::<_, bool>(8)?,
+                row.get::<_, Option<Vec<u8>>>(9)?,
+                row.get::<_, Option<Vec<u8>>>(10)?,
             ))
         })?;
         let mut revisions = Vec::new();
         for row in rows {
-            let (id, record_id, parent_id, number, collection_id, saved_at, nonce, ciphertext, deleted) = row?;
+            let (
+                id,
+                record_id,
+                parent_id,
+                number,
+                collection_id,
+                saved_at,
+                nonce,
+                ciphertext,
+                deleted,
+                summary_nonce,
+                summary,
+            ) = row?;
             let (revision_id, record_id, collection_id) =
                 (parse_id(&id)?, parse_id(&record_id)?, parse_id(&collection_id)?);
             let parent = parent_id.as_deref().map(parse_id).transpose()?;
-            let Some(key) = self
-                .collections
-                .iter()
-                .find(|c| c.id == collection_id)
-                .and_then(|c| c.key_for(kind))
-            else {
+            let Some(collection) = self.collections.iter().find(|c| c.id == collection_id) else {
                 continue;
             };
             let aad = revision_aad(
@@ -740,6 +776,29 @@ impl Vault {
                 parent.as_ref(),
                 deleted,
             );
+            // Someone who reads this collection's recipes without their chemistry gets each one's
+            // summary. A revision saved before summaries were kept has none until the vault is
+            // changed over, so it is not shown.
+            if kind == Kind::Recipe && collection.held == Held::Summary {
+                let (Some(nonce), Some(ciphertext)) = (summary_nonce, summary) else {
+                    continue;
+                };
+                let content = summaries::open(&collection.key, &crypto::Sealed { nonce, ciphertext }, &aad)
+                    .ok_or_else(|| Error::Corrupt(format!("the summary of revision {revision_id} does not decrypt")))?;
+                revisions.push(Revision {
+                    record_id,
+                    revision_id,
+                    number,
+                    saved_at,
+                    content,
+                    deleted,
+                    collection_id,
+                });
+                continue;
+            }
+            let Some(key) = self.key_for(collection, kind) else {
+                continue;
+            };
             let plaintext = crypto::decrypt(&key, &crypto::Sealed { nonce, ciphertext }, &aad)
                 .ok_or_else(|| Error::Corrupt(format!("revision {revision_id} does not decrypt")))?;
             revisions.push(Revision {
@@ -806,9 +865,15 @@ impl Vault {
             default_collection: parse_id(&default_collection)?,
             organization,
             roles: Vec::new(),
+            summaries: false,
         };
+        vault.summaries = vault.meta(summaries::META)?.is_some();
         vault.load_roles()?;
         vault.load_collections()?;
+        // A change-over that fails, as over a record that does not decrypt, is tried again at the
+        // next unlock; it does not keep anyone out. Until it is done, nobody can be given a role
+        // that reads without chemistry.
+        let _ = vault.change_to_summaries();
         Ok(vault)
     }
 
@@ -822,7 +887,7 @@ impl Vault {
         let mut statement = self.conn.prepare(
             "SELECT c.id, c.name, c.owner_id, g.role, g.enc, g.ciphertext
              FROM grants g JOIN collections c ON c.id = g.collection_id WHERE g.user_id = ?1
-             ORDER BY c.created_at",
+             ORDER BY c.created_at, c.rowid",
         )?;
         let rows = statement
             .query_map(params![self.user_id.to_string()], |row| {
@@ -841,10 +906,11 @@ impl Vault {
         for (id, name, owner, role, enc, ciphertext) in rows {
             let id = parse_id(&id)?;
             let role = parse_role(&role)?;
+            let held = self.held(role);
             let key = crypto::open_key(
                 &self.keys,
                 &crypto::SealedBox { enc, ciphertext },
-                &grant_info(&self.keyring.vault_id, &id, &self.user_id, role),
+                &grant_info(&self.keyring.vault_id, &id, &self.user_id, held),
             )
             .ok_or_else(|| Error::Corrupt("a collection key does not open".into()))?;
             collections.push(OpenCollection {
@@ -852,13 +918,14 @@ impl Vault {
                 name,
                 owner: owner.as_deref().map(parse_id).transpose()?,
                 role,
+                held,
                 key,
             });
         }
         if let Some(organization) = &self.organization {
             for collection in team::organization_collections(&self.conn, &self.keyring, organization)? {
                 match collections.iter_mut().find(|c| c.id == collection.id) {
-                    // An admin's own grant may be an operator's, which holds only the batch key.
+                    // An admin's own grant may hold only a batch or summary key.
                     Some(granted) => *granted = collection,
                     None => collections.push(collection),
                 }
@@ -880,6 +947,26 @@ impl Vault {
             return Err(Error::NotAllowed);
         }
         Ok(collection)
+    }
+
+    /// The key records of a kind are encrypted with in a collection, if this person may read
+    /// them. A recipe's own ciphertext needs the collection's key; its summary is read with
+    /// summary_key_for.
+    fn key_for(&self, collection: &OpenCollection, kind: Kind) -> Option<Key> {
+        match collection.held {
+            Held::Collection => Some(kind_key(&collection.key, kind, &collection.id, self.summaries)),
+            Held::Batch => (kind == Kind::Batch).then(|| collection.key.clone()),
+            Held::Summary => (kind == Kind::Firing).then(|| collection.key.clone()),
+        }
+    }
+
+    /// The key a collection's recipe summaries are under, if this person may read them.
+    fn summary_key_for(&self, collection: &OpenCollection) -> Option<Key> {
+        match collection.held {
+            Held::Collection => Some(summary_key(&collection.key, &collection.id)),
+            Held::Summary => Some(collection.key.clone()),
+            Held::Batch => None,
+        }
     }
 
     fn user(&self) -> &KeyringUser {
@@ -1172,13 +1259,13 @@ fn draft_aad_for(vault_id: &Uuid, user_id: &str, collection_id: &Uuid) -> Vec<u8
     format!("glaze-vault v1 draft vault {vault_id} user {user_id} collection {collection_id}").into_bytes()
 }
 
-/// What a grant's sealed key is bound to. A batch operator's grant holds the batch key, under
-/// other words, so it cannot be passed off as the collection's key.
-fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid, role: Role) -> Vec<u8> {
-    let what = if role == Role::Operator {
-        "batch-key"
-    } else {
-        "collection-key"
+/// What a grant's sealed key is bound to. A grant of the batch or summary key holds it under other
+/// words, so it cannot be passed off as the collection's key.
+fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid, held: Held) -> Vec<u8> {
+    let what = match held {
+        Held::Collection => "collection-key",
+        Held::Batch => "batch-key",
+        Held::Summary => "summary-key",
     };
     format!("glaze-vault v1 {what} vault {vault_id} collection {collection_id} user {user_id}").into_bytes()
 }
@@ -1190,6 +1277,27 @@ pub(crate) fn batch_key(collection_key: &Key, collection_id: &Uuid) -> Key {
         collection_key,
         format!("glaze-vault v1 batch-key collection {collection_id}").as_bytes(),
     )
+}
+
+/// A collection's recipe summaries, firings and their photos are encrypted with a key made from its
+/// key: a role that reads without chemistry is given it, and it does not lead back to the recipes'
+/// lines, the materials or the batch sheets.
+pub(crate) fn summary_key(collection_key: &Key, collection_id: &Uuid) -> Key {
+    crypto::narrower_key(
+        collection_key,
+        format!("glaze-vault v1 summary-key collection {collection_id}").as_bytes(),
+    )
+}
+
+/// What records of a kind in a collection are encrypted with, from the collection's key: batch
+/// sheets under the batch key, firings under the summary key once the vault keeps summaries, and
+/// everything else under the collection's.
+pub(crate) fn kind_key(collection_key: &Key, kind: Kind, collection_id: &Uuid, summaries: bool) -> Key {
+    match kind {
+        Kind::Batch => batch_key(collection_key, collection_id),
+        Kind::Firing if summaries => summary_key(collection_key, collection_id),
+        _ => collection_key.clone(),
+    }
 }
 
 /// Binds a revision's content to where it belongs, so ciphertext cannot be moved to another

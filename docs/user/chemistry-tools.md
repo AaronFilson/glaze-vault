@@ -62,6 +62,18 @@ that does.
 The fit uses Glazecalc's chemistry. It keeps the batch about its size, and leaves out a material it
 brings in but does not use.
 
+### Letting it choose materials
+
+Tick **Let it choose other materials too** before **Fit**, and it looks through your raw materials
+and frits and the standard ones for the fewest that bring the recipe near the target, up to the
+number under **New materials, at most** (3 unless you change it). It never brings in a colorant,
+a stain or a material with lead. Choosing takes a few seconds.
+
+The amounts then say **What it is for**: the share of each oxide a material supplies, such as
+*most of the B₂O₃*. Below the status, it names materials that could stand in for one it used, and
+any oxide of the target that nothing has. **Leave out** beside a material it brought in puts it
+under **Not to use**; **Fit** again to choose without it, and **(use again)** to take it back.
+
 ## Costs
 
 Open **Settings** › **Prices**. Choose the currency as you write it (`$`, `€`, `SEK`) and whether

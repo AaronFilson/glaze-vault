@@ -4,7 +4,7 @@
 //! moves with its firings and batch sheets, which the page names, since the core does not look
 //! inside what it keeps.
 
-use super::{Kind, MAX_BATCH, Vault, attachments, parse_id, revision_aad};
+use super::{Kind, MAX_BATCH, Vault, attachments, parse_id, revision_aad, summaries};
 use crate::crypto;
 use crate::error::{Error, Result};
 use rusqlite::{OptionalExtension, params};
@@ -31,11 +31,20 @@ impl Vault {
             if from == to {
                 continue;
             }
-            let old = self.editable(&from, kind)?.key_for(kind).ok_or(Error::NotAllowed)?;
-            let new = self.editable(&to, kind)?.key_for(kind).ok_or(Error::NotAllowed)?;
+            let (here, there) = (self.editable(&from, kind)?, self.editable(&to, kind)?);
+            let old = self.key_for(here, kind).ok_or(Error::NotAllowed)?;
+            let new = self.key_for(there, kind).ok_or(Error::NotAllowed)?;
+            // A recipe's summary moves with it (summaries.rs).
+            let summary_keys = match kind {
+                Kind::Recipe => Some((
+                    self.summary_key_for(here).ok_or(Error::NotAllowed)?,
+                    self.summary_key_for(there).ok_or(Error::NotAllowed)?,
+                )),
+                _ => None,
+            };
 
             let mut statement = tx.prepare(
-                "SELECT id, number, parent_id, deleted, nonce, ciphertext FROM revisions
+                "SELECT id, number, parent_id, deleted, nonce, ciphertext, summary_nonce, summary FROM revisions
                  WHERE record_id = ?1 AND kind = ?2",
             )?;
             let revisions = statement
@@ -47,11 +56,13 @@ impl Vault {
                         row.get::<_, bool>(3)?,
                         row.get::<_, Vec<u8>>(4)?,
                         row.get::<_, Vec<u8>>(5)?,
+                        row.get::<_, Option<Vec<u8>>>(6)?,
+                        row.get::<_, Option<Vec<u8>>>(7)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             drop(statement);
-            for (id, number, parent, deleted, nonce, ciphertext) in revisions {
+            for (id, number, parent, deleted, nonce, ciphertext, summary_nonce, summary) in revisions {
                 let revision_id = parse_id(&id)?;
                 let parent = parent.as_deref().map(parse_id).transpose()?;
                 let aad = |collection: &Uuid| {
@@ -72,6 +83,14 @@ impl Vault {
                     "UPDATE revisions SET collection_id = ?1, nonce = ?2, ciphertext = ?3 WHERE id = ?4",
                     params![to.to_string(), sealed.nonce, sealed.ciphertext, id],
                 )?;
+                if let (Some((old, new)), Some(nonce), Some(ciphertext)) = (&summary_keys, summary_nonce, summary) {
+                    let sealed =
+                        summaries::reseal(old, new, &crypto::Sealed { nonce, ciphertext }, &aad(&from), &aad(&to))?;
+                    tx.execute(
+                        "UPDATE revisions SET summary_nonce = ?1, summary = ?2 WHERE id = ?3",
+                        params![sealed.nonce, sealed.ciphertext, id],
+                    )?;
+                }
             }
 
             // Attachments, one at a time: there may be many photos.
@@ -111,6 +130,7 @@ impl Vault {
 mod tests {
     use super::*;
     use crate::access::Role;
+    use crate::vault::Capabilities;
     use serde_json::json;
 
     const PASSWORD: &str = "cone six oxidation";
@@ -215,5 +235,43 @@ mod tests {
             as_ben.move_records(&[(Kind::Recipe, Uuid::new_v4())], shared),
             Err(Error::NotFound)
         ));
+    }
+
+    #[test]
+    fn a_material_moves_for_someone_who_may_change_materials_in_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ana, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        ana.grow_into_team("Ana").unwrap();
+        let shared = ana.collections().iter().find(|c| c.owner.is_none()).unwrap().id;
+        let production = ana.create_collection("Production").unwrap().id;
+        let material = ana
+            .save_in(Kind::Material, shared, &json!({ "name": "Grolleg" }))
+            .unwrap();
+        let recipes_only = ana
+            .create_role("Recipes only", &[Kind::Recipe], Capabilities::BUILT_IN)
+            .unwrap();
+        let ben = ana
+            .add_person(
+                "Ben",
+                ONE_TIME,
+                &[
+                    (shared, Role::Custom(recipes_only.id)),
+                    (production, Role::Custom(recipes_only.id)),
+                ],
+            )
+            .unwrap();
+        let mut as_ben = Vault::unlock_as(dir.path(), Some(ben.id), ONE_TIME).unwrap();
+        as_ben.set_own_password("bens own password").unwrap();
+        assert!(matches!(
+            as_ben.move_records(&[(Kind::Material, material.record_id)], production),
+            Err(Error::NotAllowed)
+        ));
+        drop(as_ben);
+
+        ana.move_records(&[(Kind::Material, material.record_id)], production)
+            .unwrap();
+        let head = &ana.heads(Kind::Material).unwrap()[0];
+        assert_eq!(head.collection_id, production);
+        assert_eq!(head.content["name"], "Grolleg");
     }
 }

@@ -52,12 +52,18 @@ const kaolin: MaterialHead = {
   }
 };
 
+const grolleg: MaterialHead = {
+  ...spar,
+  recordId: 'm-3',
+  content: { ...spar.content, name: 'Grolleg', class: 'kaolin', sheet: { cone: '10', absorption: '12', density: '2.6' } }
+};
+
 describe('Glaze Vault exports', () => {
   it('read back from JSON', () => {
-    const plan = readImport('export.json', exportJson([shino], [spar, kaolin], new Date(), '0.1.0'));
+    const plan = readImport('export.json', exportJson([shino], [spar, kaolin, grolleg], new Date(), '0.1.0'));
     expect(plan.format).toBe('Glaze Vault export (JSON)');
     expect(plan.recipes).toEqual([shino.content]);
-    expect(plan.materials).toEqual([spar.content, kaolin.content]);
+    expect(plan.materials).toEqual([spar.content, kaolin.content, grolleg.content]);
   });
 
   it('read back from CSV', () => {

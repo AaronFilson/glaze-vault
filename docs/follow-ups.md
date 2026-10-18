@@ -27,22 +27,17 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Teams ([ADR 12](adr/0012-teams-on-one-computer.md))
 
-- Capabilities that are not about changing a kind of record, such as exporting, or reading
-  recipes without their chemistry, for roles admins make (ADR 4).
-- Moving a material to another collection, as recipes move.
+- Managers rename their collections in the core, but the page has no field for it yet.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
 
-## Firing log ([ADR 14](adr/0014-firing-log-and-photos.md))
+## Clay bodies
 
-- The solids' density for the water a gravity takes is 2.6 g/cm³ for every recipe; a recipe's own,
-  worked out from its materials, would be closer.
-
-## Chemistry tools ([ADR 15](adr/0015-chemistry-tools.md))
-
-- Fitting could choose materials itself from the whole library, with Glazecalc's
-  `selectMaterials`, rather than only those the recipe has and those added to try.
+- The ranked list at the end of [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault):
+  first a body class and forming method on recipes, absorption and shrinkage targets as a band on
+  the vitrification chart, the lot of each clay on a firing, and body-aware blends with the
+  plastic to non-plastic ratio.
 
 ## Engineering
 

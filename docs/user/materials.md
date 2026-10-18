@@ -43,6 +43,21 @@ on ignition are worked out for you.
 
 Switching **Given as** back keeps both: the one it is set to is the one used.
 
+## Data sheets
+
+For clays most of all, a supplier's data sheet says more than the analysis. Give a material a
+**Class**, such as ball clay, kaolin, feldspar or grog, and fill in any of the **Data sheet**
+values below it; all are optional:
+
+- **Fired at cone**, and the **Drying shrinkage**, **Firing shrinkage** and **Absorption** at it.
+- **Water of plasticity**, **Finer than 1 µm**, **Particle size** in the sheet's words (such as
+  *0.5% on 325 mesh*) and **Dry strength** with its unit.
+- **Density of the solids**, in g/cm³, which works out the water a slip takes at a
+  [specific gravity](recipes.md#details). With none, the class's typical density is used.
+
+The data sheet opens by itself for a clay, or once anything is in it. It goes with the material
+in Glaze Vault's JSON export.
+
 ## Colorants and stains with no analysis
 
 A commercial stain's makeup is often secret. Save it with no oxides: recipes can use it, it is
