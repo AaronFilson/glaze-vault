@@ -689,7 +689,7 @@ impl Vault {
     fn newest(&self, kind: Kind) -> Result<Vec<Revision>> {
         let revisions = self.read_revisions(
             "WHERE r.kind = ?1 AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)
-             ORDER BY r.created_at DESC",
+             ORDER BY r.created_at DESC, r.rowid DESC",
             params![kind.as_str()],
             kind,
         )?;
@@ -708,7 +708,7 @@ impl Vault {
     /// each has the content of the one before.
     pub fn history(&self, kind: Kind, record_id: Uuid) -> Result<Vec<Revision>> {
         let revisions = self.read_revisions(
-            "WHERE r.kind = ?1 AND r.record_id = ?2 AND r.deleted = 0 ORDER BY r.number DESC, r.created_at DESC",
+            "WHERE r.kind = ?1 AND r.record_id = ?2 AND r.deleted = 0 ORDER BY r.number DESC, r.created_at DESC, r.rowid DESC",
             params![kind.as_str(), record_id.to_string()],
             kind,
         )?;
@@ -887,7 +887,7 @@ impl Vault {
         let mut statement = self.conn.prepare(
             "SELECT c.id, c.name, c.owner_id, g.role, g.enc, g.ciphertext
              FROM grants g JOIN collections c ON c.id = g.collection_id WHERE g.user_id = ?1
-             ORDER BY c.created_at",
+             ORDER BY c.created_at, c.rowid",
         )?;
         let rows = statement
             .query_map(params![self.user_id.to_string()], |row| {

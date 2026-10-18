@@ -119,7 +119,7 @@ impl Vault {
         }
         let mut statement = self
             .conn
-            .prepare("SELECT user_id, collection_id, role FROM grants ORDER BY user_id")?;
+            .prepare("SELECT user_id, collection_id, role FROM grants ORDER BY user_id, rowid")?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
@@ -1052,7 +1052,7 @@ pub(super) fn organization_collections(
 ) -> Result<Vec<OpenCollection>> {
     let mut statement = conn.prepare(
         "SELECT c.id, c.name, c.owner_id, o.enc, o.ciphertext
-         FROM organization_grants o JOIN collections c ON c.id = o.collection_id ORDER BY c.created_at",
+         FROM organization_grants o JOIN collections c ON c.id = o.collection_id ORDER BY c.created_at, c.rowid",
     )?;
     let rows = statement
         .query_map([], |row| {

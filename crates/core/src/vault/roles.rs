@@ -124,7 +124,7 @@ impl Vault {
     pub(super) fn load_roles(&mut self) -> Result<()> {
         let mut statement = self
             .conn
-            .prepare("SELECT id, name, changes, may FROM roles ORDER BY created_at")?;
+            .prepare("SELECT id, name, changes, may FROM roles ORDER BY created_at, rowid")?;
         let rows = statement
             .query_map([], |row| {
                 Ok((
