@@ -29,11 +29,10 @@ describe('the analysis panel', () => {
   });
 
   it('shows what a body is made of, and warns a porcelain short of silica', () => {
-    const makeup = { plastic: 50, silica: 15, unknown: ['Local red'] };
+    const makeup = { plastic: 50, silica: 15, unknown: [] };
     render(<AnalysisPanel analysis={PORCELAIN} body makeup={makeup} bodyClass="porcelain" />);
     expect(screen.getByText('Plastic : non-plastic').nextElementSibling?.textContent).toBe('50 : 50');
     expect(screen.getByText('Added silica').nextElementSibling?.textContent).toBe('15.0%');
-    expect(screen.getByText(/Local red has no class, so it counts as not plastic/)).toBeTruthy();
     expect(screen.getByText(/less than about 20% added silica tend to craze glazes/)).toBeTruthy();
   });
 
@@ -44,5 +43,9 @@ describe('the analysis panel', () => {
     expect(screen.queryByText(/tend to craze glazes/)).toBeNull();
     rerender(<AnalysisPanel analysis={PORCELAIN} body makeup={{ plastic: 80, silica: 10, unknown: [] }} bodyClass="stoneware" />);
     expect(screen.queryByText(/tend to craze glazes/)).toBeNull();
+    // Nor while a material has no class, which may be its silica.
+    rerender(<AnalysisPanel analysis={PORCELAIN} body makeup={{ plastic: 50, silica: 0, unknown: ['My flint'] }} bodyClass="porcelain" />);
+    expect(screen.queryByText(/tend to craze glazes/)).toBeNull();
+    expect(screen.getByText(/My flint has no class, so it counts as not plastic/)).toBeTruthy();
   });
 });

@@ -255,14 +255,28 @@ export function tidyFiring(content: FiringContent): FiringContent {
     transparency: content.transparency,
     color: text(content.color),
     flaws: content.flaws?.length ? FLAWS.map((f) => f.value).filter((f) => content.flaws!.includes(f)) : undefined,
-    bar: hasReadings(content.bar) ? content.bar : undefined,
+    bar: hasReadings(content.bar) ? tidyBar(content.bar!) : undefined,
     slip: hasSlipReadings(content.slip) ? content.slip : undefined,
     lots: content.lots?.some((lot) => lot.trim()) ? trimEnd(content.lots.map((lot) => lot.trim())) : undefined,
     body: content.body?.name.trim() ? { recipe: content.body.recipe, name: content.body.name.trim() } : undefined,
-    fit: content.fit && (content.fit.result || content.fit.detail?.trim()) ? tidyFit(content.fit) : undefined
+    // A fit test says something once it is not the one the form starts on, or has a result.
+    fit:
+      content.fit && (content.fit.test !== 'iwct' || content.fit.result || content.fit.detail?.trim())
+        ? tidyFit(content.fit)
+        : undefined
   };
   for (const [key, value] of Object.entries(optional)) {
     if (value !== undefined) (tidy as unknown as Record<string, unknown>)[key] = value;
+  }
+  return tidy;
+}
+
+/** A bar's readings without the warping and disk ones left empty, which firings from before them
+ * do not have. */
+function tidyBar(bar: BarReadings): BarReadings {
+  const tidy: BarReadings = { ...bar };
+  for (const key of ['span', 'bow', 'sag', 'disk'] as const) {
+    if (!tidy[key]?.trim()) delete tidy[key];
   }
   return tidy;
 }
@@ -290,8 +304,10 @@ export interface Targets {
 /** The targets a recipe's details set, or null when it sets none. */
 export function targetsOf(details: RecipeDetails): Targets | null {
   const range = (min?: string, max?: string) => {
-    const [low, high] = [numberOf(min ?? ''), numberOf(max ?? '')];
+    let [low, high] = [numberOf(min ?? ''), numberOf(max ?? '')];
     if (low === null && high === null) return undefined;
+    // Typed the wrong way round, it is still a range.
+    if (low !== null && high !== null && low > high) [low, high] = [high, low];
     return { ...(low === null ? {} : { min: low }), ...(high === null ? {} : { max: high }) };
   };
   const targets: Targets = {};

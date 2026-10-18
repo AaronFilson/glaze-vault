@@ -56,7 +56,7 @@ export function AnalysisPanel({
           Materials.
         </p>
       )}
-      {body && makeup && bodyClass === 'porcelain' && makeup.silica < PORCELAIN_SILICA && (
+      {body && makeup && bodyClass === 'porcelain' && !makeup.unknown.length && makeup.silica < PORCELAIN_SILICA && (
         <p className="hint">
           Porcelains with less than about {PORCELAIN_SILICA}% added silica tend to craze glazes. Test glaze fit.
         </p>

@@ -402,10 +402,14 @@ function FiringEditor({
               value={draft.recipe ?? ''}
               onChange={(e) => {
                 const head = recipes.find((r) => r.recordId === e.target.value);
+                // Lots belong to a recipe's materials, and a body is not fired on a body.
+                const body = isBody(head?.content.type);
                 set({
                   recipe: head?.recordId ?? null,
                   recipeNumber: head?.number ?? null,
-                  recipeName: head?.content.name ?? ''
+                  recipeName: head?.content.name ?? '',
+                  lots: undefined,
+                  ...(body ? { body: undefined, fit: undefined } : {})
                 });
               }}
             >
@@ -475,7 +479,7 @@ function FiringEditor({
           ))}
         </fieldset>
 
-        <details className="bar" open={hasReadings(draft.bar) || isBody(recipe?.content.type)}>
+        <Fold open={hasReadings(draft.bar) || isBody(recipe?.content.type)}>
           <summary>Test bar and drying disk</summary>
           <p className="hint">
             Mark a plastic bar, then measure it dry and fired. Weigh it fired, after soaking in water, and, for porosity
@@ -563,10 +567,10 @@ function FiringEditor({
               />
             </div>
           </div>
-        </details>
+        </Fold>
 
         {lotRows > 0 && (
-          <details className="bar" open={lots.some((lot) => lot.trim()) || isBody(recipe?.content.type)}>
+          <Fold open={lots.some((lot) => lot.trim()) || isBody(recipe?.content.type)}>
             <summary>Material lots</summary>
             <p className="hint">
               The lot or bag of each material, clays most of all: a new bag can change a result.
@@ -574,7 +578,13 @@ function FiringEditor({
             <div className="details">
               {Array.from({ length: lotRows }, (_, i) => (
                 <div className="detail" key={i}>
-                  <label htmlFor={`lot-${i}`}>{lotNames[i] ?? `Material ${i + 1}`}</label>
+                  <label htmlFor={`lot-${i}`}>
+                    {lotNames[i] === undefined
+                      ? `Material ${i + 1}`
+                      : lotNames.indexOf(lotNames[i]) !== lotNames.lastIndexOf(lotNames[i])
+                        ? `${lotNames[i]}, line ${i + 1}`
+                        : lotNames[i]}
+                  </label>
                   <input
                     id={`lot-${i}`}
                     value={lots[i] ?? ''}
@@ -587,11 +597,11 @@ function FiringEditor({
                 </div>
               ))}
             </div>
-          </details>
+          </Fold>
         )}
 
         {(isGlaze || draft.body || draft.fit) && (
-          <details className="bar" open={!!draft.body || !!draft.fit}>
+          <Fold open={!!draft.body || !!draft.fit}>
             <summary>Glaze fit</summary>
             <p className="hint">
               The body this was fired on, and how a fit test went. The body’s firings list it too.
@@ -651,11 +661,10 @@ function FiringEditor({
                 />
               </div>
             </div>
-          </details>
+          </Fold>
         )}
 
-        <details
-          className="bar"
+        <Fold
           open={
             hasSlipReadings(draft.slip) ||
             isSlip(recipe?.content.type) ||
@@ -688,7 +697,7 @@ function FiringEditor({
               );
             })}
           </div>
-        </details>
+        </Fold>
 
         <label htmlFor="firing-notes">Notes</label>
         <textarea id="firing-notes" rows={4} value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />
@@ -761,6 +770,20 @@ function FiringEditor({
         </p>
       )}
     </>
+  );
+}
+
+/** A section that opens when what it holds asks for it, and stays as the person leaves it:
+ * clearing the field being typed in does not fold it shut. */
+function Fold({ open, children }: { open: boolean; children: React.ReactNode }) {
+  const [shown, setShown] = useState(open);
+  useEffect(() => {
+    if (open) setShown(true);
+  }, [open]);
+  return (
+    <details className="bar" open={shown} onToggle={(e) => setShown((e.target as HTMLDetailsElement).open)}>
+      {children}
+    </details>
   );
 }
 

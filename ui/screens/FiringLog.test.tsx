@@ -121,6 +121,23 @@ describe('glaze fit', () => {
     expect(saved[0].fit).toEqual({ test: 'iwct', result: 'crazed', detail: 'at 325 °F' });
   });
 
+  it('stays open while its field is cleared, and is cleared for another recipe', async () => {
+    fakeCore();
+    render(<Log firings={[]} start={{ current: null, draft: newFiring(null, new Date(2026, 9, 18)) }} />);
+    fireEvent.change(screen.getByLabelText('Recipe'), { target: { value: 'g' } });
+    const fold = screen.getByText('Glaze fit').closest('details')!;
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'C' } });
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: '' } });
+    expect(fold.open).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Custer Spar'), { target: { value: 'bag 9' } });
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'Cone 6 porcelain' } });
+    fireEvent.change(screen.getByLabelText('Recipe'), { target: { value: 'p' } });
+    // The glaze's lot is not the porcelain's first material's, and a body is not fired on a body.
+    expect((screen.getByLabelText('Grolleg China Clay') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByText('Glaze fit')).toBeNull();
+  });
+
   it('is in the body’s firings too, beside its own, under its targets', () => {
     fakeCore();
     const bar = (fired: string, soaked: string) => ({ ...EMPTY_BAR, dry: '94', fired, firedWeight: '50', soakedWeight: soaked });

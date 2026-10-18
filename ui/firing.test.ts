@@ -122,6 +122,12 @@ describe('a body’s tests', () => {
     expect(barResults({ ...EMPTY_BAR, bow: '1' }).deformation).toBeUndefined();
   });
 
+  it('leave out warping fields left empty, so a firing from before them is unchanged', () => {
+    const before = { ...fired, bar: { ...EMPTY_BAR, dry: '94' } };
+    expect(sameFiring(before, { ...before, bar: { ...before.bar, span: '', sag: ' ' } })).toBe(true);
+    expect(tidyFiring({ ...before, bar: { ...before.bar, span: '', sag: '3' } }).bar).toEqual({ ...before.bar, sag: '3' });
+  });
+
   it('keep lots by the order of the fired revision’s materials, without empty ones at the end', () => {
     expect(lotMaterials([{ material: ' Redart ', amount: '50' }, { material: '', amount: '' }, { material: 'Grog', amount: '10' }])).toEqual([
       'Redart',
@@ -139,7 +145,9 @@ describe('a body’s tests', () => {
     });
     expect(tidy.body).toEqual({ recipe: 'porcelain', name: 'Cone 6 porcelain' });
     expect(tidy.fit).toEqual({ test: 'iwct', result: 'crazed', detail: 'at 325 °F' });
-    expect(tidyFiring({ ...fired, fit: { test: 'bwiw' } }).fit).toBeUndefined();
+    expect(tidyFiring({ ...fired, fit: { test: 'iwct' } }).fit).toBeUndefined();
+    // Choosing another test says something already.
+    expect(tidyFiring({ ...fired, fit: { test: 'bwiw' } }).fit).toEqual({ test: 'bwiw' });
     expect(tidyFiring({ ...fired, body: { recipe: null, name: '  ' } }).body).toBeUndefined();
     expect(fitSummary(tidy.fit)).toBe('IWCT: crazed, at 325 °F');
     expect(fitSummary({ test: 'pressure', result: 'passed' })).toBe('Pressure cooker or autoclave: passed');
@@ -162,6 +170,7 @@ describe('a body’s targets', () => {
       shrinkage: { min: 11, max: 13 }
     });
     expect(targetsOf({ absorptionMin: 'lots' })).toBeNull();
+    expect(targetsOf({ shrinkageMin: '13', shrinkageMax: '11' })).toEqual({ shrinkage: { min: 11, max: 13 } });
   });
 
   it('say whether a cone is inside them all, or that it was not measured', () => {

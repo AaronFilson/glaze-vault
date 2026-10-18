@@ -36,6 +36,7 @@ export function VitrificationChart({ points, targets = null }: { points: Vitrifi
   const values = [
     ...points.flatMap((p) => [p.absorption, p.shrinkage]),
     targets?.absorption?.max,
+    targets?.absorption?.min,
     targets?.shrinkage?.max,
     targets?.shrinkage?.min
   ].filter((v): v is number => v !== undefined);
