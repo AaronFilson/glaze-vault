@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RecipeHead } from '../api';
 import { STANDARD_LIBRARY, type RecipeContent } from '../chemistry';
 import { Blend } from './Blend';
-
-afterEach(cleanup);
 
 const head = (id: string, name: string, lines: [string, string][]): RecipeHead => ({
   recordId: id,

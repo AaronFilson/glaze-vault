@@ -87,6 +87,14 @@ the recovery key ([ADR 11](docs/adr/0011-end-to-end-tests.md)). Scenarios are in
 
 `cargo fmt` and `cargo clippy --workspace --all-targets` keep the Rust tidy.
 
+Every test starts clean, so tests can run side by side. After each UI test, `ui/testSetup.ts`
+unmounts what it rendered and clears the fake Rust commands, local storage, fake clocks and
+stubs. Tests of plain functions share workers. Each screen's test file gets its own page, so a
+long one is better split by what it covers: the Recipes screen's tests are in four files that
+share `ui/screens/recipesTestKit.tsx`. Each Rust test makes its vaults in temporary folders.
+Under `cargo test`, new passwords use the lightest Argon2id settings, and the dependencies that
+encrypt and store data are built optimized, as they are for `tauri dev`.
+
 ## CI and releases
 
 Every push runs the checks above on macOS, Windows and Linux, and builds unsigned installers for
