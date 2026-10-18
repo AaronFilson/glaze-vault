@@ -2,8 +2,8 @@
 // fired, what came out, a fired bar's measurements and photos. What a firing shows is worked out
 // here from what was measured; only the measurements are kept.
 import type { Revision } from './api';
-import { amountOf } from './chemistry';
-import { coneNumber, type Atmosphere, type Surface, type Transparency } from './recipeFields';
+import { amountOf, numberOf, type RecipeLine } from './chemistry';
+import { coneNumber, type Atmosphere, type RecipeDetails, type Surface, type Transparency } from './recipeFields';
 import { hasSlipReadings, type SlipReadings } from './slip';
 
 export const FLAWS = [
@@ -27,7 +27,8 @@ export interface Photo {
 }
 
 /** Readings from a test bar, as typed: lengths in mm between marks, weights in grams. The
- * suspended weight is optional, for porosity and density. */
+ * suspended weight is optional, for porosity and density. A bar fired spanned between two supports
+ * shows warping: its bow when dry and its sag fired, in mm. A drying disk's cracks go with them. */
 export interface BarReadings {
   mark: string;
   dry: string;
@@ -35,6 +36,41 @@ export interface BarReadings {
   firedWeight: string;
   soakedWeight: string;
   suspendedWeight: string;
+  span?: string;
+  bow?: string;
+  sag?: string;
+  /** The drying disk's crack code, or its cracks in words. */
+  disk?: string;
+}
+
+/** Tests of how a glaze fits the body it was fired on (docs/research/clay-body-formulation.md). */
+export const FIT_TESTS = [
+  { value: 'iwct', label: '300 °F to ice water (IWCT)' },
+  { value: 'bwiw', label: 'Boiling to ice water (BWIW)' },
+  { value: 'pressure', label: 'Pressure cooker or autoclave' },
+  { value: 'other', label: 'Another test' }
+] as const;
+
+export const FIT_RESULTS = [
+  { value: 'passed', label: 'Passed' },
+  { value: 'crazed', label: 'Crazed' },
+  { value: 'shivered', label: 'Shivered' }
+] as const;
+
+export type FitTestKind = (typeof FIT_TESTS)[number]['value'];
+export type FitResult = (typeof FIT_RESULTS)[number]['value'];
+
+export interface FitTest {
+  test: FitTestKind;
+  result?: FitResult;
+  /** How it was done, as typed: "at 325 °F", "3 cycles". */
+  detail?: string;
+}
+
+/** The body a glaze was fired on: one of the recipes, or a clay by its name. */
+export interface FiredOn {
+  recipe: string | null;
+  name: string;
 }
 
 /** What the core keeps for each revision of a firing. */
@@ -60,6 +96,12 @@ export interface FiringContent {
   bar?: BarReadings;
   /** The slip or glaze as it was applied. */
   slip?: SlipReadings;
+  /** The lot or bag of each material of the revision fired, in the order of its materials
+   * (lotMaterials), so a role that reads firings without chemistry sees no material names. */
+  lots?: string[];
+  /** For a glaze: the body it was fired on, and how it fit. */
+  body?: FiredOn;
+  fit?: FitTest;
   notes: string;
   photos: Photo[];
 }
@@ -99,6 +141,8 @@ export interface BarResults {
   porosity?: number;
   /** Bulk density, g/cm³; needs the suspended weight. */
   density?: number;
+  /** Dry bow plus fired sag, mm; needs the sag. */
+  deformation?: number;
 }
 
 export function barResults(bar: BarReadings | undefined): BarResults {
@@ -118,12 +162,36 @@ export function barResults(bar: BarReadings | undefined): BarResults {
     results.porosity = ((soaked - weight) / (soaked - suspended)) * 100;
     results.density = weight / (soaked - suspended);
   }
+  const [bow, sag] = [numberOf(bar.bow ?? ''), numberOf(bar.sag ?? '')];
+  if (sag !== null && sag >= 0) results.deformation = sag + (bow !== null && bow >= 0 ? bow : 0);
   return results;
 }
 
 /** Whether a firing has any bar readings beyond the default mark length. */
 export function hasReadings(bar: BarReadings | undefined): boolean {
-  return !!bar && Object.entries(bar).some(([key, value]) => value.trim() && !(key === 'mark' && value.trim() === '100'));
+  return (
+    !!bar && Object.entries(bar).some(([key, value]) => value?.trim() && !(key === 'mark' && value.trim() === '100'))
+  );
+}
+
+/** The materials a firing's lots are for: the fired revision's lines that name one, in order. */
+export function lotMaterials(lines: RecipeLine[]): string[] {
+  return lines.map((line) => line.material.trim()).filter(Boolean);
+}
+
+/** A fit test in a line: "IWCT: crazed, at 325 °F". */
+export function fitSummary(fit: FitTest | undefined): string {
+  if (!fit) return '';
+  const test = FIT_TESTS.find((t) => t.value === fit.test);
+  const short = test?.value === 'iwct' ? 'IWCT' : test?.value === 'bwiw' ? 'BWIW' : (test?.label ?? '');
+  const result = FIT_RESULTS.find((r) => r.value === fit.result)?.label.toLowerCase();
+  return [short, [result, fit.detail?.trim()].filter(Boolean).join(', ')].filter(Boolean).join(': ');
+}
+
+/** Whether a firing is of a recipe, or of a glaze fired on it, so a body's firings include its
+ * glaze fit tests. */
+export function firingOf(content: FiringContent, recipe: string): boolean {
+  return content.recipe === recipe || content.body?.recipe === recipe;
 }
 
 /** A firing in a line: "Cone 10 · Reduction · 2026-10-16". */
@@ -147,6 +215,10 @@ export function firingMatches(content: FiringContent, search: string): boolean {
     content.color,
     ...(content.flaws ?? []),
     content.slip?.gel,
+    ...(content.lots ?? []),
+    content.body?.name,
+    fitSummary(content.fit),
+    content.bar?.disk,
     content.notes,
     ...content.photos.map((photo) => photo.caption)
   ]
@@ -184,12 +256,67 @@ export function tidyFiring(content: FiringContent): FiringContent {
     color: text(content.color),
     flaws: content.flaws?.length ? FLAWS.map((f) => f.value).filter((f) => content.flaws!.includes(f)) : undefined,
     bar: hasReadings(content.bar) ? content.bar : undefined,
-    slip: hasSlipReadings(content.slip) ? content.slip : undefined
+    slip: hasSlipReadings(content.slip) ? content.slip : undefined,
+    lots: content.lots?.some((lot) => lot.trim()) ? trimEnd(content.lots.map((lot) => lot.trim())) : undefined,
+    body: content.body?.name.trim() ? { recipe: content.body.recipe, name: content.body.name.trim() } : undefined,
+    fit: content.fit && (content.fit.result || content.fit.detail?.trim()) ? tidyFit(content.fit) : undefined
   };
   for (const [key, value] of Object.entries(optional)) {
     if (value !== undefined) (tidy as unknown as Record<string, unknown>)[key] = value;
   }
   return tidy;
+}
+
+/** Lots without the empty ones at the end, which belong to no material. */
+function trimEnd(lots: string[]): string[] {
+  let end = lots.length;
+  while (end > 0 && !lots[end - 1]) end -= 1;
+  return lots.slice(0, end);
+}
+
+function tidyFit(fit: FitTest): FitTest {
+  const tidy: FitTest = { test: fit.test };
+  if (fit.result) tidy.result = fit.result;
+  if (fit.detail?.trim()) tidy.detail = fit.detail.trim();
+  return tidy;
+}
+
+/** A body's targets, as numbers: absorption and total shrinkage, each with an open end or none. */
+export interface Targets {
+  absorption?: { min?: number; max?: number };
+  shrinkage?: { min?: number; max?: number };
+}
+
+/** The targets a recipe's details set, or null when it sets none. */
+export function targetsOf(details: RecipeDetails): Targets | null {
+  const range = (min?: string, max?: string) => {
+    const [low, high] = [numberOf(min ?? ''), numberOf(max ?? '')];
+    if (low === null && high === null) return undefined;
+    return { ...(low === null ? {} : { min: low }), ...(high === null ? {} : { max: high }) };
+  };
+  const targets: Targets = {};
+  const absorption = range(details.absorptionMin, details.absorptionMax);
+  const shrinkage = range(details.shrinkageMin, details.shrinkageMax);
+  if (absorption) targets.absorption = absorption;
+  if (shrinkage) targets.shrinkage = shrinkage;
+  return absorption || shrinkage ? targets : null;
+}
+
+const within = (value: number, range: { min?: number; max?: number }) =>
+  (range.min === undefined || value >= range.min) && (range.max === undefined || value <= range.max);
+
+/** Whether a cone's averages are inside every target set, or null when one of them was not
+ * measured there. */
+export function insideTargets(point: VitrificationPoint, targets: Targets): boolean | null {
+  let inside = true;
+  for (const key of ['absorption', 'shrinkage'] as const) {
+    const range = targets[key];
+    if (!range) continue;
+    const value = point[key];
+    if (value === undefined) return null;
+    inside &&= within(value, range);
+  }
+  return inside;
 }
 
 /** One cone on a vitrification chart: the average of the firings at that cone that measured each. */

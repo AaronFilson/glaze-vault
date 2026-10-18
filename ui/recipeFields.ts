@@ -1,4 +1,5 @@
-// A recipe's optional details (type, firing, surface, colour, tags, a slip's targets), and finding and sorting
+// A recipe's optional details (type, firing, surface, colour, tags, a slip's targets, a body's class,
+// forming, targets and water), and finding and sorting
 // recipes by them. Every field may be missing: recipes saved before they existed have none, and
 // nobody has to fill them in.
 import type { RecipeHead } from './api';
@@ -8,6 +9,18 @@ export type RecipeType = 'glaze' | 'clay body' | 'slip' | 'engobe' | 'casting sl
 export type Atmosphere = 'oxidation' | 'neutral' | 'reduction' | 'salt or soda' | 'wood' | 'raku';
 export type Surface = 'glossy' | 'semi-gloss' | 'satin' | 'matte' | 'dry';
 export type Transparency = 'transparent' | 'translucent' | 'semi-opaque' | 'opaque';
+/** What kind of body (docs/research/clay-body-formulation.md, section 4). */
+export type BodyClass =
+  | 'terra cotta'
+  | 'white earthenware'
+  | 'stoneware'
+  | 'porcelain'
+  | 'flameware'
+  | 'sculpture or raku'
+  | 'paper clay';
+export type Forming = 'throwing' | 'handbuilding' | 'casting' | 'pressing' | 'jiggering' | 'extruding' | 'sculpture';
+/** What a water figure is a share of: 100 g of the dry materials, or the wet clay. */
+export type WaterBasis = 'dry' | 'wet';
 
 /** The details, as RecipeContent holds them. */
 export interface RecipeDetails {
@@ -22,6 +35,17 @@ export interface RecipeDetails {
   /** For a slip or glaze as mixed: the specific gravity aimed for, and Ford cup #4 seconds. */
   gravity?: string;
   viscosity?: string;
+  /** For a body: its class and how it is formed. */
+  bodyClass?: BodyClass;
+  forming?: Forming;
+  /** For a body: what its fired bars aim for at its cone, in percent. Either end may be open. */
+  absorptionMin?: string;
+  absorptionMax?: string;
+  shrinkageMin?: string;
+  shrinkageMax?: string;
+  /** For a body: the water that makes it workable, and what it is a share of (dry unless said). */
+  water?: string;
+  waterBasis?: WaterBasis;
 }
 
 const option = <Value extends string>(value: Value, label: string, ...also: string[]) => ({ value, label, also });
@@ -59,6 +83,38 @@ export const TRANSPARENCIES = [
   option<Transparency>('opaque', 'Opaque')
 ];
 
+export const BODY_CLASSES = [
+  option<BodyClass>('terra cotta', 'Terra cotta or red earthenware', 'terracotta', 'red earthenware', 'earthenware'),
+  option<BodyClass>('white earthenware', 'White earthenware', 'whiteware', 'talc body'),
+  option<BodyClass>('stoneware', 'Stoneware'),
+  option<BodyClass>('porcelain', 'Porcelain'),
+  option<BodyClass>('flameware', 'Flameware', 'ovenware'),
+  option<BodyClass>('sculpture or raku', 'Sculpture or raku', 'sculpture', 'raku'),
+  option<BodyClass>('paper clay', 'Paper clay', 'paperclay')
+];
+
+export const FORMINGS = [
+  option<Forming>('throwing', 'Throwing', 'thrown', 'wheel'),
+  option<Forming>('handbuilding', 'Handbuilding', 'hand building', 'handbuilt'),
+  option<Forming>('casting', 'Slip casting', 'casting', 'cast'),
+  option<Forming>('pressing', 'Pressing', 'press molding', 'press moulding'),
+  option<Forming>('jiggering', 'Jiggering or jollying', 'jigger', 'jolly'),
+  option<Forming>('extruding', 'Extruding', 'extrusion'),
+  option<Forming>('sculpture', 'Sculpture', 'sculpting')
+];
+
+export const WATER_BASES: { value: WaterBasis; label: string }[] = [
+  { value: 'dry', label: 'g per 100 g dry' },
+  { value: 'wet', label: '% of the wet clay' }
+];
+
+/** Recipes that are bodies to form, which have a class, a forming method and targets. */
+const FORMED: RecipeType[] = ['clay body', 'casting slip'];
+
+export function isFormed(type: RecipeType | undefined): boolean {
+  return !!type && FORMED.includes(type);
+}
+
 /** The option a piece of text names, ignoring case and spacing, as other programs write them. */
 export function optionNamed<Value extends string>(
   options: { value: Value; label: string; also: string[] }[],
@@ -94,6 +150,13 @@ export function details(content: RecipeDetails): RecipeDetails {
   if (content.tags?.length) kept.tags = content.tags;
   if (content.gravity?.trim()) kept.gravity = content.gravity.trim();
   if (content.viscosity?.trim()) kept.viscosity = content.viscosity.trim();
+  if (content.bodyClass) kept.bodyClass = content.bodyClass;
+  if (content.forming) kept.forming = content.forming;
+  for (const key of ['absorptionMin', 'absorptionMax', 'shrinkageMin', 'shrinkageMax', 'water'] as const) {
+    if (content[key]?.trim()) kept[key] = content[key]!.trim();
+  }
+  // The basis says what the water is a share of, so it goes with a water figure.
+  if (kept.water && content.waterBasis === 'wet') kept.waterBasis = 'wet';
   return kept;
 }
 
@@ -113,8 +176,32 @@ function orderedDetails(content: RecipeDetails) {
     kept.color,
     kept.tags ?? [],
     kept.gravity,
-    kept.viscosity
+    kept.viscosity,
+    kept.bodyClass,
+    kept.forming,
+    kept.absorptionMin,
+    kept.absorptionMax,
+    kept.shrinkageMin,
+    kept.shrinkageMax,
+    kept.water,
+    kept.waterBasis
   ];
+}
+
+/** "0–2%", "at most 2%", "at least 11%", or nothing. */
+export function rangeText(min?: string, max?: string): string {
+  if (min && max) return `${min}–${max}%`;
+  if (max) return `at most ${max}%`;
+  if (min) return `at least ${min}%`;
+  return '';
+}
+
+/** A body's water, as given: "26 g per 100 g dry" or "21% of the wet clay". */
+export function waterText(content: RecipeDetails): string {
+  if (!content.water?.trim()) return '';
+  return content.waterBasis === 'wet'
+    ? `${content.water.trim()}% of the wet clay`
+    : `${content.water.trim()} g per 100 g dry`;
 }
 
 /** The details in a line of text, for printing and comparing: "Glaze · cone 6 · oxidation · …". */
@@ -123,14 +210,21 @@ export function describeDetails(content: RecipeDetails): string {
   const look = [labelOf(SURFACES, kept.surface), labelOf(TRANSPARENCIES, kept.transparency).toLowerCase()]
     .filter(Boolean)
     .join(', ');
+  const absorption = rangeText(kept.absorptionMin, kept.absorptionMax);
+  const shrinkage = rangeText(kept.shrinkageMin, kept.shrinkageMax);
   return [
     labelOf(RECIPE_TYPES, kept.type),
+    labelOf(BODY_CLASSES, kept.bodyClass),
+    labelOf(FORMINGS, kept.forming).toLowerCase(),
     kept.cone && `Cone ${kept.cone}`,
     labelOf(ATMOSPHERES, kept.atmosphere),
     look,
     kept.color,
     kept.gravity && `SG ${kept.gravity}`,
-    kept.viscosity && `Ford cup ${kept.viscosity} s`
+    kept.viscosity && `Ford cup ${kept.viscosity} s`,
+    absorption && `absorption ${absorption}`,
+    shrinkage && `shrinkage ${shrinkage}`,
+    kept.water && `water ${waterText(kept)}`
   ]
     .filter(Boolean)
     .join(' · ');

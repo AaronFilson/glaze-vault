@@ -27,4 +27,22 @@ describe('the analysis panel', () => {
     // The unity formula is still there, folded away.
     expect(screen.getByText('Unity formula', { selector: 'summary' })).toBeTruthy();
   });
+
+  it('shows what a body is made of, and warns a porcelain short of silica', () => {
+    const makeup = { plastic: 50, silica: 15, unknown: ['Local red'] };
+    render(<AnalysisPanel analysis={PORCELAIN} body makeup={makeup} bodyClass="porcelain" />);
+    expect(screen.getByText('Plastic : non-plastic').nextElementSibling?.textContent).toBe('50 : 50');
+    expect(screen.getByText('Added silica').nextElementSibling?.textContent).toBe('15.0%');
+    expect(screen.getByText(/Local red has no class, so it counts as not plastic/)).toBeTruthy();
+    expect(screen.getByText(/less than about 20% added silica tend to craze glazes/)).toBeTruthy();
+  });
+
+  it('does not warn a porcelain with silica enough, or a stoneware', () => {
+    const { rerender } = render(
+      <AnalysisPanel analysis={PORCELAIN} body makeup={{ plastic: 50, silica: 25, unknown: [] }} bodyClass="porcelain" />
+    );
+    expect(screen.queryByText(/tend to craze glazes/)).toBeNull();
+    rerender(<AnalysisPanel analysis={PORCELAIN} body makeup={{ plastic: 80, silica: 10, unknown: [] }} bodyClass="stoneware" />);
+    expect(screen.queryByText(/tend to craze glazes/)).toBeNull();
+  });
 });

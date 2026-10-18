@@ -1,11 +1,23 @@
-import { bodyChemistry } from '../body';
+import { bodyChemistry, PORCELAIN_SILICA, type BodyMakeup } from '../body';
 import { GROUP_TITLES, oxideLabel, oxidesByGroup, type Analysis } from '../chemistry';
+import type { BodyClass } from '../recipeFields';
 
 /**
- * The unity formula and what follows from it, or for a clay body its oxide percentages and a
- * formula with alumina as one. Used on screen and on the printed recipe.
+ * The unity formula and what follows from it, or for a clay body its oxide percentages, a formula
+ * with alumina as one, and what its materials are: plastic or not, and added silica. Used on
+ * screen and on the printed recipe.
  */
-export function AnalysisPanel({ analysis, body = false }: { analysis: Analysis; body?: boolean }) {
+export function AnalysisPanel({
+  analysis,
+  body = false,
+  makeup = null,
+  bodyClass
+}: {
+  analysis: Analysis;
+  body?: boolean;
+  makeup?: BodyMakeup | null;
+  bodyClass?: BodyClass;
+}) {
   if (!analysis) {
     return <p className="hint">Add materials and amounts to see {body ? 'the chemistry' : 'the unity formula'}.</p>;
   }
@@ -21,7 +33,7 @@ export function AnalysisPanel({ analysis, body = false }: { analysis: Analysis; 
             <dd>{result.siAlRatio.toFixed(2)}</dd>
           </>
         )}
-        {body && <BodyFacts analysis={analysis} />}
+        {body && <BodyFacts analysis={analysis} makeup={makeup} />}
         {result.expansion !== null && (
           <>
             <dt>Expansion</dt>
@@ -35,6 +47,18 @@ export function AnalysisPanel({ analysis, body = false }: { analysis: Analysis; 
         <p className="hint">
           The expansion counts every oxide as glass. A body keeps some of its silica as quartz, and may grow cristobalite,
           which expand far more, so its real expansion is higher: compare bodies with it, but test glaze fit.
+        </p>
+      )}
+      {body && makeup && makeup.unknown.length > 0 && (
+        <p className="hint">
+          {listOf(makeup.unknown)} {makeup.unknown.length > 1 ? 'have' : 'has'} no class, so{' '}
+          {makeup.unknown.length > 1 ? 'they count' : 'it counts'} as not plastic. Give your materials a class under
+          Materials.
+        </p>
+      )}
+      {body && makeup && bodyClass === 'porcelain' && makeup.silica < PORCELAIN_SILICA && (
+        <p className="hint">
+          Porcelains with less than about {PORCELAIN_SILICA}% added silica tend to craze glazes. Test glaze fit.
         </p>
       )}
       {analysis.noOxides.length > 0 && (
@@ -120,10 +144,20 @@ function BodyTables({ analysis }: { analysis: Calculated }) {
   );
 }
 
-function BodyFacts({ analysis }: { analysis: Calculated }) {
+function BodyFacts({ analysis, makeup }: { analysis: Calculated; makeup: BodyMakeup | null }) {
   const body = bodyChemistry(analysis.result);
   return (
     <>
+      {makeup && (
+        <>
+          <dt>Plastic : non-plastic</dt>
+          <dd>
+            {Math.round(makeup.plastic)} : {Math.round(100 - makeup.plastic)}
+          </dd>
+          <dt>Added silica</dt>
+          <dd>{makeup.silica.toFixed(1)}%</dd>
+        </>
+      )}
       <dt>KNaO</dt>
       <dd>{body.knaoMol.toFixed(1)} mol%</dd>
       <dt>All fluxes</dt>

@@ -1031,6 +1031,11 @@ and were not used.
 Ranked by how much each would help someone formulate a body. "Planned" means listed in
 [clay bodies](clay-bodies.md); several planned items are now built, which is noted.
 
+**Since built (2026-10-18):** 1 to 7, 10, the silica hint in 11, and 12. A firing's lots are
+kept by the order of the fired revision's materials, not by name, so a role that reads firings
+without chemistry learns no material names from them. Still to do: 8, 9, and the bar labels in
+4 ([follow-ups](../follow-ups.md#clay-bodies)).
+
 1. **Body class and forming method on a recipe.** Planned (recipe field 3), not built. It
    decides which targets and tests apply: a casting slip, a throwing porcelain and a raku body
    are judged differently.

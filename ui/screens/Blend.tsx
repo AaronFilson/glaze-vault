@@ -1,9 +1,11 @@
 // Blends, with each step's chemistry, to save a step as a recipe of its own or print the weights
 // for test batches: a line blend between two recipes, step by step, or a triaxial of three, over a
-// triangle of points.
+// triangle of points. A blend of bodies shows each step as a body: oxide percentages, a formula
+// with alumina as one, and what is plastic.
 import { useMemo, useState } from 'react';
 import type { RecipeHead } from '../api';
 import { baseOf, usableLines } from '../batch';
+import { bodyChemistry, bodyMakeup, isBody } from '../body';
 import { blendName, blendSteps, shareText, triaxialSteps, type BlendStep } from '../blend';
 import { amountOf, analyse, oxideLabel, OXIDES, type MaterialLibrary, type RecipeContent } from '../chemistry';
 
@@ -56,6 +58,9 @@ export function Blend({
   const materials = blend[0]?.lines.map((line) => line.material) ?? [];
   const additions = blend[0]?.lines.some((line) => line.addition) ?? false;
   const oxides = OXIDES.filter((oxide) => analyses.some((x) => (x?.result?.umf[oxide] ?? 0) > 0));
+  // Bodies blended with bodies are read as bodies, and a step saved from them is one too.
+  const bodies = ready && picked.every((r) => isBody(r?.content.type));
+  const type = bodies && new Set(picked.map((r) => r?.content.type)).size === 1 ? a?.content.type : undefined;
   const size = amountOf(testSize);
   const names = blend.map((step) => blendName(recipeNames, step.shares));
   /** A step as its column shows it: "75 : 25" in a line blend, its number in a triaxial. */
@@ -71,7 +76,7 @@ export function Blend({
     setError('');
     try {
       const lines = blend[index].lines.filter((line) => Number(line.amount) > 0);
-      await onSave({ name: names[index], lines, notes: `A ${title.toLowerCase()} of ${of}.` });
+      await onSave({ name: names[index], lines, notes: `A ${title.toLowerCase()} of ${of}.`, ...(type ? { type } : {}) });
       setSaved((list) => [...list, names[index]]);
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -196,39 +201,43 @@ export function Blend({
                 </tbody>
               </table>
             </div>
-            <div className="table-scroll">
-              <table className="compare-table blend">
-                <caption>Unity formula</caption>
-                <tbody>
-                  {oxides.map((oxide) => (
-                    <tr key={oxide}>
-                      <th scope="row">{oxideLabel(oxide)}</th>
+            {bodies ? (
+              <BodyBlendTables steps={blend} analyses={analyses} library={library} />
+            ) : (
+              <div className="table-scroll">
+                <table className="compare-table blend">
+                  <caption>Unity formula</caption>
+                  <tbody>
+                    {oxides.map((oxide) => (
+                      <tr key={oxide}>
+                        <th scope="row">{oxideLabel(oxide)}</th>
+                        {analyses.map((x, i) => (
+                          <td key={i} className="num">
+                            {x?.result ? (x.result.umf[oxide] ?? 0).toFixed(3) : '—'}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                    <tr className="fact">
+                      <th scope="row">SiO₂ : Al₂O₃</th>
                       {analyses.map((x, i) => (
                         <td key={i} className="num">
-                          {x?.result ? (x.result.umf[oxide] ?? 0).toFixed(3) : '—'}
+                          {x?.result?.siAlRatio?.toFixed(2) ?? '—'}
                         </td>
                       ))}
                     </tr>
-                  ))}
-                  <tr className="fact">
-                    <th scope="row">SiO₂ : Al₂O₃</th>
-                    {analyses.map((x, i) => (
-                      <td key={i} className="num">
-                        {x?.result?.siAlRatio?.toFixed(2) ?? '—'}
-                      </td>
-                    ))}
-                  </tr>
-                  <tr className="fact">
-                    <th scope="row">Expansion</th>
-                    {analyses.map((x, i) => (
-                      <td key={i} className="num">
-                        {x?.result?.expansion?.toFixed(2) ?? '—'}
-                      </td>
-                    ))}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+                    <tr className="fact">
+                      <th scope="row">Expansion</th>
+                      {analyses.map((x, i) => (
+                        <td key={i} className="num">
+                          {x?.result?.expansion?.toFixed(2) ?? '—'}
+                        </td>
+                      ))}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
             {canSave && (
               <div className="row wrap">
                 {blend.map((step, i) => (
@@ -305,6 +314,86 @@ export function Blend({
           </table>
         </section>
       )}
+    </>
+  );
+}
+
+/** Each step of a blend of bodies: its oxides as fired weight %, its formula with Al₂O₃ = 1, and
+ * how much of it is plastic clay and added silica. */
+function BodyBlendTables({
+  steps,
+  analyses,
+  library
+}: {
+  steps: BlendStep[];
+  analyses: ReturnType<typeof analyse>[];
+  library: MaterialLibrary;
+}) {
+  const chemistry = analyses.map((x) => (x?.result ? bodyChemistry(x.result) : null));
+  const makeups = steps.map((step) => bodyMakeup(step.lines, library.own));
+  const weighed = OXIDES.filter((oxide) => analyses.some((x) => (x?.result?.analysis[oxide] ?? 0) >= 0.005));
+  const formula = OXIDES.filter((oxide) => chemistry.some((c) => c?.alumina?.some(([o]) => o === oxide)));
+  const cell = (value: number | undefined | null, decimals: number) => (value == null ? '—' : value.toFixed(decimals));
+  return (
+    <>
+      <div className="table-scroll">
+        <table className="compare-table blend">
+          <caption>Oxides, fired weight %</caption>
+          <tbody>
+            {weighed.map((oxide) => (
+              <tr key={oxide}>
+                <th scope="row">{oxideLabel(oxide)}</th>
+                {analyses.map((x, i) => (
+                  <td key={i} className="num">
+                    {x?.result ? (x.result.analysis[oxide] ?? 0).toFixed(2) : '—'}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr className="fact">
+              <th scope="row">Plastic : non-plastic</th>
+              {makeups.map((m, i) => (
+                <td key={i} className="num">
+                  {m ? `${Math.round(m.plastic)} : ${Math.round(100 - m.plastic)}` : '—'}
+                </td>
+              ))}
+            </tr>
+            <tr className="fact">
+              <th scope="row">Added silica</th>
+              {makeups.map((m, i) => (
+                <td key={i} className="num">
+                  {m ? `${m.silica.toFixed(1)}%` : '—'}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div className="table-scroll">
+        <table className="compare-table blend">
+          <caption>Formula with Al₂O₃ = 1</caption>
+          <tbody>
+            {formula.map((oxide) => (
+              <tr key={oxide}>
+                <th scope="row">{oxideLabel(oxide)}</th>
+                {chemistry.map((c, i) => (
+                  <td key={i} className="num">
+                    {c?.alumina ? cell(c.alumina.find(([o]) => o === oxide)?.[1] ?? 0, 3) : '—'}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr className="fact">
+              <th scope="row">KNaO, mol%</th>
+              {chemistry.map((c, i) => (
+                <td key={i} className="num">
+                  {cell(c?.knaoMol, 1)}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }

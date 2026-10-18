@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { barResults, EMPTY_BAR, firingMatches, newFiring, sameFiring, tidyFiring, vitrification, type Firing } from './firing';
+import {
+  barResults,
+  EMPTY_BAR,
+  firingMatches,
+  firingOf,
+  fitSummary,
+  insideTargets,
+  lotMaterials,
+  newFiring,
+  sameFiring,
+  targetsOf,
+  tidyFiring,
+  vitrification,
+  type Firing
+} from './firing';
 import { imageType } from './photos';
 
 describe('a test bar', () => {
@@ -96,5 +110,66 @@ describe('vitrification', () => {
   it('leaves out firings without a cone or results', () => {
     const none = fired('6', '', '');
     expect(vitrification([fired(undefined, '90', '52'), none])).toEqual([]);
+  });
+});
+
+describe('a body’s tests', () => {
+  const fired = newFiring({ recordId: 'glaze', number: 3, name: 'Clear' }, new Date(2026, 9, 18));
+
+  it('add the dry bow to the fired sag, and need the sag', () => {
+    expect(barResults({ ...EMPTY_BAR, span: '100', bow: '0.5', sag: '3' }).deformation).toBeCloseTo(3.5, 9);
+    expect(barResults({ ...EMPTY_BAR, sag: '2' }).deformation).toBe(2);
+    expect(barResults({ ...EMPTY_BAR, bow: '1' }).deformation).toBeUndefined();
+  });
+
+  it('keep lots by the order of the fired revision’s materials, without empty ones at the end', () => {
+    expect(lotMaterials([{ material: ' Redart ', amount: '50' }, { material: '', amount: '' }, { material: 'Grog', amount: '10' }])).toEqual([
+      'Redart',
+      'Grog'
+    ]);
+    expect(tidyFiring({ ...fired, lots: [' bag 3 ', '', ''] }).lots).toEqual(['bag 3']);
+    expect(tidyFiring({ ...fired, lots: ['', ' '] }).lots).toBeUndefined();
+  });
+
+  it('keep a glaze’s body and fit test, and a fit test only once it says something', () => {
+    const tidy = tidyFiring({
+      ...fired,
+      body: { recipe: 'porcelain', name: ' Cone 6 porcelain ' },
+      fit: { test: 'iwct', result: 'crazed', detail: ' at 325 °F ' }
+    });
+    expect(tidy.body).toEqual({ recipe: 'porcelain', name: 'Cone 6 porcelain' });
+    expect(tidy.fit).toEqual({ test: 'iwct', result: 'crazed', detail: 'at 325 °F' });
+    expect(tidyFiring({ ...fired, fit: { test: 'bwiw' } }).fit).toBeUndefined();
+    expect(tidyFiring({ ...fired, body: { recipe: null, name: '  ' } }).body).toBeUndefined();
+    expect(fitSummary(tidy.fit)).toBe('IWCT: crazed, at 325 °F');
+    expect(fitSummary({ test: 'pressure', result: 'passed' })).toBe('Pressure cooker or autoclave: passed');
+  });
+
+  it('are found from the glaze and from the body', () => {
+    const content = { ...fired, body: { recipe: 'porcelain', name: 'Cone 6 porcelain' }, fit: { test: 'iwct' as const, result: 'crazed' as const }, lots: ['lot 7731'] };
+    expect(firingOf(content, 'glaze')).toBe(true);
+    expect(firingOf(content, 'porcelain')).toBe(true);
+    expect(firingOf(content, 'other')).toBe(false);
+    expect(firingMatches(content, 'porcelain iwct crazed 7731')).toBe(true);
+  });
+});
+
+describe('a body’s targets', () => {
+  it('are read from its details, either end open', () => {
+    expect(targetsOf({})).toBeNull();
+    expect(targetsOf({ absorptionMax: '2', shrinkageMin: '11', shrinkageMax: '13' })).toEqual({
+      absorption: { max: 2 },
+      shrinkage: { min: 11, max: 13 }
+    });
+    expect(targetsOf({ absorptionMin: 'lots' })).toBeNull();
+  });
+
+  it('say whether a cone is inside them all, or that it was not measured', () => {
+    const targets = targetsOf({ absorptionMax: '2', shrinkageMin: '11', shrinkageMax: '13' })!;
+    expect(insideTargets({ cone: '6', firings: 1, absorption: 1.5, shrinkage: 12 }, targets)).toBe(true);
+    expect(insideTargets({ cone: '5', firings: 1, absorption: 3, shrinkage: 12 }, targets)).toBe(false);
+    expect(insideTargets({ cone: '7', firings: 1, absorption: 0.5, shrinkage: 13.5 }, targets)).toBe(false);
+    expect(insideTargets({ cone: '4', firings: 1, absorption: 1 }, targets)).toBeNull();
+    expect(insideTargets({ cone: '4', firings: 1, absorption: 1 }, { absorption: { max: 2 } })).toBe(true);
   });
 });

@@ -87,8 +87,8 @@ formulas. Give it to people in the table like any other role.
 - **Manages people on its collections:** its people can give and take away roles on the
   collections it is given on, in **Settings** › **People**: any role but an admin's or another
   manager's, to anyone but an admin or another manager. Taking a role away gives the collection
-  a new key, as when an admin does. Adding people to the vault stays with admins. A role that
-  manages must read chemistry.
+  a new key, as when an admin does. They can rename those collections there too. Adding people
+  to the vault stays with admins. A role that manages must read chemistry.
 
 Changing a role changes it for everyone who has it, from their next sign-in. Taking **Reads
 recipes' chemistry** away from a role gives every collection it is on a new key, since its

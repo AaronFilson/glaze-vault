@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MaterialHead, RecipeHead } from './api';
 import { csvField, exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJson, exportMaterialsCsv } from './export';
-import type { Firing } from './firing';
+import { EMPTY_BAR, type Firing } from './firing';
 import { readImport } from './importFormats';
 
 const recipe = (name: string, lines: [string, string][], notes = ''): RecipeHead => ({
@@ -36,24 +36,41 @@ describe('exportCsv', () => {
     const csv = exportCsv([recipe('Leach 4321', [['Custer Feldspar', '40'], ['Silica', '60']], 'Cone 10, reduction')]);
     expect(csv.startsWith('﻿')).toBe(true);
     expect(csv.slice(1).split('\r\n')).toEqual([
-      'Recipe,Material,Amount,Percent,Added,Type,Cone,Atmosphere,Surface,Transparency,Color,Tags,Gravity,Viscosity,Notes,Revision,Saved',
-      'Leach 4321,Custer Feldspar,40,40.00,,,,,,,,,,,"Cone 10, reduction",3,2026-10-14T12:00:00.000Z',
-      'Leach 4321,Silica,60,60.00,,,,,,,,,,,,,',
+      'Recipe,Material,Amount,Percent,Added,Type,Cone,Atmosphere,Surface,Transparency,Color,Tags,Gravity,Viscosity,' +
+        'Body,Forming,Absorption from,Absorption to,Shrinkage from,Shrinkage to,Water,Water basis,Notes,Revision,Saved',
+      'Leach 4321,Custer Feldspar,40,40.00,,,,,,,,,,,,,,,,,,,"Cone 10, reduction",3,2026-10-14T12:00:00.000Z',
+      'Leach 4321,Silica,60,60.00,,,,,,,,,,,,,,,,,,,,,',
       ''
     ]);
   });
 
   it('keeps a recipe with no materials', () => {
-    expect(exportCsv([recipe('Empty', [])]).split('\r\n')[1]).toBe('Empty,,,,,,,,,,,,,,,3,2026-10-14T12:00:00.000Z');
+    expect(exportCsv([recipe('Empty', [])]).split('\r\n')[1]).toBe('Empty,,,,,,,,,,,,,,,,,,,,,,,3,2026-10-14T12:00:00.000Z');
   });
 
   it('writes details on the first row, and additions as a percent of the base', () => {
     const body = recipe('Stoneware', [['Ball clay', '60'], ['Silica', '40'], ['Grog', '10']]);
     body.content.lines[2].addition = true;
-    Object.assign(body.content, { type: 'clay body', cone: '6', atmosphere: 'reduction', color: 'Toasty', tags: ['throwing', 'R&D'] });
+    Object.assign(body.content, {
+      type: 'clay body',
+      cone: '6',
+      atmosphere: 'reduction',
+      color: 'Toasty',
+      tags: ['throwing', 'R&D'],
+      bodyClass: 'stoneware',
+      forming: 'throwing',
+      absorptionMax: '2',
+      shrinkageMin: '11',
+      shrinkageMax: '13',
+      water: '21',
+      waterBasis: 'wet'
+    });
     const rows = exportCsv([body]).slice(1).split('\r\n');
-    expect(rows[1]).toBe('Stoneware,Ball clay,60,60.00,,Clay body,6,Reduction,,,Toasty,"throwing, R&D",,,,3,2026-10-14T12:00:00.000Z');
-    expect(rows[3]).toBe('Stoneware,Grog,10,10.00,yes,,,,,,,,,,,,');
+    expect(rows[1]).toBe(
+      'Stoneware,Ball clay,60,60.00,,Clay body,6,Reduction,,,Toasty,"throwing, R&D",,,' +
+        'Stoneware,Throwing,,2,11,13,21,% of the wet clay,,3,2026-10-14T12:00:00.000Z'
+    );
+    expect(rows[3]).toBe('Stoneware,Grog,10,10.00,yes,,,,,,,,,,,,,,,,,,,,');
     // And back again.
     expect(readImport('recipes.csv', exportCsv([body])).recipes[0]).toEqual({
       name: 'Stoneware',
@@ -67,7 +84,14 @@ describe('exportCsv', () => {
       cone: '6',
       atmosphere: 'reduction',
       color: 'Toasty',
-      tags: ['throwing', 'R&D']
+      tags: ['throwing', 'R&D'],
+      bodyClass: 'stoneware',
+      forming: 'throwing',
+      absorptionMax: '2',
+      shrinkageMin: '11',
+      shrinkageMax: '13',
+      water: '21',
+      waterBasis: 'wet'
     });
   });
 });
@@ -101,11 +125,34 @@ describe('exportFiringsCsv', () => {
       .slice(1)
       .split('\r\n');
     expect(rows[0].split(',').slice(0, 3)).toEqual(['Recipe', 'Recipe revision', 'Fired on']);
-    expect(rows[1]).toBe('Shino,4,2026-09-01,,,,,,,,,,,,,,,,,,,,,,,,,,,2,2026-10-16T09:00:00.000Z');
+    expect(rows[1]).toBe('Shino,4,2026-09-01,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,2,2026-10-16T09:00:00.000Z');
     expect(rows[2]).toBe(
       'Shino,4,2026-10-16,10,Reduction,,1300 °C,,,,,"Crazed, Pinholed",100,94,88,50,51,30,' +
-        '6.00,6.38,12.00,2.00,4.76,2.381,1.45,,none,Front; Photo 2,"Thick, by the rim",2,2026-10-16T09:00:00.000Z'
+        '6.00,6.38,12.00,2.00,4.76,2.381,1.45,,none,,,,,,,,,,,Front; Photo 2,"Thick, by the rim",2,2026-10-16T09:00:00.000Z'
     );
+  });
+
+  it('writes warping, the drying disk, lots and glaze fit', () => {
+    const [header, row] = exportFiringsCsv([
+      firing('2026-10-17', {
+        bar: { ...EMPTY_BAR, span: '100', bow: '0.5', sag: '3', disk: '2' },
+        lots: ['bag 3', '', 'lot 7731'],
+        body: { recipe: 'r-2', name: 'Cone 6 porcelain' },
+        fit: { test: 'iwct', result: 'crazed', detail: 'at 325 °F' }
+      })
+    ])
+      .slice(1)
+      .split('\r\n')
+      .map((line) => line.split(','));
+    const at = (column: string) => row[header.indexOf(column)];
+    expect(at('Span mm')).toBe('100');
+    expect(at('Deformation mm')).toBe('3.5');
+    expect(at('Drying disk')).toBe('2');
+    expect(at('Lots')).toBe('1: bag 3; 3: lot 7731');
+    expect(at('On body')).toBe('Cone 6 porcelain');
+    expect(at('Fit test')).toBe('300 °F to ice water (IWCT)');
+    expect(at('Fit result')).toBe('Crazed');
+    expect(at('Fit test how')).toBe('at 325 °F');
   });
 });
 

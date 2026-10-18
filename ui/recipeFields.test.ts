@@ -3,6 +3,7 @@ import type { RecipeHead } from './api';
 import type { RecipeContent } from './chemistry';
 import {
   ATMOSPHERES,
+  BODY_CLASSES,
   coneNumber,
   describeDetails,
   details,
@@ -51,6 +52,28 @@ describe('recipe details', () => {
       describeDetails({ type: 'glaze', cone: '6', atmosphere: 'oxidation', surface: 'satin', transparency: 'opaque', color: 'Blue' })
     ).toBe('Glaze · Cone 6 · Oxidation · Satin, opaque · Blue');
     expect(describeDetails({})).toBe('');
+  });
+
+  it('keep a body’s class, forming, targets and water, and the water’s basis only with water', () => {
+    const body = {
+      type: 'clay body' as const,
+      bodyClass: 'porcelain' as const,
+      forming: 'throwing' as const,
+      cone: '6',
+      absorptionMax: ' 0.5 ',
+      shrinkageMin: '12',
+      shrinkageMax: '14',
+      water: '24'
+    };
+    expect(details(body)).toEqual({ ...body, absorptionMax: '0.5' });
+    expect(details({ waterBasis: 'wet' })).toEqual({});
+    expect(details({ water: '21', waterBasis: 'wet' })).toEqual({ water: '21', waterBasis: 'wet' });
+    expect(sameDetails(body, { ...body, forming: undefined })).toBe(false);
+    expect(describeDetails(body)).toBe(
+      'Clay body · Porcelain · throwing · Cone 6 · absorption at most 0.5% · shrinkage 12–14% · water 24 g per 100 g dry'
+    );
+    expect(matchesSearch({ name: 'P6', lines: [], notes: '', ...body }, 'porcelain throwing')).toBe(true);
+    expect(optionNamed(BODY_CLASSES, 'Terracotta')).toBe('terra cotta');
   });
 });
 

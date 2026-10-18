@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import type { RecipeHead } from '../api';
-import { isBody } from '../body';
+import { bodyMakeup, isBody, otherBasis } from '../body';
 import type { Analysis, MaterialLibrary, RecipeContent, RecipeLine } from '../chemistry';
 import { recipeDensity } from '../materialData';
 import {
   ATMOSPHERES,
+  BODY_CLASSES,
+  FORMINGS,
+  isFormed,
   matchesSearch,
   parseTags,
   RECIPE_ORDERS,
@@ -14,7 +17,9 @@ import {
   sameDetails,
   SURFACES,
   TRANSPARENCIES,
-  type RecipeDetails
+  WATER_BASES,
+  type RecipeDetails,
+  type WaterBasis
 } from '../recipeFields';
 import { isSlip, waterPer100 } from '../slip';
 import type { Editor } from '../useEditor';
@@ -315,7 +320,12 @@ export function RecipeEditor({
 
       {!withoutChemistry && (
         <aside className="analysis no-print" aria-label={isBody(shown.type) ? 'Chemistry' : 'Unity formula'}>
-          <AnalysisPanel analysis={analysis} body={isBody(shown.type)} />
+          <AnalysisPanel
+            analysis={analysis}
+            body={isBody(shown.type)}
+            makeup={isBody(shown.type) ? bodyMakeup(shown.lines, library.own) : null}
+            bodyClass={shown.bodyClass}
+          />
           {limits}
         </aside>
       )}
@@ -368,8 +378,9 @@ const choices = <Value extends string>(options: { value: Value; label: string }[
   </>
 );
 
-/** A recipe's optional details: what it is, how it is fired, how it looks, tags, and for a slip or
- * glaze the gravity and viscosity it is mixed to. */
+/** A recipe's optional details: what it is, how it is fired, how it looks, tags, for a slip or
+ * glaze the gravity and viscosity it is mixed to, and for a body its class, forming, targets and
+ * water. */
 function DetailsFields({
   shown,
   library,
@@ -388,6 +399,34 @@ function DetailsFields({
   const mixed = !!shown.gravity || !!shown.viscosity || shown.type === 'glaze' || isSlip(shown.type);
   const solids = recipeDensity(shown.lines, library.own);
   const water = waterPer100(shown.gravity ?? '', solids.density);
+  const formed =
+    isFormed(shown.type) ||
+    !!(shown.bodyClass || shown.forming || shown.absorptionMin || shown.absorptionMax) ||
+    !!(shown.shrinkageMin || shown.shrinkageMax || shown.water);
+  const otherWater = otherBasis(shown);
+  /** A target's two ends, each optional. */
+  const range = (id: string, label: string, min: 'absorptionMin' | 'shrinkageMin', max: 'absorptionMax' | 'shrinkageMax') => (
+    <div className="detail wide">
+      <span className="label" id={`${id}-label`}>
+        {label}
+      </span>
+      <div className="row tight" role="group" aria-labelledby={`${id}-label`}>
+        <input
+          aria-label={`${label}, from`}
+          inputMode="decimal"
+          value={shown[min] ?? ''}
+          onChange={(e) => onChange({ [min]: e.target.value || undefined })}
+        />
+        <span aria-hidden="true">to</span>
+        <input
+          aria-label={`${label}, to`}
+          inputMode="decimal"
+          value={shown[max] ?? ''}
+          onChange={(e) => onChange({ [max]: e.target.value || undefined })}
+        />
+      </div>
+    </div>
+  );
   const select = <Value extends string>(
     id: string,
     label: string,
@@ -456,7 +495,8 @@ function DetailsFields({
             />
             {water !== null && (
               <span id="recipe-water" className="hint">
-                About {Math.round(water)} g water per 100 g dry, with solids of {solids.density.toFixed(2)} g/cm³
+                About {Math.round(water)} g water per 100 g dry ({Math.round((100 * water) / (100 + water))}% of the
+                wet weight), with solids of {solids.density.toFixed(2)} g/cm³
                 {solids.worked ? ' from its materials' : ''}
               </span>
             )}
@@ -469,6 +509,45 @@ function DetailsFields({
               value={shown.viscosity ?? ''}
               onChange={(e) => onChange({ viscosity: e.target.value || undefined })}
             />
+          </div>
+        </>
+      )}
+      {formed && (
+        <>
+          {select('recipe-body-class', 'Body', BODY_CLASSES, shown.bodyClass, (bodyClass) => onChange({ bodyClass }))}
+          {(shown.type !== 'casting slip' || shown.forming) &&
+            select('recipe-forming', 'Forming', FORMINGS, shown.forming, (forming) => onChange({ forming }))}
+          {range('recipe-absorption', 'Absorption aimed for, %', 'absorptionMin', 'absorptionMax')}
+          {range('recipe-shrinkage', 'Total shrinkage aimed for, %', 'shrinkageMin', 'shrinkageMax')}
+          <div className="detail wide">
+            <label htmlFor="recipe-body-water">Water to make it workable</label>
+            <div className="row tight">
+              <input
+                id="recipe-body-water"
+                inputMode="decimal"
+                value={shown.water ?? ''}
+                aria-describedby={otherWater === null ? undefined : 'recipe-body-water-other'}
+                onChange={(e) => onChange({ water: e.target.value || undefined })}
+              />
+              <select
+                aria-label="What the water is a share of"
+                value={shown.waterBasis ?? 'dry'}
+                onChange={(e) => onChange({ waterBasis: e.target.value === 'wet' ? ('wet' as WaterBasis) : undefined })}
+              >
+                {WATER_BASES.map((basis) => (
+                  <option key={basis.value} value={basis.value}>
+                    {basis.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {otherWater !== null && (
+              <span id="recipe-body-water-other" className="hint">
+                {shown.waterBasis === 'wet'
+                  ? `That is ${otherWater.toFixed(1)} g per 100 g dry`
+                  : `That is ${otherWater.toFixed(1)}% of the wet clay`}
+              </span>
+            )}
           </div>
         </>
       )}

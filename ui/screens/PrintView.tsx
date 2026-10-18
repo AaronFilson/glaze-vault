@@ -1,7 +1,7 @@
 import type { RecipeHead } from '../api';
-import { isBody } from '../body';
+import { bodyMakeup, bodyPart, isBody } from '../body';
 import { BATCH_UNITS, baseOf, formatWeight, scaleBatch, usableLines, type BatchUnit } from '../batch';
-import type { Analysis, RecipeContent } from '../chemistry';
+import type { Analysis, MaterialContent, RecipeContent } from '../chemistry';
 import { batchCosts, money, type PricesContent } from '../prices';
 import { describeDetails } from '../recipeFields';
 import { AnalysisPanel } from './AnalysisPanel';
@@ -17,7 +17,8 @@ export function PrintView({
   changed,
   analysis,
   sheet = false,
-  prices = null
+  prices = null,
+  own = []
 }: {
   job: PrintJob;
   content: RecipeContent;
@@ -28,7 +29,18 @@ export function PrintView({
   sheet?: boolean;
   /** For what a batch costs. */
   prices?: PricesContent | null;
+  /** The person's materials, for what a body's are. */
+  own?: MaterialContent[];
 }) {
+  const body = isBody(content.type);
+  // A batch sheet names its materials by codes, so its silica cannot be told.
+  const makeup = body && !sheet ? bodyMakeup(content.lines, own) : null;
+  const silica =
+    job.kind === 'batch' && makeup
+      ? (scaleBatch(content.lines, job.size)?.lines ?? [])
+          .filter((line) => bodyPart(line.material, own) === 'silica')
+          .reduce((total, line) => total + line.weight, 0)
+      : 0;
   const printed = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const status = changed
     ? 'Not saved: printed with unsaved changes'
@@ -55,8 +67,18 @@ export function PrintView({
       )}
       {job.kind === 'recipe' && analysis?.result && (
         <div className="paper-analysis">
-          <AnalysisPanel analysis={analysis} body={isBody(content.type)} />
+          <AnalysisPanel analysis={analysis} body={body} makeup={makeup} bodyClass={content.bodyClass} />
         </div>
+      )}
+      {job.kind === 'batch' && body && (
+        <p className="dust">
+          <strong>Dust:</strong>{' '}
+          {silica > 0
+            ? `this batch has ${formatWeight(silica, job.unit)} ${job.unit} of added silica, and its clays carry more. `
+            : 'clay bodies carry silica. '}
+          Mix the dry materials wet as soon as you can, wear a fitted N95 or P100 respirator, and clean up wet: never
+          sweep.
+        </p>
       )}
       {job.kind === 'batch' && (
         <dl className="signoff">

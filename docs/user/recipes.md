@@ -30,7 +30,20 @@ Under the name are details you can fill in or leave empty, in any recipe:
   works out the dry materials' density from each material's: its data sheet's density if
   [your material](materials.md#data-sheets) gives one, else its class's, else a typical one for
   standard materials such as zircon (4.6 g/cm³), and 2.6 g/cm³ for the rest.
-  [Firings](firing-log.md) show these beside what was measured.
+  [Firings](firing-log.md) show these beside what was measured. The water is also given as a share
+  of the wet slip.
+- For a clay body or casting slip:
+  - **Body:** terra cotta or red earthenware, white earthenware, stoneware, porcelain,
+    flameware, sculpture or raku, or paper clay.
+  - **Forming:** throwing, handbuilding, slip casting, pressing, jiggering or jollying,
+    extruding, or sculpture.
+  - **Absorption aimed for** and **Total shrinkage aimed for**, in percent: from one figure to
+    another, or just one end, such as absorption to `2`. The
+    [vitrification chart](firing-log.md#vitrification) shades them, and says at which cones the
+    body is inside them.
+  - **Water to make it workable**, with what it is a share of: grams per 100 g of the dry
+    materials, or a percentage of the wet clay. Books use both, so the editor gives the other
+    figure too: 21% of the wet clay is 26.6 g per 100 g dry.
 
 They are kept with each revision, printed with the recipe, and go with it in exports.
 
@@ -99,6 +112,14 @@ chemistry as body formulators read it, on screen and printed:
 - **SiO₂ : Al₂O₃**, **Expansion** and **Loss on ignition**, as for a glaze. A body's expansion
   counts every oxide as glass, but a body keeps some of its silica as quartz, and may grow
   cristobalite, which expand far more: use it to compare bodies, not to predict glaze fit.
+
+- **Plastic : non-plastic**: how much of the body is clay, against everything else, the first
+  number a body formulator reads. Kaolins, ball clays, fire clays, stoneware and red clays, and
+  bentonite and other plasticizers are plastic; calcined clays such as molochite are not. Your
+  own materials count by their [class](materials.md#data-sheets); one without a class counts as
+  not plastic, and the panel names it.
+- **Added silica**: silica, flint or quartz added on its own, as a percentage of the dry
+  materials. A porcelain with less than about 20% tends to craze glazes, and the panel says so.
 
 The unity formula is still there, folded under **Unity formula**.
 
