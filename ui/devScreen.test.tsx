@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
+import { render } from '@testing-library/react';
+import { expect, it } from 'vitest';
 import { describeScreen } from './devScreen';
-
-afterEach(cleanup);
 
 it('describes the screen as text, with controls and their values', () => {
   render(

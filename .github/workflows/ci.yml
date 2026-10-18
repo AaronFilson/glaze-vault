@@ -53,8 +53,15 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # Every crate's tests run even when one fails, and what failed goes into an annotation.
       - name: Rust tests
-        run: cargo test --workspace --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --locked --no-fail-fast 2>&1 | tee rust-tests.log || {
+            node .github/annotate.cjs rust-tests.log "Rust tests failed"
+            exit 1
+          }
 
       # The development app, driven through its screen and driver files (ADR 11). Linux runners
       # have no display, so Xvfb gives the app one.
@@ -114,18 +121,13 @@ jobs:
         shell: pwsh
         run: '"OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append'
 
-      # On failure, the end of the output also goes into an annotation, which can be read without
-      # signing in to GitHub (logs cannot).
+      # On failure, the end of the output also goes into an annotation (.github/annotate.cjs).
       - name: Build installers
         shell: bash
         run: |
           set -o pipefail
           npx tauri build --ci ${{ matrix.args }} 2>&1 | tee build.log || {
-            node -e '
-              const log = require("fs").readFileSync("build.log", "utf8").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
-              const end = log.slice(-6000).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
-              console.log("::error title=tauri build failed::" + end);
-            '
+            node .github/annotate.cjs build.log "tauri build failed"
             exit 1
           }
 

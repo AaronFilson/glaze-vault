@@ -5,6 +5,9 @@ import { defineConfig } from 'vitest/config';
 // Glazecalc's chemistry, copied in until it settles (docs/adr/0002-chemistry-copy.md).
 const chemistry = fileURLToPath(new URL('./vendor/glazecalc/lib/chemistry/index.js', import.meta.url));
 
+// Tests of plain functions that still need a page (`@vitest-environment jsdom`).
+const JSDOM_LOGIC = ['ui/importFormats.test.ts', 'ui/export.test.ts'];
+
 export default defineConfig({
   plugins: [react()],
   resolve: { alias: { '@glazecalc/chemistry': chemistry } },
@@ -23,6 +26,20 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000
   },
   test: {
-    include: ['ui/**/*.test.ts', 'ui/**/*.test.tsx']
+    setupFiles: ['ui/testSetup.ts'],
+    projects: [
+      // Plain functions, tested in Node, keep nothing between tests, so their files share workers
+      // instead of each loading the chemistry again.
+      {
+        extends: true,
+        test: { name: 'logic', include: ['ui/*.test.ts'], exclude: JSDOM_LOGIC, isolate: false }
+      },
+      // Screens each get a page and modules of their own: React, the fake core and the dev tools
+      // keep state in them.
+      {
+        extends: true,
+        test: { name: 'screens', include: ['ui/**/*.test.tsx', ...JSDOM_LOGIC] }
+      }
+    ]
   }
 });

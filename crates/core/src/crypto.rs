@@ -76,11 +76,18 @@ pub struct PasswordKdf {
     pub salt: Vec<u8>,
 }
 
+/// Memory and passes for new passwords. Tests make many vaults, each hashing several passwords,
+/// so they use the least Argon2id allows; unlocking uses whatever is stored, so nothing else differs.
+#[cfg(not(test))]
+const NEW_KDF: (u32, u32) = (64 * 1024, 3);
+#[cfg(test)]
+const NEW_KDF: (u32, u32) = (8, 1);
+
 impl PasswordKdf {
     pub fn new() -> Self {
         PasswordKdf {
-            memory_kib: 64 * 1024,
-            passes: 3,
+            memory_kib: NEW_KDF.0,
+            passes: NEW_KDF.1,
             lanes: 1,
             salt: random::<16>().to_vec(),
         }

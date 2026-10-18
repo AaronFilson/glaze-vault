@@ -1,14 +1,9 @@
 // @vitest-environment jsdom
-import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mockIPC } from '@tauri-apps/api/mocks';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import type { Access, Capabilities, CustomRole, Team } from '../api';
 import { ManagedPeople, People } from './Team';
-
-afterEach(() => {
-  cleanup();
-  clearMocks();
-});
 
 const ALL = ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] as const;
 

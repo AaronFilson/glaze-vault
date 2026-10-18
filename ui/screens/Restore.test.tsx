@@ -1,15 +1,10 @@
 // @vitest-environment jsdom
-import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { mockIPC } from '@tauri-apps/api/mocks';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { expect, it, vi } from 'vitest';
 import { Restore } from './Restore';
 
 const chosen = { path: '/media/usb/b.gvbackup', fileName: 'b.gvbackup', createdAt: Date.UTC(2026, 9, 1), appVersion: '0.2.0', admins: [] };
-
-afterEach(() => {
-  cleanup();
-  clearMocks();
-});
 
 function fakeCore(restore: (args: Record<string, unknown>) => unknown) {
   mockIPC((cmd, args) => {

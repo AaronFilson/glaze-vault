@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import { VitrificationChart } from './VitrificationChart';
-
-afterEach(cleanup);
 
 describe('the vitrification chart', () => {
   const points = [

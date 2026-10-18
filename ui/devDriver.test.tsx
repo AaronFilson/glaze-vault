@@ -1,10 +1,8 @@
 // @vitest-environment jsdom
-import { cleanup, render } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { useState } from 'react';
-import { afterEach, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
 import { runScript, words } from './devDriver';
-
-afterEach(cleanup);
 
 function Form() {
   const [name, setName] = useState('');

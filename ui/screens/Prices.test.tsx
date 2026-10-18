@@ -1,16 +1,11 @@
 // @vitest-environment jsdom
-import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { mockIPC } from '@tauri-apps/api/mocks';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 import type { Access, Revision } from '../api';
 import { materialLibrary } from '../chemistry';
 import type { PricesContent } from '../prices';
 import { PriceLists } from './Prices';
-
-afterEach(() => {
-  cleanup();
-  clearMocks();
-});
 
 const TEAM: Access = {
   team: true,

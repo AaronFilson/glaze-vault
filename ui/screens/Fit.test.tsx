@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { STANDARD_LIBRARY, type RecipeContent, type RecipeLine } from '../chemistry';
 import { BUILT_IN_LIMITS } from '../limits';
 import { Fit } from './Fit';
-
-afterEach(cleanup);
 
 const lime: RecipeContent = {
   name: 'Lime matte',
