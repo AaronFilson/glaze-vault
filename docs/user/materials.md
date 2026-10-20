@@ -58,6 +58,22 @@ values below it; all are optional:
 The data sheet opens by itself for a clay, or once anything is in it. It goes with the material
 in Glaze Vault's JSON export.
 
+## Comparing materials
+
+When a clay is discontinued or changes, its substitute is matched first on what it does, not on
+its chemistry: shrinkage, absorption, plasticity and particle size. To put materials side by side:
+
+1. Open the material to replace, and choose **Compare…** above the list.
+2. Tick the materials to compare it with. The first one ticked is the first column, and every
+   number in the other columns shows how far it is from the first's, such as *3.1 −1.1*.
+3. **Data sheets** shows each one's class, cone and data sheet values, in that order. If the sheets
+   give their firing shrinkage and absorption at different cones, a note says so: those values are
+   not like for like until you fire bars of each at the same cones.
+4. **Analysis** shows each one's oxides as weight % of the raw material, with its loss on ignition.
+   A material given as a formula is worked out as weight %.
+
+Choose **Done** to go back to the material you had open.
+
 ## Colorants and stains with no analysis
 
 A commercial stain's makeup is often secret. Save it with no oxides: recipes can use it, it is

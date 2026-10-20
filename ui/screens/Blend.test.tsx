@@ -83,3 +83,40 @@ describe('a blend of bodies', () => {
     expect(onSave.mock.calls[0][0].type).toBe('clay body');
   });
 });
+
+describe('bar labels', () => {
+  it('give each test at each cone a label, with the recipes by their letters', async () => {
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+    render(<Blend recipes={recipes} library={STANDARD_LIBRARY} initial="a" canSave onSave={async () => {}} onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Steps'), { target: { value: '3' } });
+    expect(screen.getByText(/Each recipe goes by its letter: A: Clear · B: Matte\./)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Name on the labels'), { target: { value: 'LB 12' } });
+    fireEvent.change(screen.getByLabelText('Cones'), { target: { value: '5, 6' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Print 6 bar labels…' }));
+    await waitFor(() => expect(print).toHaveBeenCalledTimes(1));
+    const labels = [...document.querySelectorAll('.bar-label')].map((li) =>
+      [...li.children].map((part) => part.textContent)
+    );
+    expect(labels).toHaveLength(6);
+    expect(labels[1]).toEqual(['LB 12 · 2', 'A 50 · B 50', 'Cone 5', 'Mark']);
+    expect(labels[5]).toEqual(['LB 12 · 3', 'B 100', 'Cone 6', 'Mark']);
+    // Labels name no materials, and the weights are not printed with them.
+    expect(document.querySelector('.print-only')!.textContent).not.toContain('Custer Feldspar');
+    print.mockRestore();
+  });
+
+  it('are not offered where the blend may not be printed', () => {
+    render(
+      <Blend
+        recipes={recipes}
+        library={STANDARD_LIBRARY}
+        initial="a"
+        canSave
+        canPrint={() => false}
+        onSave={async () => {}}
+        onClose={() => {}}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /bar labels/ })).toBeNull();
+  });
+});

@@ -35,6 +35,18 @@ When every recipe in a blend is a clay body, slip or other
 formula: its oxides as fired weight %, its **Plastic : non-plastic** and **Added silica**, and its
 formula with Al₂O₃ = 1 with KNaO. A step saved from bodies of one type is saved as that type.
 
+### Bar labels
+
+A blend is usually fired at several cones, a set of tiles or bars at each. Under **Bar labels**,
+give a **Name on the labels**, such as *LB 12*, and the **Cones**, such as *4, 5, 6*, then choose
+**Print 15 bar labels…**. Each label has the name and test number, the test's shares with each
+recipe by its letter (A is the first recipe, B the second, C the third), such as *A 50 · B 50*,
+its cone, and a space to copy the mark you put on the bar. The labels go cone by cone; the top of
+the sheet says which recipe each letter is. With no cones, there is one label for each test, with
+its cone left blank to write in.
+
+Labels name no materials. They are offered where the weights may be printed.
+
 ## Limit formulas
 
 A limit formula is a range of each oxide, in the unity formula, that a kind of glaze usually falls

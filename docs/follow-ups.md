@@ -35,9 +35,8 @@ Work decided on but not done yet, with the reason it waits.
 
 - The rest of the ranked list at the end of
   [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault):
-  comparing materials side by side by their data sheets, a casting-slip batch record
-  (deflocculant added in steps, gravity and viscosity over days of ageing), and bar labels
-  printed for each step of a blend at each cone.
+  a casting-slip batch record (deflocculant added in steps, gravity and viscosity over days of
+  ageing).
 - Lots on a batch as it is mixed, not only on a firing: the printed batch sheet has a blank Lot
   column to write in.
 

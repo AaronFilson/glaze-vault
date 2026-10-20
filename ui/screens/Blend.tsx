@@ -1,15 +1,27 @@
 // Blends, with each step's chemistry, to save a step as a recipe of its own or print the weights
 // for test batches: a line blend between two recipes, step by step, or a triaxial of three, over a
 // triangle of points. A blend of bodies shows each step as a body: oxide percentages, a formula
-// with alumina as one, and what is plastic.
-import { useMemo, useState } from 'react';
+// with alumina as one, and what is plastic. Bar labels for the tests, one at each cone, go with
+// the bars to the kiln.
+import { useEffect, useMemo, useState } from 'react';
 import type { RecipeHead } from '../api';
 import { baseOf, usableLines } from '../batch';
 import { bodyChemistry, bodyMakeup, isBody } from '../body';
-import { blendName, blendSteps, shareText, triaxialSteps, type BlendStep } from '../blend';
+import {
+  barLabels,
+  blendName,
+  blendSteps,
+  parseCones,
+  RECIPE_LETTERS,
+  shareText,
+  triaxialSteps,
+  type BlendStep
+} from '../blend';
 import { amountOf, analyse, oxideLabel, OXIDES, type MaterialLibrary, type RecipeContent } from '../chemistry';
 
 type Mode = 'line' | 'triaxial';
+/** What goes on paper: the weights of each test, or a label for each test bar. */
+type Paper = 'weights' | 'labels';
 
 export function Blend({
   recipes,
@@ -41,6 +53,14 @@ export function Blend({
   const [divisions, setDivisions] = useState('4');
   const [testSize, setTestSize] = useState('100');
   const [saved, setSaved] = useState<string[]>([]);
+  const [labelName, setLabelName] = useState('');
+  const [cones, setCones] = useState('');
+  const [paper, setPaper] = useState<Paper>('weights');
+  // Printed once the paper asked for is on the page.
+  const [printRequest, setPrintRequest] = useState(0);
+  useEffect(() => {
+    if (printRequest) window.print();
+  }, [printRequest]);
   const [error, setError] = useState('');
   const picked = (mode === 'line' ? [first, second] : [first, second, third]).map((id) =>
     recipes.find((r) => r.recordId === id)
@@ -71,6 +91,13 @@ export function Blend({
     mode === 'line'
       ? `${recipeNames[0]} and ${recipeNames[1]}`
       : `${recipeNames[0]}, ${recipeNames[1]} and ${recipeNames[2]}`;
+
+  const labels = barLabels(blend, parseCones(cones));
+  const key = recipeNames.map((name, i) => `${RECIPE_LETTERS[i]}: ${name || 'Untitled'}`).join(' · ');
+  const printPaper = (which: Paper) => {
+    setPaper(which);
+    setPrintRequest((n) => n + 1);
+  };
 
   const save = async (index: number) => {
     setError('');
@@ -259,11 +286,37 @@ export function Blend({
               </p>
             )}
             {canPrint(picked.flatMap((r) => (r ? [r.recordId] : []))) && (
-              <div className="row">
-                <button type="button" disabled={!(size > 0)} onClick={() => window.print()}>
-                  Print the weights…
-                </button>
-              </div>
+              <>
+                <div className="row">
+                  <button type="button" disabled={!(size > 0)} onClick={() => printPaper('weights')}>
+                    Print the weights…
+                  </button>
+                </div>
+                <fieldset className="plain bar-label-options">
+                  <legend>Bar labels</legend>
+                  <p className="hint">
+                    A label for each test at each cone, to keep with its bar. Each recipe goes by its letter: {key}.
+                  </p>
+                  <div className="details">
+                    <div className="detail">
+                      <label htmlFor="label-name">Name on the labels</label>
+                      <input
+                        id="label-name"
+                        value={labelName}
+                        placeholder={title}
+                        onChange={(e) => setLabelName(e.target.value)}
+                      />
+                    </div>
+                    <div className="detail">
+                      <label htmlFor="label-cones">Cones</label>
+                      <input id="label-cones" value={cones} placeholder="4, 5, 6" onChange={(e) => setCones(e.target.value)} />
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => printPaper('labels')}>
+                    Print {labels.length} bar labels…
+                  </button>
+                </fieldset>
+              </>
             )}
             {error && (
               <p role="alert" className="error">
@@ -274,7 +327,28 @@ export function Blend({
         )}
       </main>
 
-      {ready && blend.length > 0 && size > 0 && (
+      {ready && blend.length > 0 && paper === 'labels' && (
+        <section className="print-only paper" aria-hidden="true">
+          <p className="confidential">Confidential · Printed {new Date().toLocaleString()} from Glaze Vault</p>
+          <p className="meta">
+            {title}: {key}
+          </p>
+          <ul className="bar-labels">
+            {labels.map((label, i) => (
+              <li key={i} className="bar-label">
+                <strong>
+                  {labelName.trim() || title} · {label.test}
+                </strong>
+                <span>{label.shares}</span>
+                <span>Cone {label.cone || '______'}</span>
+                <span className="mark">Mark</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {ready && blend.length > 0 && paper === 'weights' && size > 0 && (
         <section className="print-only paper" aria-hidden="true">
           <p className="confidential">Confidential · Printed {new Date().toLocaleString()} from Glaze Vault</p>
           <h1>

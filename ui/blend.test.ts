@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { blendLines, blendName, blendShares, blendSteps, mixLines, triaxialShares, triaxialSteps } from './blend';
+import {
+  barLabels,
+  blendLines,
+  blendName,
+  blendShares,
+  blendSteps,
+  mixLines,
+  parseCones,
+  shareLabel,
+  triaxialShares,
+  triaxialSteps
+} from './blend';
 
 const clear = [
   { material: 'Custer Feldspar', amount: '40' },
@@ -77,5 +88,33 @@ describe('triaxial blends', () => {
       ['Red Iron Oxide', '12.5'],
       ['Rutile', '50']
     ]);
+  });
+});
+
+describe('bar labels', () => {
+  it('take the cones as typed, each once', () => {
+    expect(parseCones('4, 5, 6')).toEqual(['4', '5', '6']);
+    expect(parseCones('cone ^04 ^02; 02 1')).toEqual(['04', '02', '1']);
+    expect(parseCones('  ')).toEqual([]);
+  });
+
+  it('name each recipe by its letter, leaving out those with no share', () => {
+    expect(shareLabel([75, 25])).toBe('A 75 · B 25');
+    expect(shareLabel([100, 0])).toBe('A 100');
+    expect(shareLabel([0, 33.333, 66.667])).toBe('B 33.3 · C 66.7');
+  });
+
+  it('go cone by cone, a label for each test', () => {
+    const steps = blendSteps(clear, iron, 3);
+    expect(barLabels(steps, ['5', '6'])).toEqual([
+      { test: 1, shares: 'A 100', cone: '5' },
+      { test: 2, shares: 'A 50 · B 50', cone: '5' },
+      { test: 3, shares: 'B 100', cone: '5' },
+      { test: 1, shares: 'A 100', cone: '6' },
+      { test: 2, shares: 'A 50 · B 50', cone: '6' },
+      { test: 3, shares: 'B 100', cone: '6' }
+    ]);
+    // With no cones, one for each test, its cone to be written in.
+    expect(barLabels(steps, []).map((label) => label.cone)).toEqual(['', '', '']);
   });
 });
