@@ -85,3 +85,43 @@ export function blendName(names: string[], shares: number[]): string {
   const shown = names.length > 2 ? parts.filter((p) => p.share > 0) : parts;
   return shown.map((p) => `${p.name} ${shareText(p.share)}`).join(' · ');
 }
+
+/** The letter each recipe of a blend goes by on a bar label, in the order given. */
+export const RECIPE_LETTERS = ['A', 'B', 'C'];
+
+/** The cones typed for bar labels, each once, in the order typed: "4, 5, 6" or "^04 ^02". */
+export function parseCones(text: string): string[] {
+  const cones: string[] = [];
+  for (const word of text.split(/[\s,;]+/)) {
+    const cone = word.replace(/^\^/, '');
+    if (!cone || /^cones?$/i.test(cone)) continue;
+    if (!cones.some((c) => c.toLowerCase() === cone.toLowerCase())) cones.push(cone);
+  }
+  return cones;
+}
+
+/** A step's shares as a bar label shows them, each recipe by its letter: "A 70 · B 30". A recipe
+ * with no share is left out. */
+export function shareLabel(shares: number[]): string {
+  return shares
+    .map((share, i) => ({ letter: RECIPE_LETTERS[i], share }))
+    .filter((s) => s.share > 0)
+    .map((s) => `${s.letter} ${shareText(s.share)}`)
+    .join(' · ');
+}
+
+/** One test bar's label: the test's number, its shares, and the cone it is for. */
+export interface BarLabel {
+  test: number;
+  shares: string;
+  /** '' when no cones were given, for one to be written in. */
+  cone: string;
+}
+
+/** A label for every test at every cone, cone by cone, as the bars are fired; with no cones, one
+ * for each test. */
+export function barLabels(steps: BlendStep[], cones: string[]): BarLabel[] {
+  return (cones.length ? cones : ['']).flatMap((cone) =>
+    steps.map((step, i) => ({ test: i + 1, shares: shareLabel(step.shares), cone }))
+  );
+}

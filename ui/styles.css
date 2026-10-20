@@ -1017,6 +1017,47 @@ input.short {
   flex-wrap: wrap;
 }
 
+.bar-label-options {
+  margin-top: 1.25rem;
+}
+
+.bar-label-options legend {
+  font-weight: 600;
+}
+
+/* Bar labels on paper, to cut apart along the dashed lines: a test, its shares, its cone, and a
+   space for the mark on its bar. */
+.bar-labels {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.bar-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px dashed #000;
+  margin: -0.5px;
+  font-size: 9pt;
+  break-inside: avoid;
+}
+
+.bar-label strong {
+  font-size: 11pt;
+}
+
+.bar-label .mark {
+  margin-top: 0.3rem;
+  border-bottom: 1px solid #000;
+  min-height: 1.4rem;
+  color: var(--muted);
+  font-size: 7pt;
+}
+
 .compare-table.blend .shares {
   display: block;
   font-weight: 400;
