@@ -126,7 +126,11 @@ function takeScripts(onDone: () => void) {
       const started = `script ${++scriptsRun}, started ${new Date().toLocaleTimeString()}`;
       driven = [`${started}, running…`];
       onDone();
-      driven = [`${started}, done ${new Date().toLocaleTimeString()}`, ...(await runScript(script))];
+      const report = await runScript(script, (sofar, running) => {
+        driven = [`${started}, running…`, ...sofar, `...  ${running}`];
+        onDone();
+      });
+      driven = [`${started}, done ${new Date().toLocaleTimeString()}`, ...report];
       onDone();
     }
     await pause(300);

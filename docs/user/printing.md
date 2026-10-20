@@ -32,4 +32,8 @@ The sheet lists, for each material:
 - a blank **Lot** column for the material's lot number;
 - a box to tick when it is weighed.
 
+For a clay body, slip or other body, a **Dust** note says how much added silica the batch has,
+and to mix it wet, wear a fitted N95 or P100 respirator, and clean up wet. A team's batch sheet
+names its materials by codes, so its note leaves the amount out.
+
 At the bottom are lines for who weighed the batch, the date, and who checked it.

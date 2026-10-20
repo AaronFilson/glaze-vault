@@ -2,24 +2,33 @@
 // can open, newest first, and one at a time to fill in, with a test bar's readings and photos.
 import { useEffect, useRef, useState } from 'react';
 import { api, errorText, type Access, type RecipeHead } from '../api';
+import { isBody } from '../body';
+import type { RecipeContent } from '../chemistry';
 import {
   barResults,
   EMPTY_BAR,
+  FIT_RESULTS,
+  FIT_TESTS,
   firingMatches,
+  firingOf,
   firingSummary,
+  fitSummary,
   FLAWS,
   hasReadings,
+  lotMaterials,
   newFiring,
   sameFiring,
+  targetsOf,
   tidyFiring,
   vitrification,
   type BarReadings,
   type Firing,
   type FiringContent,
+  type FitTest,
   type Photo
 } from '../firing';
 import { PhotoError, smallerPhoto } from '../photos';
-import { ATMOSPHERES, SURFACES, TRANSPARENCIES } from '../recipeFields';
+import { ATMOSPHERES, isFormed, SURFACES, TRANSPARENCIES } from '../recipeFields';
 import { EMPTY_SLIP, hasSlipReadings, isSlip, type SlipReadings } from '../slip';
 import { canEdit, editableCollections } from '../team';
 import { ConfirmNotice } from './Deleted';
@@ -40,7 +49,12 @@ const BAR_FIELDS: { key: keyof BarReadings; label: string }[] = [
   { key: 'suspendedWeight', label: 'Weight in water, g' }
 ];
 
-const BODY_TYPES = ['clay body', 'slip', 'engobe', 'casting slip', 'terra sigillata'];
+/** A bar fired spanned between two supports, for warping. */
+const WARP_FIELDS: { key: keyof BarReadings; label: string }[] = [
+  { key: 'span', label: 'Span between supports, mm' },
+  { key: 'bow', label: 'Bow when dry, mm' },
+  { key: 'sag', label: 'Sag when fired, mm' }
+];
 
 const SLIP_FIELDS: { key: keyof SlipReadings; label: string; target?: 'gravity' | 'viscosity'; decimal?: boolean }[] = [
   { key: 'gravity', label: 'Specific gravity', target: 'gravity', decimal: true },
@@ -75,9 +89,10 @@ export function FiringLog({
   // The open editor's save, for the notice that asks before leaving unsaved changes.
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
   const changed = !!editing && (!editing.current || !sameFiring(editing.current.content, editing.draft));
-  const filterName = forRecipe && (recipes.find((r) => r.recordId === forRecipe)?.content.name || 'Untitled');
+  const filtered = forRecipe ? (recipes.find((r) => r.recordId === forRecipe) ?? null) : null;
+  const filterName = forRecipe && (filtered?.content.name || 'Untitled');
   const shown = firings
-    .filter((f) => !forRecipe || f.content.recipe === forRecipe)
+    .filter((f) => !forRecipe || firingOf(f.content, forRecipe))
     .filter((f) => firingMatches(f.content, search))
     .sort((a, b) => b.content.firedOn.localeCompare(a.content.firedOn) || b.savedAt - a.savedAt);
   const team = !!access?.team;
@@ -106,7 +121,8 @@ export function FiringLog({
         )}
         {filterName && (
           <p className="hint">
-            Firings of {filterName}.{' '}
+            Firings of {filterName}
+            {isFormed(filtered?.content.type) ? ', and of glazes fired on it' : ''}.{' '}
             <button type="button" className="link" onClick={() => onForRecipe(null)}>
               Show all
             </button>
@@ -135,7 +151,16 @@ export function FiringLog({
                   onClick={() => leave(() => onEdit({ current: firing, draft: firing.content }))}
                 >
                   {firing.content.recipeName || 'Untitled'}
-                  <span className="hint list-note"> {firingSummary(firing.content)}</span>
+                  <span className="hint list-note">
+                    {' '}
+                    {[
+                      firingSummary(firing.content),
+                      firing.content.body && `on ${firing.content.body.name}`,
+                      fitSummary(firing.content.fit)
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
                 </button>
               </li>
             ))}
@@ -174,7 +199,9 @@ export function FiringLog({
           />
         ) : (
           <>
-            {curve.length >= 2 && <VitrificationChart points={curve} />}
+            {curve.length >= 2 && (
+              <VitrificationChart points={curve} targets={filtered ? targetsOf(filtered.content) : null} />
+            )}
             <p className="hint">
               {mayLog
                 ? 'Log a firing to keep how a recipe was fired, what came out, a test bar’s measurements and photos.'
@@ -255,6 +282,16 @@ function FiringEditor({
   const slip = draft.slip ?? EMPTY_SLIP;
   const results = barResults(draft.bar);
   const urls = usePhotoUrls(draft.photos);
+  const fired = useFiredLines(recipe, draft.recipeNumber);
+  // Lots go with the fired revision's materials, by their order; without their names (a role that
+  // reads no chemistry, or a recipe this person cannot open), they are numbered.
+  const lotNames = fired ? lotMaterials(fired) : [];
+  const lots = draft.lots ?? [];
+  const lotRows = Math.max(lotNames.length, lots.length);
+  const isGlaze = !isBody(recipe?.content.type);
+  const bodies = recipes.filter((r) => isFormed(r.content.type));
+  const fit: FitTest = draft.fit ?? { test: 'iwct' };
+  const setFit = (change: Partial<FitTest>) => set({ fit: { ...fit, ...change } });
 
   const save = async (content = draft): Promise<Firing | null> => {
     if (!content.recipe) {
@@ -365,10 +402,14 @@ function FiringEditor({
               value={draft.recipe ?? ''}
               onChange={(e) => {
                 const head = recipes.find((r) => r.recordId === e.target.value);
+                // Lots belong to a recipe's materials, and a body is not fired on a body.
+                const body = isBody(head?.content.type);
                 set({
                   recipe: head?.recordId ?? null,
                   recipeNumber: head?.number ?? null,
-                  recipeName: head?.content.name ?? ''
+                  recipeName: head?.content.name ?? '',
+                  lots: undefined,
+                  ...(body ? { body: undefined, fit: undefined } : {})
                 });
               }}
             >
@@ -438,8 +479,8 @@ function FiringEditor({
           ))}
         </fieldset>
 
-        <details className="bar" open={hasReadings(draft.bar) || BODY_TYPES.includes(recipe?.content.type ?? '')}>
-          <summary>Test bar</summary>
+        <Fold open={hasReadings(draft.bar) || isBody(recipe?.content.type)}>
+          <summary>Test bar and drying disk</summary>
           <p className="hint">
             Mark a plastic bar, then measure it dry and fired. Weigh it fired, after soaking in water, and, for porosity
             and density, hanging in water.
@@ -485,10 +526,145 @@ function FiringEditor({
               </tr>
             </tbody>
           </table>
-        </details>
+          <h3>Warping</h3>
+          <p className="hint">
+            Measure how far the dry bar is from straight, fire it across two supports, hump up, and measure how far it
+            sagged. The two together are how much it deformed.
+          </p>
+          <div className="details">
+            {WARP_FIELDS.map(({ key, label }) => (
+              <div className="detail" key={key}>
+                <label htmlFor={`bar-${key}`}>{label}</label>
+                <input
+                  id={`bar-${key}`}
+                  inputMode="decimal"
+                  value={bar[key] ?? ''}
+                  onChange={(e) => set({ bar: { ...bar, [key]: e.target.value } })}
+                />
+              </div>
+            ))}
+          </div>
+          <table className="facts" aria-label="Warping">
+            <tbody>
+              <tr>
+                <th scope="row">Deformation</th>
+                <td className="num">
+                  {results.deformation === undefined
+                    ? '—'
+                    : `${results.deformation.toFixed(1)} mm${bar.span?.trim() ? ` over ${bar.span.trim()} mm` : ''}`}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="details">
+            <div className="detail wide">
+              <label htmlFor="bar-disk">Drying disk cracks</label>
+              <input
+                id="bar-disk"
+                value={bar.disk ?? ''}
+                placeholder="A crack code, or the cracks in words"
+                onChange={(e) => set({ bar: { ...bar, disk: e.target.value } })}
+              />
+            </div>
+          </div>
+        </Fold>
 
-        <details
-          className="bar"
+        {lotRows > 0 && (
+          <Fold open={lots.some((lot) => lot.trim()) || isBody(recipe?.content.type)}>
+            <summary>Material lots</summary>
+            <p className="hint">
+              The lot or bag of each material, clays most of all: a new bag can change a result.
+            </p>
+            <div className="details">
+              {Array.from({ length: lotRows }, (_, i) => (
+                <div className="detail" key={i}>
+                  <label htmlFor={`lot-${i}`}>
+                    {lotNames[i] === undefined
+                      ? `Material ${i + 1}`
+                      : lotNames.indexOf(lotNames[i]) !== lotNames.lastIndexOf(lotNames[i])
+                        ? `${lotNames[i]}, line ${i + 1}`
+                        : lotNames[i]}
+                  </label>
+                  <input
+                    id={`lot-${i}`}
+                    value={lots[i] ?? ''}
+                    onChange={(e) => {
+                      const next = Array.from({ length: lotRows }, (_, j) => lots[j] ?? '');
+                      next[i] = e.target.value;
+                      set({ lots: next });
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          </Fold>
+        )}
+
+        {(isGlaze || draft.body || draft.fit) && (
+          <Fold open={!!draft.body || !!draft.fit}>
+            <summary>Glaze fit</summary>
+            <p className="hint">
+              The body this was fired on, and how a fit test went. The body’s firings list it too.
+            </p>
+            <div className="details">
+              <div className="detail wide">
+                <label htmlFor="firing-body">Body</label>
+                <input
+                  id="firing-body"
+                  list="firing-bodies"
+                  placeholder="A body recipe, or a clay’s name"
+                  value={draft.body?.name ?? ''}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    const match = bodies.find((r) => (r.content.name || 'Untitled').toLowerCase() === name.trim().toLowerCase());
+                    set({ body: name ? { recipe: match?.recordId ?? null, name } : undefined });
+                  }}
+                />
+                <datalist id="firing-bodies">
+                  {bodies.map((r) => (
+                    <option key={r.recordId} value={r.content.name || 'Untitled'} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="detail wide">
+                <label htmlFor="fit-test">Fit test</label>
+                <select id="fit-test" value={fit.test} onChange={(e) => setFit({ test: e.target.value as FitTest['test'] })}>
+                  {FIT_TESTS.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="detail">
+                <label htmlFor="fit-result">Result</label>
+                <select
+                  id="fit-result"
+                  value={fit.result ?? ''}
+                  onChange={(e) => setFit({ result: (e.target.value || undefined) as FitTest['result'] })}
+                >
+                  <option value="">—</option>
+                  {FIT_RESULTS.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="detail wide">
+                <label htmlFor="fit-detail">How</label>
+                <input
+                  id="fit-detail"
+                  placeholder="At 325 °F, or 3 cycles"
+                  value={fit.detail ?? ''}
+                  onChange={(e) => setFit({ detail: e.target.value })}
+                />
+              </div>
+            </div>
+          </Fold>
+        )}
+
+        <Fold
           open={
             hasSlipReadings(draft.slip) ||
             isSlip(recipe?.content.type) ||
@@ -521,7 +697,7 @@ function FiringEditor({
               );
             })}
           </div>
-        </details>
+        </Fold>
 
         <label htmlFor="firing-notes">Notes</label>
         <textarea id="firing-notes" rows={4} value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />
@@ -595,6 +771,43 @@ function FiringEditor({
       )}
     </>
   );
+}
+
+/** A section that opens when what it holds asks for it, and stays as the person leaves it:
+ * clearing the field being typed in does not fold it shut. */
+function Fold({ open, children }: { open: boolean; children: React.ReactNode }) {
+  const [shown, setShown] = useState(open);
+  useEffect(() => {
+    if (open) setShown(true);
+  }, [open]);
+  return (
+    <details className="bar" open={shown} onToggle={(e) => setShown((e.target as HTMLDetailsElement).open)}>
+      {children}
+    </details>
+  );
+}
+
+/** The lines of the recipe revision a firing is of: the newest's, or an earlier one's from its
+ * history. Null until known, or when the recipe cannot be opened. */
+function useFiredLines(recipe: RecipeHead | null, number: number | null): RecipeContent['lines'] | null {
+  const newest = recipe && number !== null && recipe.number === number ? recipe.content.lines : null;
+  const [earlier, setEarlier] = useState<{ key: string; lines: RecipeContent['lines'] } | null>(null);
+  const key = recipe && number !== null ? `${recipe.recordId}/${number}` : '';
+  useEffect(() => {
+    if (!recipe || number === null || newest) return;
+    let live = true;
+    api
+      .history<RecipeContent>('recipe', recipe.recordId)
+      .then((list) => {
+        const revision = list.find((r) => r.number === number);
+        if (live && revision) setEarlier({ key, lines: revision.content.lines });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [key, !!newest]);
+  return newest ?? (earlier?.key === key ? earlier.lines : null);
 }
 
 /** Pictures for the photos, opened from the vault as they are needed and let go when done. */

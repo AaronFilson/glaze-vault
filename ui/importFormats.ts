@@ -24,7 +24,9 @@ import { EXPORT_FORMAT } from './export';
 import { MATERIAL_CLASSES, SHEET_FIELDS, tidySheet } from './materialData';
 import {
   ATMOSPHERES,
+  BODY_CLASSES,
   details,
+  FORMINGS,
   optionNamed,
   parseTags,
   RECIPE_TYPES,
@@ -89,7 +91,15 @@ function readJson(text: string): ImportPlan {
       color: str(r.color),
       tags: Array.isArray(r.tags) ? r.tags.map(str).join(', ') : str(r.tags),
       gravity: str(r.gravity),
-      viscosity: str(r.viscosity)
+      viscosity: str(r.viscosity),
+      bodyClass: str(r.bodyClass),
+      forming: str(r.forming),
+      absorptionMin: str(r.absorptionMin),
+      absorptionMax: str(r.absorptionMax),
+      shrinkageMin: str(r.shrinkageMin),
+      shrinkageMax: str(r.shrinkageMax),
+      water: str(r.water),
+      waterBasis: str(r.waterBasis)
     }),
     lines: (Array.isArray(r.lines) ? r.lines : []).map((l: Record<string, unknown>) => ({
       material: str(l.material),
@@ -387,7 +397,15 @@ function readCsv(text: string): ImportPlan {
         color: at(row, column('color', 'colour')),
         tags: at(row, column('tags')),
         gravity: at(row, column('gravity', 'specific gravity', 'sg')),
-        viscosity: at(row, column('viscosity'))
+        viscosity: at(row, column('viscosity')),
+        bodyClass: at(row, column('body', 'body class')),
+        forming: at(row, column('forming')),
+        absorptionMin: at(row, column('absorption from')),
+        absorptionMax: at(row, column('absorption to')),
+        shrinkageMin: at(row, column('shrinkage from')),
+        shrinkageMax: at(row, column('shrinkage to')),
+        water: at(row, column('water')),
+        waterBasis: at(row, column('water basis'))
       });
     const recipes: RecipeContent[] = [];
     let last: string | null = null;
@@ -500,7 +518,16 @@ function readDetails(text: { [Field in keyof RecipeDetails]?: string }): RecipeD
     color: text.color,
     tags: parseTags(text.tags ?? ''),
     gravity: tidy(text.gravity ?? ''),
-    viscosity: tidy(text.viscosity ?? '')
+    viscosity: tidy(text.viscosity ?? ''),
+    bodyClass: optionNamed(BODY_CLASSES, text.bodyClass ?? ''),
+    forming: optionNamed(FORMINGS, text.forming ?? ''),
+    absorptionMin: tidy(text.absorptionMin ?? ''),
+    absorptionMax: tidy(text.absorptionMax ?? ''),
+    shrinkageMin: tidy(text.shrinkageMin ?? ''),
+    shrinkageMax: tidy(text.shrinkageMax ?? ''),
+    water: tidy(text.water ?? ''),
+    // Wet when the file says so, in its words or as exported; dry otherwise, as elsewhere.
+    waterBasis: /wet/i.test(text.waterBasis ?? '') ? 'wet' : undefined
   });
 }
 

@@ -45,3 +45,11 @@ are far larger than anything the vault kept before.
 - Added after: a vitrification chart (absorption and total shrinkage against cone, averaged per
   cone, on one percent axis, with a table of the same numbers); the slip as applied (specific
   gravity, Ford cup seconds, gel) against a recipe's targets; and the log as CSV.
+- Added for bodies (2026-10-18): warping on the test bar (span, dry bow, fired sag) and a
+  drying disk's cracks; a body's absorption and shrinkage targets as bands on the chart, with
+  the cones inside them; and for a glaze, the body it was fired on and a fit test, so a body's
+  firings list the glazes fired on it.
+- A firing's material lots are kept as a list in the order of the fired revision's materials,
+  not by name. Firings are readable by roles without chemistry (ADR 4), and names next to lots
+  would tell them a recipe's materials. The screen puts the names back from the revision, which
+  it reads from the recipe's history when it is not the newest.

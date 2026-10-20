@@ -186,5 +186,11 @@ describe('a manager who is not an admin', () => {
     fireEvent.change(ben, { target: { value: 'role:sales' } });
     await waitFor(() => expect(calls.some((c) => c.cmd === 'set_role')).toBe(true));
     expect(calls.find((c) => c.cmd === 'set_role')!.args).toEqual({ person: 'ben', collection: 'shared', role: 'role:sales' });
+
+    // And renames the collection.
+    fireEvent.change(screen.getByLabelText('Name of Shared'), { target: { value: 'Studio ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(calls.some((c) => c.cmd === 'rename_collection')).toBe(true));
+    expect(calls.find((c) => c.cmd === 'rename_collection')!.args).toEqual({ collection: 'shared', name: 'Studio' });
   });
 });

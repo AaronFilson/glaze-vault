@@ -37,7 +37,7 @@ import { CostLine, PriceLists } from './Prices';
 import { priceListFor } from '../prices';
 import { Compare, type Side } from './Compare';
 import { FiringLog, type FiringEditing } from './FiringLog';
-import { newFiring, sameFiring, type Firing, type FiringContent } from '../firing';
+import { firingOf, newFiring, sameFiring, type Firing, type FiringContent } from '../firing';
 import { ConfirmNotice } from './Deleted';
 import { Import } from './Import';
 import type { ImportPlan } from '../importFormats';
@@ -733,7 +733,8 @@ export function Recipes({
   const firingsPart = () => {
     const current = recipe.current;
     if (!current || recipe.viewing) return null;
-    const count = firings.filter((f) => f.content.recipe === current.recordId).length;
+    // A body's firings include the glazes fired on it, as the log lists them.
+    const count = firings.filter((f) => firingOf(f.content, current.recordId)).length;
     const show = (editing: FiringEditing | null) => {
       setFiringsOf(current.recordId);
       if (editing) editFiring(editing);
@@ -1172,6 +1173,7 @@ export function Recipes({
           changed={!recipe.viewing && recipe.changed}
           analysis={analysis}
           prices={prices}
+          own={library.own}
         />
       )}
     </div>

@@ -31,6 +31,18 @@ function problems(screen: string): string[] {
   return match ? match[1].trimEnd().split('\n') : [];
 }
 
+/** Where a script that never finished got to: the screen's heading, which says when the page last
+ * wrote it, then its problems, what it waits on from the core, and the script's lines so far. The
+ * screen itself is left out, as it can be long and the annotation has room for little. */
+function stalled(screen: string): string {
+  if (!screen) return 'The page never wrote the screen.';
+  const heading = screen.slice(0, screen.indexOf('\n'));
+  const at = ['\nProblems:\n', '\nWaiting on the core:\n', '\nLast script:\n']
+    .map((marker) => screen.indexOf(marker))
+    .filter((index) => index >= 0);
+  return [heading, ...(at.length ? [screen.slice(Math.min(...at)).trim()] : [])].join('\n\n');
+}
+
 export class App {
   readonly dir: string;
   readonly vault: string;
@@ -105,7 +117,8 @@ export class App {
         return heading !== before && / done /.test(heading ?? '');
       },
       120_000,
-      'The script did not finish'
+      'The script did not finish',
+      () => stalled(this.screen())
     );
     if (VERBOSE) console.log(lastScript(screen).map((line) => '        ' + line).join('\n'));
     if (lastScript(screen).some((line) => line.startsWith('FAIL'))) throw new ScriptFailed(screen);
@@ -114,12 +127,13 @@ export class App {
     return screen;
   }
 
-  /** Waits for something, or fails saying what the app logged. */
-  async until(done: () => boolean, timeoutMs: number, what: string) {
+  /** Waits for something, or fails saying what the app logged, after `detail` if given. */
+  async until(done: () => boolean, timeoutMs: number, what: string, detail?: () => string) {
     const deadline = Date.now() + timeoutMs;
+    const more = () => (detail ? detail() + '\n\n' : '') + this.logTail();
     while (!done()) {
-      if (this.exited) throw new Error(`${what}: it stopped.\n\n${this.logTail()}`);
-      if (Date.now() > deadline) throw new Error(`${what} in ${timeoutMs / 1000} seconds.\n\n${this.logTail()}`);
+      if (this.exited) throw new Error(`${what}: it stopped.\n\n${more()}`);
+      if (Date.now() > deadline) throw new Error(`${what} in ${timeoutMs / 1000} seconds.\n\n${more()}`);
       await pause(100);
     }
   }

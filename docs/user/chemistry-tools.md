@@ -28,6 +28,13 @@ colorant.
 4. **Save 7** keeps a test as a recipe, named after the recipes in it, such as
    *Clear 50 · Rutile 50*. **Print the weights…** prints the triangle with what to weigh for each.
 
+### Blends of bodies
+
+When every recipe in a blend is a clay body, slip or other
+[body](recipes.md#a-clay-bodys-chemistry), each step is shown as a body instead of by its unity
+formula: its oxides as fired weight %, its **Plastic : non-plastic** and **Added silica**, and its
+formula with Al₂O₃ = 1 with KNaO. A step saved from bodies of one type is saved as that type.
+
 ## Limit formulas
 
 A limit formula is a range of each oxide, in the unity formula, that a kind of glaze usually falls

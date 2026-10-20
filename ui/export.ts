@@ -4,9 +4,19 @@
 import type { MaterialHead, RecipeHead } from './api';
 import { baseOf, usableLines } from './batch';
 import { MATERIAL_CATEGORIES } from './chemistry';
-import { barResults, FLAWS, type Firing } from './firing';
+import { barResults, FIT_RESULTS, FIT_TESTS, FLAWS, type Firing } from './firing';
 import { hasSheet } from './materialData';
-import { ATMOSPHERES, details, labelOf, RECIPE_TYPES, SURFACES, TRANSPARENCIES } from './recipeFields';
+import {
+  ATMOSPHERES,
+  BODY_CLASSES,
+  details,
+  FORMINGS,
+  labelOf,
+  RECIPE_TYPES,
+  SURFACES,
+  TRANSPARENCIES,
+  WATER_BASES
+} from './recipeFields';
 
 export const EXPORT_FORMAT = 'glaze-vault-export';
 
@@ -68,6 +78,14 @@ const CSV_COLUMNS = [
   'Tags',
   'Gravity',
   'Viscosity',
+  'Body',
+  'Forming',
+  'Absorption from',
+  'Absorption to',
+  'Shrinkage from',
+  'Shrinkage to',
+  'Water',
+  'Water basis',
   'Notes',
   'Revision',
   'Saved'
@@ -92,6 +110,14 @@ export function exportCsv(recipes: RecipeHead[]): string {
       (kept.tags ?? []).join(', '),
       kept.gravity ?? '',
       kept.viscosity ?? '',
+      labelOf(BODY_CLASSES, kept.bodyClass),
+      labelOf(FORMINGS, kept.forming),
+      kept.absorptionMin ?? '',
+      kept.absorptionMax ?? '',
+      kept.shrinkageMin ?? '',
+      kept.shrinkageMax ?? '',
+      kept.water ?? '',
+      kept.water ? labelOf(WATER_BASES, kept.waterBasis ?? 'dry') : '',
       recipe.content.notes,
       String(recipe.number),
       new Date(recipe.savedAt).toISOString()
@@ -166,6 +192,16 @@ const FIRING_COLUMNS = [
   'Specific gravity',
   'Ford cup s',
   'Gel',
+  'Span mm',
+  'Dry bow mm',
+  'Fired sag mm',
+  'Deformation mm',
+  'Drying disk',
+  'Lots',
+  'On body',
+  'Fit test',
+  'Fit result',
+  'Fit test how',
   'Photos',
   'Notes',
   'Revision',
@@ -212,6 +248,17 @@ export function exportFiringsCsv(firings: Firing[]): string {
       f.slip?.gravity ?? '',
       f.slip?.viscosity ?? '',
       f.slip?.gel ?? '',
+      f.bar?.span ?? '',
+      f.bar?.bow ?? '',
+      f.bar?.sag ?? '',
+      fixed(results.deformation, 1),
+      f.bar?.disk ?? '',
+      // By the order of the fired revision's materials; their names are not in the firing.
+      (f.lots ?? []).map((lot, i) => (lot ? `${i + 1}: ${lot}` : '')).filter(Boolean).join('; '),
+      f.body?.name ?? '',
+      f.fit ? labelOf(FIT_TESTS, f.fit.test) : '',
+      f.fit?.result ? labelOf(FIT_RESULTS, f.fit.result) : '',
+      f.fit?.detail ?? '',
       f.photos.map((photo, i) => photo.caption.trim() || `Photo ${i + 1}`).join('; '),
       f.notes,
       String(firing.number),

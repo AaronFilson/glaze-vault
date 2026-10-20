@@ -66,6 +66,23 @@ describe('Glaze Vault exports', () => {
     expect(plan.materials).toEqual([spar.content, kaolin.content, grolleg.content]);
   });
 
+  it('read a body’s class, forming, targets and water back from JSON', () => {
+    const body = {
+      ...shino,
+      content: {
+        ...shino.content,
+        type: 'clay body' as const,
+        bodyClass: 'terra cotta' as const,
+        forming: 'handbuilding' as const,
+        absorptionMin: '6',
+        absorptionMax: '12',
+        water: '21',
+        waterBasis: 'wet' as const
+      }
+    };
+    expect(readImport('export.json', exportJson([body], [], new Date(), '0.1.0')).recipes).toEqual([body.content]);
+  });
+
   it('read back from CSV', () => {
     expect(readImport('recipes.csv', exportCsv([shino])).recipes).toEqual([shino.content]);
     expect(readImport('materials.csv', exportMaterialsCsv([spar, kaolin])).materials).toEqual([

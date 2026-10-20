@@ -77,6 +77,46 @@ it('prints a batch sheet scaled to the batch size', async () => {
   expect(paper.querySelector('.weight')!.textContent).toBe((2.5).toLocaleString(undefined, { minimumFractionDigits: 3 }));
 });
 
+it('gives a body its class, forming, targets and water, and a batch of it a dust note', async () => {
+  const porcelain = {
+    ...shino,
+    content: {
+      name: 'Porcelain',
+      type: 'clay body' as const,
+      lines: [
+        { material: 'Grolleg China Clay', amount: '50' },
+        { material: 'Custer Spar', amount: '35' },
+        { material: 'Silica', amount: '15' }
+      ],
+      notes: ''
+    }
+  };
+  fakeCore({ recipes: [porcelain] });
+  vi.spyOn(window, 'print').mockImplementation(() => {});
+  show();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: 'Porcelain' }));
+  await user.selectOptions(screen.getByLabelText('Body'), 'porcelain');
+  await user.selectOptions(screen.getByLabelText('Forming'), 'throwing');
+  await user.type(screen.getByLabelText('Absorption aimed for, %, to'), '0.5');
+  await user.type(screen.getByLabelText('Water to make it workable'), '21');
+  await user.selectOptions(screen.getByLabelText('What the water is a share of'), 'wet');
+  expect(screen.getByText('That is 26.6 g per 100 g dry')).toBeTruthy();
+  // What it is made of, and that a porcelain with 15% silica may craze glazes.
+  const chemistry = within(screen.getByRole('complementary', { name: 'Chemistry' }));
+  expect(chemistry.getByText('Plastic : non-plastic').nextElementSibling?.textContent).toBe('50 : 50');
+  expect(chemistry.getByText(/tend to craze glazes/)).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Print…' }));
+  await user.click(screen.getByLabelText('A batch sheet for weighing out'));
+  await user.clear(screen.getByLabelText('Batch size'));
+  await user.type(screen.getByLabelText('Batch size'), '10');
+  await user.selectOptions(screen.getByLabelText('Unit'), 'kg');
+  await user.click(screen.getByRole('button', { name: 'Print' }));
+  const dust = document.querySelector('.paper .dust')!;
+  expect(dust.textContent).toContain(`this batch has ${(1.5).toLocaleString(undefined, { minimumFractionDigits: 3 })} kg of added silica`);
+});
+
 it('offers each export only when there is something to export', async () => {
   fakeCore({ recipes: [], materials: [spar] });
   show();

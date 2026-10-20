@@ -644,13 +644,29 @@ export function ManagedPeople({ access, onChanged }: { access: Access; onChanged
     return custom ? customLabel(custom) : role === 'admin' ? 'Admin' : (ROLES.find((r) => r.role === role)?.label ?? role);
   };
   const people = team.people.filter((p) => p.id !== access.me.id && !p.admin);
+  const rename = async (collection: string, name: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      await api.renameCollection(collection, name.trim());
+      await load();
+      onChanged();
+      return true;
+    } catch (e) {
+      setError(errorText(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <>
       <p>
         You are signed in as <strong>{access.me.name}</strong>, and you manage{' '}
         {managed.map((c) => c.name || 'Shared').join(', ')}: you can give people roles there, other than an admin’s
-        or a manager’s. Taking a role away gives the collection a new key. An admin adds people to the vault.
+        or a manager’s, and rename {managed.length > 1 ? 'them' : 'it'}. Taking a role away gives the collection a new
+        key. An admin adds people to the vault.
       </p>
       <table className="compare-table people">
         <caption>People</caption>
@@ -704,6 +720,17 @@ export function ManagedPeople({ access, onChanged }: { access: Access; onChanged
           ))}
         </tbody>
       </table>
+      <h3>Collections</h3>
+      <ul className="plain-list">
+        {managed.map((collection) => (
+          <CollectionName
+            key={collection.id}
+            name={collection.name}
+            busy={busy}
+            onRename={(name) => rename(collection.id, name)}
+          />
+        ))}
+      </ul>
       {error && <p role="alert" className="error">{error}</p>}
     </>
   );

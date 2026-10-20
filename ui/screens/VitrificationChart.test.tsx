@@ -28,4 +28,22 @@ describe('the vitrification chart', () => {
     expect(tip.textContent).toContain('Cone 6 · 2 firings');
     expect(tip.textContent).toContain('1.5% Absorption');
   });
+
+  it('shades a body’s targets, and says which cones are inside them', () => {
+    const { container } = render(
+      <VitrificationChart points={points} targets={{ absorption: { max: 2 }, shrinkage: { min: 11, max: 13 } }} />
+    );
+    expect(container.querySelectorAll('.target-band')).toHaveLength(2);
+    expect(screen.getByText(/Inside the targets at cone 6\./).textContent).toContain(
+      'Aimed for: absorption at most 2%, total shrinkage 11–13%.'
+    );
+    const rows = within(screen.getByRole('table')).getAllByRole('row');
+    expect(rows.map((row) => row.lastElementChild?.textContent)).toEqual(['Inside the targets', 'No', 'Yes', '—']);
+    expect(screen.getByLabelText(/^Cone 6:/).getAttribute('aria-label')).toContain('inside the targets');
+  });
+
+  it('says when no cone is inside the targets yet', () => {
+    render(<VitrificationChart points={points} targets={{ absorption: { max: 0.5 } }} />);
+    expect(screen.getByText(/No cone is inside the targets yet/)).toBeTruthy();
+  });
 });

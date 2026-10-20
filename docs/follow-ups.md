@@ -27,17 +27,19 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Teams ([ADR 12](adr/0012-teams-on-one-computer.md))
 
-- Managers rename their collections in the core, but the page has no field for it yet.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
 
 ## Clay bodies
 
-- The ranked list at the end of [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault):
-  first a body class and forming method on recipes, absorption and shrinkage targets as a band on
-  the vitrification chart, the lot of each clay on a firing, and body-aware blends with the
-  plastic to non-plastic ratio.
+- The rest of the ranked list at the end of
+  [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault):
+  comparing materials side by side by their data sheets, a casting-slip batch record
+  (deflocculant added in steps, gravity and viscosity over days of ageing), and bar labels
+  printed for each step of a blend at each cone.
+- Lots on a batch as it is mixed, not only on a firing: the printed batch sheet has a blank Lot
+  column to write in.
 
 ## Engineering
 

@@ -28,8 +28,8 @@ recipe, cone, atmosphere, kiln, colour, flaws, notes and captions.
 
 ## A test bar
 
-For a clay body or a slip, **Test bar** works out shrinkage and absorption from a bar's
-measurements. It opens by itself for a recipe whose type is a clay body or slip.
+For a clay body or a slip, **Test bar and drying disk** works out shrinkage and absorption from a
+bar's measurements. It opens by itself for a recipe whose type is a clay body or slip.
 
 1. Make a plastic bar and mark two lines on it, usually 100 mm apart.
 2. Measure between the marks when it is dry, and again when it is fired.
@@ -45,10 +45,38 @@ measurements. It opens by itself for a recipe whose type is a clay body or slip.
 | Porosity | water taken up, as a percentage of the bar's volume |
 | Bulk density | fired weight over volume, in g/cm³ |
 
+**Warping:** measure how far the dry bar is from straight, then fire it across two supports,
+hump up, and measure how far it sagged. **Deformation** is the bow and the sag together, in mm.
+Give the span between the supports too: there is no standard one, so compare bars fired side by
+side over the same span.
+
+**Drying disk cracks:** a drying disk's crack code, or its cracks in words.
+
+## Material lots
+
+**Material lots** has a field for each material of the recipe revision fired: write the lot or
+bag of each, clays most of all. A new bag of a clay can change a result, and this is how you
+trace it. The lots are kept by the order of the materials, without their names, so someone who
+[reads firings without chemistry](sharing.md) sees the lots but not the materials.
+
+## Glaze fit
+
+For a glaze, **Glaze fit** keeps the body it was fired on and how a fit test went:
+
+- **Body:** one of your clay bodies, chosen from the list, or the name of a bought clay.
+- **Fit test:** 300 °F to ice water (IWCT), boiling to ice water (BWIW), the pressure cooker or
+  autoclave, or another test; its **Result**, passed, crazed or shivered; and **How**, such as
+  `at 325 °F` or `3 cycles`.
+
+A glaze fired on one of your bodies is listed with the body's firings too, so its fit can be
+found from either recipe.
+
 ## Vitrification
 
 With a recipe's firings shown, and test bars measured at two cones or more, a chart above them
-shows absorption and total shrinkage against cone, averaged at each cone. As a body nears
+shows absorption and total shrinkage against cone, averaged at each cone. A body's
+[targets](recipes.md#details) are shaded bands, and the chart says at which cones the body is
+inside all of them: its firing range. **As a table** says so for each cone. As a body nears
 maturity its absorption falls toward zero and its shrinkage levels off; past it, the bar may
 bloat and shrink less. Point at a cone, or tab to it, for its numbers; **As a table** has them
 all.
@@ -66,7 +94,8 @@ deleted.
 
 **Settings → Export → Export firing log as CSV…** saves every firing you can open as a
 spreadsheet, a row each, oldest first: how it was fired, what came out, the bar's readings and
-results, and the slip as applied. Photos are listed by caption. The file is not encrypted.
+results, warping and the drying disk, the slip as applied, the lots by the number of their
+material, and the body and fit test. Photos are listed by caption. The file is not encrypted.
 
 ## Deleting a firing
 

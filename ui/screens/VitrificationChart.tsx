@@ -1,8 +1,10 @@
 // A vitrification chart (docs/adr/0014-firing-log-and-photos.md): a recipe's absorption and total
-// shrinkage against cone, from its firings' test bars. Both are percentages, on one axis. The same
-// numbers are in a table below, so nothing is only in the picture or the tooltip.
+// shrinkage against cone, from its firings' test bars. Both are percentages, on one axis. A body's
+// targets are bands, and the cones inside all of them are its firing range. The same numbers are
+// in a table below, so nothing is only in the picture or the tooltip.
 import { useState } from 'react';
-import type { VitrificationPoint } from '../firing';
+import { insideTargets, type Targets, type VitrificationPoint } from '../firing';
+import { rangeText } from '../recipeFields';
 
 const WIDTH = 560;
 const HEIGHT = 240;
@@ -23,9 +25,21 @@ function niceTop(max: number): { top: number; step: number } {
 
 const percent = (value: number | undefined) => (value === undefined ? '—' : `${value.toFixed(1)}%`);
 
-export function VitrificationChart({ points }: { points: VitrificationPoint[] }) {
+/** "cones 5 and 6", "cones 5, 6 and 7", "cone 6". */
+function conesText(cones: string[]): string {
+  if (cones.length === 1) return `cone ${cones[0]}`;
+  return `cones ${cones.slice(0, -1).join(', ')} and ${cones[cones.length - 1]}`;
+}
+
+export function VitrificationChart({ points, targets = null }: { points: VitrificationPoint[]; targets?: Targets | null }) {
   const [active, setActive] = useState<number | null>(null);
-  const values = points.flatMap((p) => [p.absorption, p.shrinkage]).filter((v): v is number => v !== undefined);
+  const values = [
+    ...points.flatMap((p) => [p.absorption, p.shrinkage]),
+    targets?.absorption?.max,
+    targets?.absorption?.min,
+    targets?.shrinkage?.max,
+    targets?.shrinkage?.min
+  ].filter((v): v is number => v !== undefined);
   const { top, step } = niceTop(Math.max(...values));
   const plotWidth = WIDTH - PAD.left - PAD.right;
   const plotHeight = HEIGHT - PAD.top - PAD.bottom;
@@ -40,6 +54,9 @@ export function VitrificationChart({ points }: { points: VitrificationPoint[] })
     return last === undefined ? null : { series, i: last, y: y(points[last][series.key]!) };
   });
   const labelled = ends[0] && ends[1] ? Math.abs(ends[0].y - ends[1].y) >= 14 : true;
+  const inside = targets ? points.map((point) => insideTargets(point, targets)) : [];
+  const range = points.filter((_, i) => inside[i]).map((p) => p.cone);
+  const insideText = (i: number) => (inside[i] === null ? '—' : inside[i] ? 'Yes' : 'No');
 
   const shown = active === null ? null : points[active];
   return (
@@ -47,6 +64,21 @@ export function VitrificationChart({ points }: { points: VitrificationPoint[] })
       <figcaption>
         <strong>Vitrification</strong>
         <span className="hint"> · from the test bars, averaged at each cone</span>
+        {targets && (
+          <p className="hint" role="status">
+            {range.length
+              ? `Inside the targets at ${conesText(range)}.`
+              : 'No cone is inside the targets yet.'}{' '}
+            Aimed for:{' '}
+            {[
+              targets.absorption && `absorption ${rangeText(targets.absorption.min?.toString(), targets.absorption.max?.toString())}`,
+              targets.shrinkage && `total shrinkage ${rangeText(targets.shrinkage.min?.toString(), targets.shrinkage.max?.toString())}`
+            ]
+              .filter(Boolean)
+              .join(', ')}
+            .
+          </p>
+        )}
       </figcaption>
       <ul className="legend" aria-hidden="true">
         {SERIES.map((series) => (
@@ -57,14 +89,38 @@ export function VitrificationChart({ points }: { points: VitrificationPoint[] })
             {series.label}
           </li>
         ))}
+        {targets && (
+          <li>
+            <svg width="16" height="10">
+              <rect width="16" height="10" fill="var(--muted)" className="target-swatch" />
+            </svg>
+            Shaded: the targets
+          </li>
+        )}
       </ul>
       <div className="chart-frame">
         <svg
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           role="img"
-          aria-label="Absorption and total shrinkage against cone; the table below has the values"
+          aria-label={`Absorption and total shrinkage against cone${targets ? ', with the targets as bands' : ''}; the table below has the values`}
           onPointerLeave={() => setActive(null)}
         >
+          {SERIES.map((series) => {
+            const band = targets?.[series.key];
+            if (!band) return null;
+            const [low, high] = [y(band.max ?? top), y(band.min ?? 0)];
+            return (
+              <rect
+                key={series.key}
+                className="target-band"
+                x={PAD.left}
+                width={plotWidth}
+                y={low}
+                height={Math.max(high - low, 1)}
+                fill={series.color}
+              />
+            );
+          })}
           {ticks.map((tick) => (
             <g key={tick} className="grid">
               <line x1={PAD.left} x2={PAD.left + plotWidth} y1={y(tick)} y2={y(tick)} />
@@ -117,7 +173,9 @@ export function VitrificationChart({ points }: { points: VitrificationPoint[] })
               width={column}
               height={plotHeight}
               tabIndex={0}
-              aria-label={`Cone ${point.cone}: absorption ${percent(point.absorption)}, total shrinkage ${percent(point.shrinkage)}`}
+              aria-label={`Cone ${point.cone}: absorption ${percent(point.absorption)}, total shrinkage ${percent(point.shrinkage)}${
+                inside[i] === true ? ', inside the targets' : inside[i] === false ? ', outside the targets' : ''
+              }`}
               onPointerEnter={() => setActive(i)}
               onFocus={() => setActive(i)}
               onBlur={() => setActive(null)}
@@ -146,6 +204,9 @@ export function VitrificationChart({ points }: { points: VitrificationPoint[] })
                 <strong>{percent(shown[series.key])}</strong> <span className="hint">{series.label}</span>
               </div>
             ))}
+            {inside[active] !== null && inside[active] !== undefined && (
+              <div className="hint">{inside[active] ? 'Inside the targets' : 'Outside the targets'}</div>
+            )}
           </div>
         )}
       </div>
@@ -164,15 +225,17 @@ export function VitrificationChart({ points }: { points: VitrificationPoint[] })
               <th scope="col" className="num">
                 Total shrinkage
               </th>
+              {targets && <th scope="col">Inside the targets</th>}
             </tr>
           </thead>
           <tbody>
-            {points.map((point) => (
+            {points.map((point, i) => (
               <tr key={point.cone}>
                 <th scope="row">{point.cone}</th>
                 <td className="num">{point.firings}</td>
                 <td className="num">{percent(point.absorption)}</td>
                 <td className="num">{percent(point.shrinkage)}</td>
+                {targets && <td>{insideText(i)}</td>}
               </tr>
             ))}
           </tbody>
