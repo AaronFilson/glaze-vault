@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, errorText, type Access, type RecipeHead } from '../api';
 import { isBody } from '../body';
-import type { RecipeContent } from '../chemistry';
 import {
   barResults,
   EMPTY_BAR,
@@ -27,10 +26,12 @@ import {
   type FitTest,
   type Photo
 } from '../firing';
+import { lotsForFiring, mixSummary, type Mix } from '../mix';
 import { PhotoError, smallerPhoto } from '../photos';
 import { ATMOSPHERES, isFormed, SURFACES, TRANSPARENCIES } from '../recipeFields';
 import { EMPTY_SLIP, hasSlipReadings, isSlip, type SlipReadings } from '../slip';
 import { canEdit, editableCollections } from '../team';
+import { useRevisionLines } from '../useRevisionLines';
 import { ConfirmNotice } from './Deleted';
 import { VitrificationChart } from './VitrificationChart';
 
@@ -64,6 +65,7 @@ const SLIP_FIELDS: { key: keyof SlipReadings; label: string; target?: 'gravity' 
 
 export function FiringLog({
   firings,
+  mixes,
   recipes,
   access,
   editing,
@@ -74,6 +76,8 @@ export function FiringLog({
   onErased
 }: {
   firings: Firing[];
+  /** For a firing's lots: the mixes of the revision fired. */
+  mixes: Mix[];
   recipes: RecipeHead[];
   access: Access | null;
   editing: FiringEditing | null;
@@ -190,6 +194,7 @@ export function FiringLog({
             key={editing.current?.recordId ?? 'new'}
             editing={editing}
             changed={changed}
+            mixes={mixes}
             recipes={recipes}
             access={access}
             onEdit={onEdit}
@@ -214,19 +219,21 @@ export function FiringLog({
   );
 }
 
-function PendingNotice({
+export function PendingNotice({
   name,
+  label = 'Unsaved firing',
   onSave,
   onDiscard,
   onStay
 }: {
   name: string;
+  label?: string;
   onSave: () => void;
   onDiscard: () => void;
   onStay: () => void;
 }) {
   return (
-    <div className="notice warning" role="alertdialog" aria-label="Unsaved firing">
+    <div className="notice warning" role="alertdialog" aria-label={label}>
       <p>
         <strong>{name}</strong> has changes that are not saved.
       </p>
@@ -253,6 +260,7 @@ function PendingNotice({
 function FiringEditor({
   editing,
   changed,
+  mixes,
   recipes,
   access,
   onEdit,
@@ -262,6 +270,7 @@ function FiringEditor({
 }: {
   editing: FiringEditing;
   changed: boolean;
+  mixes: Mix[];
   recipes: RecipeHead[];
   access: Access | null;
   onEdit: (editing: FiringEditing | null) => void;
@@ -282,12 +291,16 @@ function FiringEditor({
   const slip = draft.slip ?? EMPTY_SLIP;
   const results = barResults(draft.bar);
   const urls = usePhotoUrls(draft.photos);
-  const fired = useFiredLines(recipe, draft.recipeNumber);
+  const fired = useRevisionLines('recipe', recipe, draft.recipeNumber);
   // Lots go with the fired revision's materials, by their order; without their names (a role that
   // reads no chemistry, or a recipe this person cannot open), they are numbered.
   const lotNames = fired ? lotMaterials(fired) : [];
   const lots = draft.lots ?? [];
   const lotRows = Math.max(lotNames.length, lots.length);
+  // Mixes of the revision fired that kept lots, to take them from.
+  const lotMixes = mixes
+    .filter((m) => m.content.recipe === draft.recipe && m.content.recipeNumber === draft.recipeNumber && m.content.lots?.length)
+    .sort((a, b) => b.content.mixedOn.localeCompare(a.content.mixedOn));
   const isGlaze = !isBody(recipe?.content.type);
   const bodies = recipes.filter((r) => isFormed(r.content.type));
   const fit: FitTest = draft.fit ?? { test: 'iwct' };
@@ -575,6 +588,26 @@ function FiringEditor({
             <p className="hint">
               The lot or bag of each material, clays most of all: a new bag can change a result.
             </p>
+            {fired && lotMixes.length > 0 && (
+              <div className="detail wide">
+                <label htmlFor="lots-from">Take the lots from a mix</label>
+                <select
+                  id="lots-from"
+                  value=""
+                  onChange={(e) => {
+                    const from = lotMixes.find((m) => m.recordId === e.target.value);
+                    if (from) set({ lots: lotsForFiring(fired, from.content.lots ?? []) });
+                  }}
+                >
+                  <option value="">—</option>
+                  {lotMixes.map((m) => (
+                    <option key={m.recordId} value={m.recordId}>
+                      {mixSummary(m.content)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="details">
               {Array.from({ length: lotRows }, (_, i) => (
                 <div className="detail" key={i}>
@@ -775,7 +808,7 @@ function FiringEditor({
 
 /** A section that opens when what it holds asks for it, and stays as the person leaves it:
  * clearing the field being typed in does not fold it shut. */
-function Fold({ open, children }: { open: boolean; children: React.ReactNode }) {
+export function Fold({ open, children }: { open: boolean; children: React.ReactNode }) {
   const [shown, setShown] = useState(open);
   useEffect(() => {
     if (open) setShown(true);
@@ -785,29 +818,6 @@ function Fold({ open, children }: { open: boolean; children: React.ReactNode }) 
       {children}
     </details>
   );
-}
-
-/** The lines of the recipe revision a firing is of: the newest's, or an earlier one's from its
- * history. Null until known, or when the recipe cannot be opened. */
-function useFiredLines(recipe: RecipeHead | null, number: number | null): RecipeContent['lines'] | null {
-  const newest = recipe && number !== null && recipe.number === number ? recipe.content.lines : null;
-  const [earlier, setEarlier] = useState<{ key: string; lines: RecipeContent['lines'] } | null>(null);
-  const key = recipe && number !== null ? `${recipe.recordId}/${number}` : '';
-  useEffect(() => {
-    if (!recipe || number === null || newest) return;
-    let live = true;
-    api
-      .history<RecipeContent>('recipe', recipe.recordId)
-      .then((list) => {
-        const revision = list.find((r) => r.number === number);
-        if (live && revision) setEarlier({ key, lines: revision.content.lines });
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [key, !!newest]);
-  return newest ?? (earlier?.key === key ? earlier.lines : null);
 }
 
 /** Pictures for the photos, opened from the vault as they are needed and let go when done. */

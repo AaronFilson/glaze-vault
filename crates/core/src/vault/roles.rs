@@ -324,7 +324,7 @@ mod tests {
         ));
         assert_eq!(as_ben.heads(Kind::Recipe).unwrap().len(), 1);
         let collection = as_ben.collections().into_iter().find(|c| c.id == shared).unwrap();
-        assert_eq!(collection.changes, [Kind::Firing]);
+        assert_eq!(collection.changes, [Kind::Firing, Kind::Mix]);
     }
 
     #[test]

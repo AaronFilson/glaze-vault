@@ -491,12 +491,26 @@ export const scenarios: Scenario[] = [
         'expect "Sieve through 80 mesh"',
         'expect not "Custer"',
         'expect not "Delete…"',
-        'click "Batch sheets"',
+        // He logs the lot of each material he weighs, by its code.
+        'click "Log a mix…"',
+        'expect "# Mix of Leach 4321"',
+        'type "Dry batch size" "1000"',
+        'type "Lot of M-104, line 1" "L-7"',
+        'click "Save"',
+        'expect "revision 1" 10000',
+        'expect not "Custer"',
+        'click "Mix log"',
         'expect "Ben\'s test"',
         'expect not "Leach 4321"',
         'click "Lock"',
         'select "Your name" "Ana"',
-        ...unlock(vault.password).slice(1)
+        ...unlock(vault.password).slice(1),
+        // Ana reads Ben's mix under the recipe, with the materials' names.
+        'click "Leach 4321"',
+        'click "Mixes (1)"',
+        'click "Leach 4321" in "Mixes"',
+        'expect "[textbox \\"Lot of Custer, line 1\\" = \\"L-7\\"]"',
+        'click "Mix log"'
       );
     }
   },

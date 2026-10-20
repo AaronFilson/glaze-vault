@@ -203,6 +203,7 @@ export const CHANGEABLE: { kind: Kind; label: string }[] = [
   { kind: 'material', label: 'Materials' },
   { kind: 'batch', label: 'Batch sheets' },
   { kind: 'firing', label: 'Firings' },
+  { kind: 'mix', label: 'Mixes' },
   { kind: 'limits', label: 'Limit formulas' },
   { kind: 'prices', label: 'Prices' }
 ];

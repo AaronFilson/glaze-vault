@@ -104,6 +104,10 @@ pub enum Kind {
     /// A firing of a recipe in the firing log: how it was fired, what came out, measurements and
     /// photos (ADR 14).
     Firing,
+    /// A batch as it was mixed: when, how much, the lot of each material, and for a slip,
+    /// deflocculant and water added in steps and readings as it aged (ADR 16). Under the batch
+    /// key, so a batch operator logs the lots they weigh.
+    Mix,
     /// A set of limits for a unity formula, to check recipes against (ADR 15).
     Limits,
     /// What materials cost, to cost recipes (ADR 15).
@@ -111,11 +115,12 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Recipe,
         Kind::Material,
         Kind::Batch,
         Kind::Firing,
+        Kind::Mix,
         Kind::Limits,
         Kind::Prices,
     ];
@@ -126,6 +131,7 @@ impl Kind {
             Kind::Material => "material",
             Kind::Batch => "batch",
             Kind::Firing => "firing",
+            Kind::Mix => "mix",
             Kind::Limits => "limits",
             Kind::Prices => "prices",
         }
@@ -955,7 +961,7 @@ impl Vault {
     fn key_for(&self, collection: &OpenCollection, kind: Kind) -> Option<Key> {
         match collection.held {
             Held::Collection => Some(kind_key(&collection.key, kind, &collection.id, self.summaries)),
-            Held::Batch => (kind == Kind::Batch).then(|| collection.key.clone()),
+            Held::Batch => matches!(kind, Kind::Batch | Kind::Mix).then(|| collection.key.clone()),
             Held::Summary => (kind == Kind::Firing).then(|| collection.key.clone()),
         }
     }
@@ -1290,11 +1296,11 @@ pub(crate) fn summary_key(collection_key: &Key, collection_id: &Uuid) -> Key {
 }
 
 /// What records of a kind in a collection are encrypted with, from the collection's key: batch
-/// sheets under the batch key, firings under the summary key once the vault keeps summaries, and
+/// sheets and mixes under the batch key, firings under the summary key once the vault keeps summaries, and
 /// everything else under the collection's.
 pub(crate) fn kind_key(collection_key: &Key, kind: Kind, collection_id: &Uuid, summaries: bool) -> Key {
     match kind {
-        Kind::Batch => batch_key(collection_key, collection_id),
+        Kind::Batch | Kind::Mix => batch_key(collection_key, collection_id),
         Kind::Firing if summaries => summary_key(collection_key, collection_id),
         _ => collection_key.clone(),
     }

@@ -1497,6 +1497,15 @@ mod tests {
         let collection_key = ana.readable(&shared).unwrap().key.clone();
         assert_eq!(*held, *super::super::batch_key(&collection_key, &shared));
         assert_ne!(*held, *collection_key);
+        // They log a mix of the sheet, under the batch key, which the rest of the team reads.
+        let mix = as_ben
+            .save_in(Kind::Mix, shared, &json!({ "name": "Shino", "lots": ["L-7"] }))
+            .unwrap();
+        assert_eq!(names(&as_ben, Kind::Mix), ["Shino"]);
+        assert_eq!(names(&ana, Kind::Mix), ["Shino"]);
+        as_ben
+            .save(Kind::Mix, Some(mix.revision_id), &json!({ "name": "Shino", "lots": ["L-8"] }))
+            .unwrap();
         // In their own private collection, Ben does as he likes.
         let own = private_of(&as_ben, ben.id);
         as_ben
@@ -1515,13 +1524,16 @@ mod tests {
         let kept_key = as_ben.readable(&shared).unwrap().key.clone();
         drop(as_ben);
 
+        ana.save_in(Kind::Mix, shared, &json!({ "name": "Shino" })).unwrap();
         ana.set_role(ben.id, shared, Some(Role::Operator)).unwrap();
         assert_ne!(*ana.readable(&shared).unwrap().key, *kept_key);
+        assert_eq!(names(&ana, Kind::Mix), ["Shino"]);
         assert_eq!(names(&ana, Kind::Recipe), ["Shino"]);
         assert_eq!(names(&ana, Kind::Batch), ["Shino"]);
         let as_ben = Vault::unlock_as(dir.path(), Some(ben.id), BENS).unwrap();
         assert!(names(&as_ben, Kind::Recipe).is_empty());
         assert_eq!(names(&as_ben, Kind::Batch), ["Shino"]);
+        assert_eq!(names(&as_ben, Kind::Mix), ["Shino"]);
         drop(as_ben);
 
         // And taking it away again re-encrypts the sheets too.

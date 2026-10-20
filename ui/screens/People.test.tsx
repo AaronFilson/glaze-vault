@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Access, Capabilities, CustomRole, Team } from '../api';
 import { ManagedPeople, People } from './Team';
 
-const ALL = ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] as const;
+const ALL = ['recipe', 'material', 'batch', 'firing', 'mix', 'limits', 'prices'] as const;
 
 const ACCESS: Access = {
   team: true,
