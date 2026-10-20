@@ -33,12 +33,12 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Clay bodies
 
-- The rest of the ranked list at the end of
-  [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault):
-  a casting-slip batch record (deflocculant added in steps, gravity and viscosity over days of
-  ageing).
-- Lots on a batch as it is mixed, not only on a firing: the printed batch sheet has a blank Lot
-  column to write in.
+The ranked list at the end of
+[clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault)
+is built. Small things left from the mix log ([ADR 16](adr/0016-mix-log.md)):
+
+- Mixes in the CSV export, as the firing log has.
+- A printed mix record for the shop floor: the batch sheet with blank rows for the slip's steps.
 
 ## Engineering
 

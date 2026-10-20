@@ -53,6 +53,10 @@ async function newRecoveryKey(app: App, sheet: string): Promise<string[]> {
   return words;
 }
 
+/** A day as the app shows it, YYYY-MM-DD. */
+const isoDate = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
 const unlock = (password: string) => [
   'expect "Unlock your vault" 5000',
   `type "Password" ${quote(password)}`,
@@ -508,7 +512,8 @@ export const scenarios: Scenario[] = [
         // Ana reads Ben's mix under the recipe, with the materials' names.
         'click "Leach 4321"',
         'click "Mixes (1)"',
-        'click "Leach 4321" in "Mixes"',
+        // A mix is listed with its day and size.
+        `click ${quote(`Leach 4321 ${isoDate(new Date())} · 1000 g`)} in "Mixes"`,
         'expect "[textbox \\"Lot of Custer, line 1\\" = \\"L-7\\"]"',
         'click "Mix log"'
       );
