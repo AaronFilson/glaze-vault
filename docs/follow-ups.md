@@ -27,6 +27,8 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Teams ([ADR 12](adr/0012-teams-on-one-computer.md))
 
+- Phase 2, the LAN host and replicas: [the plan](plans/phase-2-lan-host.md), for review before
+  any of it is built. Its stage 3 builds the item below.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
