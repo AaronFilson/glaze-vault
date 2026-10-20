@@ -232,13 +232,18 @@ async function run(line: string): Promise<void> {
   }
 }
 
-/** Runs a script line by line, stopping at the first failure. Returns what each line did. */
-export async function runScript(script: string): Promise<string[]> {
+/** Runs a script line by line, stopping at the first failure. Returns what each line did, and
+ * tells `progress` before each line, so a script that never finishes shows where it stopped. */
+export async function runScript(
+  script: string,
+  progress?: (report: string[], running: string) => void
+): Promise<string[]> {
   const report: string[] = [];
   waitFor = FIND_FOR_MS;
   const lines = script.split(/\r?\n/).map((line) => line.trim());
   for (const [index, line] of lines.entries()) {
     if (!line || line.startsWith('#')) continue;
+    progress?.(report, line);
     try {
       const started = Date.now();
       await run(line);

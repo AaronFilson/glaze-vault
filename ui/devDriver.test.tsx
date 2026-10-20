@@ -67,6 +67,13 @@ it('types, chooses, checks and clicks, waiting for what a click shows', async ()
   expect(document.body.textContent).toContain('Shino (frit) shown');
 });
 
+it('says which line it is on before running it, so a script that hangs shows where', async () => {
+  render(<Form />);
+  const seen: string[][] = [];
+  await runScript('# a comment\ntype "Recipe name" "Shino"\nclick "Save"', (report, running) => seen.push([...report, running]));
+  expect(seen).toEqual([['type "Recipe name" "Shino"'], ['ok   type "Recipe name" "Shino"', 'click "Save"']]);
+});
+
 it('says which names are ambiguous, missing or disabled, and stops there', async () => {
   render(<Form />);
   await runScript('click "Save"');
