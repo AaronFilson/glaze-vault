@@ -333,6 +333,10 @@ code.path {
   width: 100%;
 }
 
+.sidebar > button + button {
+  margin-top: 0.5rem;
+}
+
 .list {
   list-style: none;
   padding: 0;
@@ -710,6 +714,18 @@ button.link.danger {
 
 .compare-table .change {
   color: var(--muted);
+}
+
+/* Materials compared (MaterialCompare.tsx): the materials to choose, in a wrapping row. */
+.material-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+.material-picks legend {
+  width: 100%;
+  font-weight: 600;
 }
 
 .compare-notes > div {
