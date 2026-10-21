@@ -4,16 +4,18 @@
 //! way a team's is, so it can grow into one (docs/adr/0012-teams-on-one-computer.md, in `team`).
 
 mod attachments;
+mod events;
 mod moving;
 mod roles;
 mod summaries;
 mod team;
 
 pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
+pub(crate) use events::Body;
 pub use roles::{Capabilities, CustomRole};
 pub use team::{Collection, Grant, Person};
 
-use crate::access::Role;
+use crate::access::{Directory, Role};
 use crate::backup::Backup;
 use crate::crypto::{self, Key, KeyPair, PasswordKdf};
 use crate::error::{Error, Result};
@@ -48,8 +50,9 @@ pub struct Vault {
     default_collection: Uuid,
     /// The organization's key pair, when this person is an admin of a team's vault.
     organization: Option<KeyPair>,
-    /// The roles admins have made, for what each lets a person change.
-    roles: Vec<CustomRole>,
+    /// Who is in the vault, who holds what on each collection, and the roles admins made: what
+    /// the checks of who may do what read (access.rs).
+    directory: Directory,
     /// Whether firings are kept under each collection's summary key and every recipe revision has
     /// a summary (summaries.rs). Vaults from before are changed over by the first person to
     /// unlock who holds every collection's key.
@@ -142,7 +145,7 @@ impl Kind {
         Kind::Prices,
     ];
 
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Kind::Recipe => "recipe",
             Kind::Material => "material",
@@ -154,7 +157,7 @@ impl Kind {
         }
     }
 
-    fn parse(text: &str) -> Option<Kind> {
+    pub(crate) fn parse(text: &str) -> Option<Kind> {
         Kind::ALL.into_iter().find(|kind| kind.as_str() == text)
     }
 }
@@ -246,32 +249,49 @@ impl Vault {
         let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
         let collection_id = Uuid::new_v4();
         let collection_key = crypto::random_key();
-        let sealed = crypto::seal_key(
-            &keys.public,
-            &collection_key,
-            &grant_info(&vault_id, &collection_id, &user_id, Held::Collection, 1),
-        );
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO meta (name, value) VALUES ('vault_id', ?1), ('default_collection', ?2), ('summaries', '1')",
             params![vault_id.to_string(), collection_id.to_string()],
         )?;
-        tx.execute(
-            "INSERT INTO collections (id, created_at) VALUES (?1, ?2)",
-            params![collection_id.to_string(), now_ms()],
+        events::mark_filled(&tx)?;
+        // Its person, its collection, and their grant of it.
+        events::record(
+            &tx,
+            user_id,
+            Body::PersonAdded {
+                person: user_id,
+                name: String::new(),
+                public_key: keys.public.clone(),
+            },
         )?;
-        tx.execute(
-            "INSERT INTO grants (user_id, collection_id, enc, ciphertext) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                user_id.to_string(),
-                collection_id.to_string(),
-                sealed.enc,
-                sealed.ciphertext
-            ],
+        events::record(
+            &tx,
+            user_id,
+            Body::CollectionCreated {
+                collection: collection_id,
+                name: String::new(),
+                owner: None,
+            },
+        )?;
+        events::record(
+            &tx,
+            user_id,
+            team::grant_set(
+                &vault_id,
+                &user_id,
+                &keys.public,
+                &collection_id,
+                &collection_key,
+                1,
+                Role::Admin,
+                Held::Collection,
+            ),
         )?;
         tx.commit()?;
         keyring.write(&dir.join(KEYRING_FILE))?;
 
+        let directory = Directory::load(&conn)?;
         let vault = Vault {
             dir: dir.to_owned(),
             keyring,
@@ -290,7 +310,7 @@ impl Vault {
             }],
             default_collection: collection_id,
             organization: None,
-            roles: Vec::new(),
+            directory,
             summaries: true,
         };
         Ok((vault, recovery))
@@ -618,41 +638,26 @@ impl Vault {
         let Some(record) = deleted.iter().find(|r| r.record_id == record_id) else {
             return Err(Error::NotDeleted);
         };
-        let collection_id = record.collection_id;
-        self.editable(&collection_id, kind)?;
-        let (record, kind_name) = (record_id.to_string(), kind.as_str());
-        let tx = self.conn.unchecked_transaction()?;
-        // The change log forgets the record's revisions and attachments; the tombstone takes their
-        // place.
-        tx.execute(
-            "DELETE FROM changes WHERE item_id IN (
-                SELECT id FROM revisions WHERE record_id = ?1 AND kind = ?2
-                UNION ALL SELECT id FROM attachments WHERE record_id = ?1 AND kind = ?2)",
-            params![record, kind_name],
+        let collection = record.collection_id;
+        let erased: i64 = self.conn.query_row(
+            "SELECT count(*) FROM revisions WHERE record_id = ?1 AND kind = ?2",
+            params![record_id.to_string(), kind.as_str()],
+            |row| row.get(0),
         )?;
-        let erased = tx.execute(
-            "DELETE FROM revisions WHERE record_id = ?1 AND kind = ?2",
-            params![record, kind_name],
+        // The event removes the record's revisions and attachments, takes them out of the change
+        // log, and leaves its tombstone.
+        events::record(
+            &self.conn,
+            self.user_id,
+            Body::Erased {
+                record: record_id,
+                kind,
+                collection,
+            },
         )?;
-        tx.execute(
-            "DELETE FROM attachments WHERE record_id = ?1 AND kind = ?2",
-            params![record, kind_name],
-        )?;
-        tx.execute(
-            "INSERT INTO erased (record_id, kind, collection_id, erased_at, erased_by) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                record,
-                kind_name,
-                collection_id.to_string(),
-                now_ms(),
-                self.user_id.to_string()
-            ],
-        )?;
-        log_change(&tx, Change::Erased, &record_id, &collection_id, kind)?;
-        tx.commit()?;
         // secure_delete has zeroed the freed pages; this empties the write-ahead log of them too.
         self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-        Ok(erased)
+        Ok(erased as usize)
     }
 
     /// Ends a fork (ADR 17): saves a revision after `keep`, one of the record's newest, with its
@@ -1041,6 +1046,7 @@ impl Vault {
             keyring.write(&dir.join(KEYRING_FILE))?;
         }
         team::finish_organization_change(&conn, &mut keyring, dir)?;
+        events::fill(&conn, &keyring, Some((user_id, &keys.public)))?;
         let default_collection: String =
             conn.query_row("SELECT value FROM meta WHERE name = 'default_collection'", [], |row| {
                 row.get(0)
@@ -1058,11 +1064,10 @@ impl Vault {
             collections: Vec::new(),
             default_collection: parse_id(&default_collection)?,
             organization,
-            roles: Vec::new(),
+            directory: Directory::default(),
             summaries: false,
         };
         vault.summaries = vault.meta(summaries::META)?.is_some();
-        vault.load_roles()?;
         vault.load_collections()?;
         // A change-over that fails, as over a record that does not decrypt, is tried again at the
         // next unlock; it does not keep anyone out. Until it is done, nobody can be given a role
@@ -1071,9 +1076,11 @@ impl Vault {
         Ok(vault)
     }
 
-    /// Opens the keys of every collection granted to this person, and of all of them for an
-    /// admin. Someone who must still choose their own password opens none.
+    /// Reads the directory again, and opens the keys of every collection granted to this person,
+    /// and of all of them for an admin. Someone who must still choose their own password opens
+    /// none.
     fn load_collections(&mut self) -> Result<()> {
+        self.directory = Directory::load(&self.conn)?;
         self.collections.clear();
         if self.user().must_set_password {
             return Ok(());
@@ -1149,7 +1156,7 @@ impl Vault {
     /// A collection this person may change records of a kind in.
     fn editable(&self, id: &Uuid, kind: Kind) -> Result<&OpenCollection> {
         let collection = self.readable(id)?;
-        if !self.may_change(collection.role, kind) {
+        if !self.directory.may_change(self.user_id, *id, kind) {
             return Err(Error::NotAllowed);
         }
         Ok(collection)
@@ -1502,13 +1509,11 @@ pub(crate) fn atomically<T>(conn: &Connection, step: impl FnOnce(&Connection) ->
     }
 }
 
-/// What the change log lists (ADR 17).
+/// What the change log lists besides events (ADR 17, 18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Change {
     Revision,
     Attachment,
-    /// A record erased: its tombstone, in place of its revisions and attachments.
-    Erased,
 }
 
 /// Adds an item to the end of this store's change log.
@@ -1516,7 +1521,6 @@ pub(crate) fn log_change(conn: &Connection, change: Change, id: &Uuid, collectio
     let item = match change {
         Change::Revision => "revision",
         Change::Attachment => "attachment",
-        Change::Erased => "erased",
     };
     conn.execute(
         "INSERT INTO changes (item, item_id, collection_id, kind) VALUES (?1, ?2, ?3, ?4)",
@@ -2264,20 +2268,21 @@ mod tests {
             )
             .unwrap();
         assert_eq!((kind.as_str(), by), ("recipe", vault.user_id.to_string()));
-        assert_eq!(
-            changes(&vault),
-            [
-                ("revision".to_owned(), kept.revision_id.to_string()),
-                ("erased".to_owned(), first.record_id.to_string())
-            ]
-        );
+        // So is the event that erased it (ADR 18), in the collection's part of the log.
+        let logged = changes(&vault);
+        assert_eq!(logged[0], ("revision".to_owned(), kept.revision_id.to_string()));
+        assert_eq!(logged.len(), 2);
+        let (name, actor, _) = events::kept(&vault.conn).pop().unwrap();
+        assert_eq!((name.as_str(), actor), ("erased", Some(vault.user_id.to_string())));
+        assert_eq!(logged[1].0, "event");
     }
 
-    /// The change log, in order, as (item, id).
+    /// The change log's entries for collections, in order, as (item, id): what is saved, and the
+    /// events about records, without the directory's.
     fn changes(vault: &Vault) -> Vec<(String, String)> {
         let mut statement = vault
             .conn
-            .prepare("SELECT item, item_id FROM changes ORDER BY seq")
+            .prepare("SELECT item, item_id FROM changes WHERE collection_id IS NOT NULL ORDER BY seq")
             .unwrap();
         statement
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))

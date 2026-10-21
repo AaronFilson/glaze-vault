@@ -1,12 +1,15 @@
 //! A team on one computer (docs/adr/0012-teams-on-one-computer.md): growing a one-person vault,
-//! people, collections and what each person may do in them.
+//! people, collections and what each person may do in them. Each change is made of directory
+//! events (events.rs, ADR 18), which the shared checks in access.rs allow or refuse; this file
+//! makes the keys they carry.
 
+use super::events::{self, Body, Renamed};
 use super::roles::Capabilities;
 use super::{
     Held, KEYRING_FILE, Kind, OpenCollection, Vault, batch_key, check_password, epoch_aad, epoch_words, grant_info,
-    now_ms, older_keys, parse_id, parse_role, summary_key,
+    now_ms, older_keys, parse_id, summary_key,
 };
-use crate::access::Role;
+use crate::access::{Directory, Role};
 use crate::crypto::{self, Key, KeyPair, PasswordKdf, SealedBox};
 use crate::error::{Error, Result};
 use crate::keyring::{self, Keyring, KeyringUser, Organization};
@@ -117,28 +120,17 @@ impl Vault {
         if !admin && !self.collections.iter().any(|c| self.managed(&c.id).is_ok()) {
             return Err(Error::NotAllowed);
         }
-        let mut statement = self
-            .conn
-            .prepare("SELECT user_id, collection_id, role FROM grants ORDER BY user_id, rowid")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.into_iter()
-            .map(|(person, collection, role)| {
-                Ok(Grant {
-                    person: parse_id(&person)?,
-                    collection: parse_id(&collection)?,
-                    role: parse_role(&role)?,
-                })
+        Ok(self
+            .directory
+            .grants
+            .iter()
+            .filter(|g| admin || self.managed(&g.collection).is_ok())
+            .map(|g| Grant {
+                person: g.person,
+                collection: g.collection,
+                role: g.role,
             })
-            .filter(|grant| !matches!(grant, Ok(g) if !admin && self.managed(&g.collection).is_err()))
-            .collect()
+            .collect())
     }
 
     /// Makes a one-person vault a team's, with this person as its first admin, named `name`.
@@ -147,55 +139,83 @@ impl Vault {
         if self.is_team() {
             return Err(Error::AlreadyATeam);
         }
-        let name = checked_name(&self.keyring, name, Some(self.user_id))?;
+        let name = name.trim().to_owned();
         let draft = self.draft()?;
         let vault_id = self.keyring.vault_id;
+        let me = self.user_id;
         let organization = KeyPair::generate();
         let recovery = RecoveryKey::generate();
         let database_key = self.database_key()?;
 
         let mut keyring = self.keyring.clone();
         keyring.organization = Some(new_organization(&vault_id, &organization, &recovery, &database_key));
-        let user = super::user_mut(&mut keyring, &self.user_id);
-        user.name = name;
+        let user = super::user_mut(&mut keyring, &me);
+        user.name = name.clone();
         user.public_key = self.keys.public.clone();
         user.organization_key = Some(seal_organization_key(&vault_id, user, &organization));
 
-        // Every collection key is sealed to the organization, the first is named, and the admin
-        // gets a private collection.
+        // This person becomes its admin, every collection key is sealed to the organization, the
+        // first is named, and the admin gets a private collection. The key file is written before
+        // the database's changes are kept, so a failure leaves the vault one person's.
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE collections SET name = ?1 WHERE id = ?2 AND name = ''",
-            params![SHARED, self.default_collection.to_string()],
+        events::record(
+            &tx,
+            me,
+            Body::TeamFormed {
+                person: me,
+                name,
+                public_key: self.keys.public.clone(),
+                organization_key: organization.public.clone(),
+            },
         )?;
-        for collection in &self.collections {
-            insert_organization_grant(
+        if self.readable(&self.default_collection).is_ok_and(|c| c.name.is_empty()) {
+            events::record(
                 &tx,
-                &vault_id,
-                &organization.public,
-                &collection.id,
-                collection.full_key()?,
-                collection.epoch,
+                me,
+                Body::CollectionRenamed {
+                    collection: self.default_collection,
+                    name: SHARED.into(),
+                },
+            )?;
+        }
+        for collection in &self.collections {
+            events::record(
+                &tx,
+                me,
+                organization_grant_set(
+                    &vault_id,
+                    &organization.public,
+                    &collection.id,
+                    collection.full_key()?,
+                    collection.epoch,
+                ),
             )?;
         }
         // A vault that was a team's before keeps the private collection it had.
-        if !self.collections.iter().any(|c| c.owner == Some(self.user_id)) {
-            let private = create_collection(&tx, "", Some(self.user_id))?;
-            insert_grant(
+        if !self.collections.iter().any(|c| c.owner == Some(me)) {
+            let (private, key) = create_collection(&tx, me, "", Some(me))?;
+            events::record(
                 &tx,
-                &vault_id,
-                &self.user_id,
-                &self.keys.public,
-                &private.0,
-                &private.1,
-                1,
-                Role::Formulator,
-                Held::Collection,
+                me,
+                grant_set(
+                    &vault_id,
+                    &me,
+                    &self.keys.public,
+                    &private,
+                    &key,
+                    1,
+                    Role::Formulator,
+                    Held::Collection,
+                ),
             )?;
-            insert_organization_grant(&tx, &vault_id, &organization.public, &private.0, &private.1, 1)?;
+            events::record(
+                &tx,
+                me,
+                organization_grant_set(&vault_id, &organization.public, &private, &key, 1),
+            )?;
         }
-        tx.commit()?;
         keyring.write(&self.dir.join(KEYRING_FILE))?;
+        tx.commit()?;
         self.keyring = keyring;
         self.organization = Some(organization);
         self.load_collections()?;
@@ -209,50 +229,69 @@ impl Vault {
     /// Adds a person with a one-time password to pass on, and roles on collections. They choose
     /// their own password, and get their recovery key, when they first sign in.
     pub fn add_person(&mut self, name: &str, one_time_password: &str, roles: &[(Uuid, Role)]) -> Result<Person> {
-        let organization = self.admin()?;
+        let organization = self.admin()?.public.clone();
         check_password(one_time_password)?;
-        let name = checked_name(&self.keyring, name, None)?;
+        let name = name.trim().to_owned();
         let vault_id = self.keyring.vault_id;
+        let me = self.user_id;
         let id = Uuid::new_v4();
         let keys = KeyPair::generate();
         let database_key = self.database_key()?;
-        let user = new_user(&vault_id, id, name, &keys, one_time_password, &database_key);
-        let organization_public = organization.public.clone();
+        let user = new_user(&vault_id, id, name.clone(), &keys, one_time_password, &database_key);
 
         let tx = self.conn.unchecked_transaction()?;
-        let private = create_collection(&tx, "", Some(id))?;
-        insert_grant(
+        events::record(
             &tx,
-            &vault_id,
-            &id,
-            &keys.public,
-            &private.0,
-            &private.1,
-            1,
-            Role::Formulator,
-            Held::Collection,
+            me,
+            Body::PersonAdded {
+                person: id,
+                name,
+                public_key: keys.public.clone(),
+            },
         )?;
-        insert_organization_grant(&tx, &vault_id, &organization_public, &private.0, &private.1, 1)?;
-        for (collection, role) in roles {
-            self.known_role(*role)?;
-            self.ready_for(self.held(*role))?;
-            let collection = self.readable(collection)?;
-            insert_grant(
-                &tx,
+        let (private, key) = create_collection(&tx, me, "", Some(id))?;
+        events::record(
+            &tx,
+            me,
+            grant_set(
                 &vault_id,
                 &id,
                 &keys.public,
-                &collection.id,
-                collection.full_key()?,
-                collection.epoch,
-                *role,
-                self.held(*role),
+                &private,
+                &key,
+                1,
+                Role::Formulator,
+                Held::Collection,
+            ),
+        )?;
+        events::record(
+            &tx,
+            me,
+            organization_grant_set(&vault_id, &organization, &private, &key, 1),
+        )?;
+        for (collection, role) in roles {
+            self.ready_for(self.held(*role))?;
+            let collection = self.readable(collection)?;
+            events::record(
+                &tx,
+                me,
+                grant_set(
+                    &vault_id,
+                    &id,
+                    &keys.public,
+                    &collection.id,
+                    collection.full_key()?,
+                    collection.epoch,
+                    *role,
+                    self.held(*role),
+                ),
             )?;
         }
-        tx.commit()?;
+        // Into the key file before the database keeps them, so a failure adds nobody.
         let mut keyring = self.keyring.clone();
         keyring.users.push(user);
         keyring.write(&self.dir.join(KEYRING_FILE))?;
+        tx.commit()?;
         self.keyring = keyring;
         self.load_collections()?;
         Ok(person(self.keyring.user(&id)?))
@@ -293,75 +332,54 @@ impl Vault {
     /// Gives a person a role on a collection, or with None takes it away. Taking it away gives the
     /// collection a new key, since they may have kept the old one (ADR 3). An admin may give any
     /// role; someone who manages the collection may give any but an admin's or a manager's, to
-    /// anyone but an admin, a manager or themselves.
+    /// anyone but an admin, a manager or themselves (access.rs).
     pub fn set_role(&mut self, person: Uuid, collection: Uuid, role: Option<Role>) -> Result<()> {
         let user = self.keyring.user(&person)?.clone();
         let vault_id = self.keyring.vault_id;
-        let previous: Option<Role> = self
-            .conn
-            .query_row(
-                "SELECT role FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                params![person.to_string(), collection.to_string()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .map(|role| parse_role(&role))
-            .transpose()?;
-        if self.admin().is_err() {
-            self.managed(&collection)?;
-            let lower =
-                |role: Option<Role>| role.is_none_or(|role| role != Role::Admin && !self.capabilities(role).manage);
-            if person == self.user_id || user.organization_key.is_some() || !lower(previous) || !lower(role) {
-                return Err(Error::ManagersOnlyLower);
-            }
-        }
+        let me = self.user_id;
+        let previous = self.directory.grant(person, collection).map(|g| g.role);
         match role {
             Some(role) => {
-                self.known_role(role)?;
                 self.ready_for(self.held(role))?;
+                // In one transaction: a failure part way leaves them with the role they had.
                 let tx = self.conn.unchecked_transaction()?;
-                tx.execute(
-                    "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                    params![person.to_string(), collection.to_string()],
-                )?;
                 // Someone who held the collection's key and now gets only a key made from it, or
                 // who goes from one such key to the other, may have kept what they had, so the
-                // collection gets a new key, in the same transaction: a failure part way leaves
-                // them with the role they had.
+                // collection gets a new key, sealed again for everyone but them.
                 let held = self.held(role);
                 let before = previous.map(|previous| self.held(previous));
                 let (epoch, key) = if before.is_some_and(|before| before != held && held != Held::Collection) {
-                    self.new_epoch_in(&tx, &collection)?
+                    let organization = self.organization_public_key()?;
+                    self.new_epoch_for(&tx, &collection, Some(&organization), Some(person))?
                 } else {
                     let open = self.readable(&collection)?;
                     (open.epoch, open.full_key()?.clone())
                 };
-                insert_grant(
+                events::record(
                     &tx,
-                    &vault_id,
-                    &person,
-                    &user.public_key,
-                    &collection,
-                    &key,
-                    epoch,
-                    role,
-                    held,
+                    me,
+                    grant_set(
+                        &vault_id,
+                        &person,
+                        &user.public_key,
+                        &collection,
+                        &key,
+                        epoch,
+                        role,
+                        held,
+                    ),
                 )?;
                 tx.commit()?;
             }
             // In one transaction, so a failure part way leaves them their role, and trying again
             // takes it away and changes the key.
-            None => {
+            None if previous.is_some() => {
                 let tx = self.conn.unchecked_transaction()?;
-                let removed = tx.execute(
-                    "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                    params![person.to_string(), collection.to_string()],
-                )?;
-                if removed > 0 {
-                    self.new_epoch_in(&tx, &collection)?;
-                }
+                events::record(&tx, me, Body::GrantRemoved { person, collection })?;
+                self.new_epoch_in(&tx, &collection)?;
                 tx.commit()?;
             }
+            None => {}
         }
         self.load_collections()
     }
@@ -370,29 +388,26 @@ impl Vault {
     /// new keys. Their private collection stays, for admins. Nobody removes themselves.
     pub fn remove_person(&mut self, person: Uuid) -> Result<()> {
         self.admin()?;
-        if person == self.user_id {
-            return Err(Error::NotAllowed);
+        self.keyring.user(&person)?;
+        // Already gone from the directory when the key file could not be written last time: only
+        // that is left to do.
+        if self.directory.person(person).is_some() {
+            let theirs: Vec<Uuid> = self
+                .directory
+                .grants
+                .iter()
+                .filter(|g| g.person == person)
+                .map(|g| g.collection)
+                .collect();
+            // Their grants go and their collections get new keys all at once, or not at all.
+            let tx = self.conn.unchecked_transaction()?;
+            events::record(&tx, self.user_id, Body::PersonRemoved { person })?;
+            for collection in theirs {
+                self.new_epoch_in(&tx, &collection)?;
+            }
+            tx.commit()?;
+            self.load_collections()?;
         }
-        // An admin holds the organization's private key, which opens every collection's key, so
-        // admin is taken away first, which gives the organization a new key and recovery sheet.
-        if self.keyring.user(&person)?.organization_key.is_some() {
-            return Err(Error::RemovingAdmin);
-        }
-        let mut statement = self
-            .conn
-            .prepare("SELECT collection_id FROM grants WHERE user_id = ?1")?;
-        let theirs = statement
-            .query_map(params![person.to_string()], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(statement);
-        // Their grants go and their collections get new keys all at once, or not at all.
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM grants WHERE user_id = ?1", params![person.to_string()])?;
-        for collection in theirs {
-            self.new_epoch_in(&tx, &parse_id(&collection)?)?;
-        }
-        tx.commit()?;
-        self.load_collections()?;
         // Only then do they leave the key file. Until the new database key is written there, they
         // are still listed, so removing them again finishes the job.
         let mut keyring = self.keyring.clone();
@@ -405,28 +420,31 @@ impl Vault {
     /// and get a new sheet at their next sign-in, as when they were added.
     pub fn reset_person(&mut self, person: Uuid, one_time_password: &str) -> Result<()> {
         let organization = self.admin()?;
+        // Not themselves: they would lose their own way in.
         if person == self.user_id {
             return Err(Error::NotAllowed);
         }
         check_password(one_time_password)?;
         let database_key = self.database_key()?;
         let mut keyring = self.keyring.clone();
+        let tx = self.conn.unchecked_transaction()?;
         rekey_person(
-            &self.conn,
+            &tx,
             &mut keyring,
             organization,
             &database_key,
             person,
             one_time_password,
             true,
+            self.user_id,
         )?;
         keyring.write(&self.dir.join(KEYRING_FILE))?;
+        tx.commit()?;
         self.keyring = keyring;
-        Ok(())
+        self.load_collections()
     }
 
-    /// Makes someone an admin: the organization key is sealed to them. Taking it back, or removing
-    /// an admin, needs a new organization key, which comes later.
+    /// Makes someone an admin: the organization key is sealed to them.
     pub fn make_admin(&mut self, person: Uuid) -> Result<()> {
         let organization = self.admin()?;
         self.keyring.user(&person)?;
@@ -437,9 +455,12 @@ impl Vault {
             return Err(Error::NoSuchPerson);
         }
         user.organization_key = Some(seal_organization_key(&vault_id, user, organization));
+        let tx = self.conn.unchecked_transaction()?;
+        events::record(&tx, self.user_id, Body::AdminGiven { person })?;
         keyring.write(&self.dir.join(KEYRING_FILE))?;
+        tx.commit()?;
         self.keyring = keyring;
-        Ok(())
+        self.load_collections()
     }
 
     /// Takes admin away from someone. The organization gets a new key, sealed to the admins left,
@@ -455,13 +476,9 @@ impl Vault {
         // One that stopped before goes into the key file first, so its admin is not counted as
         // one still, nor its organization key lost under this one.
         self.finish_organization_change()?;
-        if person == self.user_id {
-            return Err(Error::NotAllowed);
-        }
-        if self.keyring.user(&person)?.organization_key.is_none() {
-            return Err(Error::NotAnAdmin);
-        }
+        let user = self.keyring.user(&person)?.clone();
         let vault_id = self.keyring.vault_id;
+        let me = self.user_id;
         let organization = KeyPair::generate();
         let recovery = RecoveryKey::generate();
         let pending = PendingOrganization {
@@ -475,14 +492,42 @@ impl Vault {
                 .collect(),
             demoted: person,
         };
-        let collections: Vec<Uuid> = self.collections.iter().map(|c| c.id).collect();
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE grants SET role = ?1 WHERE user_id = ?2 AND role = ?3",
-            params![Role::Formulator.code(), person.to_string(), Role::Admin.code()],
+        events::record(
+            &tx,
+            me,
+            Body::AdminTaken {
+                person,
+                organization_key: organization.public.clone(),
+            },
         )?;
+        let demoted: Vec<Uuid> = self
+            .directory
+            .grants
+            .iter()
+            .filter(|g| g.person == person && g.role == Role::Admin)
+            .map(|g| g.collection)
+            .collect();
+        for collection in demoted {
+            let open = self.readable(&collection)?;
+            events::record(
+                &tx,
+                me,
+                grant_set(
+                    &vault_id,
+                    &person,
+                    &user.public_key,
+                    &collection,
+                    open.full_key()?,
+                    open.epoch,
+                    Role::Formulator,
+                    Held::Collection,
+                ),
+            )?;
+        }
+        let collections: Vec<Uuid> = self.collections.iter().map(|c| c.id).collect();
         for collection in &collections {
-            self.new_epoch_for(&tx, collection, &organization.public)?;
+            self.new_epoch_for(&tx, collection, Some(&organization.public), None)?;
         }
         tx.execute(
             "INSERT INTO meta (name, value) VALUES (?1, ?2)
@@ -534,8 +579,12 @@ impl Vault {
         let organization = self.admin()?.public.clone();
         let name = collection_name(name)?;
         let tx = self.conn.unchecked_transaction()?;
-        let (id, key) = create_collection(&tx, &name, None)?;
-        insert_organization_grant(&tx, &self.keyring.vault_id, &organization, &id, &key, 1)?;
+        let (id, key) = create_collection(&tx, self.user_id, &name, None)?;
+        events::record(
+            &tx,
+            self.user_id,
+            organization_grant_set(&self.keyring.vault_id, &organization, &id, &key, 1),
+        )?;
         tx.commit()?;
         self.load_collections()?;
         Ok(Collection {
@@ -552,14 +601,11 @@ impl Vault {
     }
 
     pub fn rename_collection(&mut self, id: Uuid, name: &str) -> Result<()> {
-        self.managed(&id)?;
         let name = collection_name(name)?;
-        if self.readable(&id)?.owner.is_some() {
-            return Err(Error::NotAllowed);
-        }
-        self.conn.execute(
-            "UPDATE collections SET name = ?1 WHERE id = ?2",
-            params![name, id.to_string()],
+        events::record(
+            &self.conn,
+            self.user_id,
+            Body::CollectionRenamed { collection: id, name },
         )?;
         self.load_collections()
     }
@@ -586,16 +632,20 @@ impl Vault {
         if keyring.user(&admin)?.organization_key.is_none() {
             return Err(Error::NotAllowed);
         }
+        events::fill(&conn, &keyring, None)?;
+        let tx = conn.unchecked_transaction()?;
         rekey_person(
-            &conn,
+            &tx,
             &mut keyring,
             &organization,
             &database_key,
             admin,
             new_password,
             false,
+            admin,
         )?;
         keyring.write(&dir.join(KEYRING_FILE))?;
+        tx.commit()?;
         drop(conn);
         let mut vault = Vault::unlock_as(dir, Some(admin), new_password)?;
         let recovery = vault.new_recovery_key(new_password)?;
@@ -637,46 +687,50 @@ impl Vault {
         self.back_up(&backup)?;
         let vault_id = self.keyring.vault_id;
         let me = self.user_id;
-        let others: Vec<(Uuid, String)> = self
-            .keyring
-            .users
-            .iter()
-            .filter(|user| user.id != me)
-            .map(|user| (user.id, user.name.clone()))
-            .collect();
 
-        // This person keeps every collection, as a one-person vault's person does.
-        let tx = self.conn.unchecked_transaction()?;
-        for collection in &self.collections {
-            tx.execute(
-                "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                params![me.to_string(), collection.id.to_string()],
-            )?;
-            insert_grant(
-                &tx,
-                &vault_id,
-                &me,
-                &self.keys.public,
-                &collection.id,
-                collection.full_key()?,
-                collection.epoch,
-                Role::Admin,
-                Held::Collection,
-            )?;
+        // Already one person's in the database when the key file could not be written last time:
+        // only that is left to do.
+        if self.directory.is_team() {
+            let renamed: Vec<Renamed> = self
+                .keyring
+                .users
+                .iter()
+                .filter(|user| user.id != me)
+                .flat_map(|user| {
+                    self.collections
+                        .iter()
+                        .filter(move |c| c.owner == Some(user.id))
+                        .map(move |c| Renamed {
+                            collection: c.id,
+                            name: format!("From {}", user.name),
+                        })
+                })
+                .collect();
+            let tx = self.conn.unchecked_transaction()?;
+            // This person keeps every collection, as a one-person vault's person does, and then
+            // each gets a new key, sealed to them alone.
+            for collection in &self.collections {
+                events::record(
+                    &tx,
+                    me,
+                    grant_set(
+                        &vault_id,
+                        &me,
+                        &self.keys.public,
+                        &collection.id,
+                        collection.full_key()?,
+                        collection.epoch,
+                        Role::Admin,
+                        Held::Collection,
+                    ),
+                )?;
+            }
+            events::record(&tx, me, Body::TeamDisbanded { renamed })?;
+            for collection in &self.collections {
+                self.new_epoch_for(&tx, &collection.id, None, None)?;
+            }
+            tx.commit()?;
         }
-        tx.execute("DELETE FROM grants WHERE user_id != ?1", params![me.to_string()])?;
-        for (id, name) in &others {
-            tx.execute(
-                "UPDATE collections SET name = ?1, owner_id = NULL WHERE owner_id = ?2",
-                params![format!("From {name}"), id.to_string()],
-            )?;
-        }
-        tx.commit()?;
-        let collections: Vec<Uuid> = self.collections.iter().map(|c| c.id).collect();
-        for collection in &collections {
-            self.new_epoch(collection)?;
-        }
-        self.conn.execute("DELETE FROM organization_grants", [])?;
 
         let mut keyring = self.keyring.clone();
         keyring.users.retain(|user| user.id == me);
@@ -697,28 +751,22 @@ impl Vault {
         self.organization.as_ref().ok_or(Error::NotAllowed)
     }
 
-    /// A new key epoch for a collection (ADR 17): a new key, which wraps the one before, sealed to
-    /// the people who keep their grants and to the organization. What is already stored stays
-    /// under the key it was saved with, which whoever held it may have kept, so the new key keeps
-    /// someone who has lost the collection from reading what is saved from now on.
-    fn new_epoch(&mut self, collection: &Uuid) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        self.new_epoch_in(&tx, collection)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// As [`Vault::new_epoch`], in the caller's transaction, which it must commit and then reload
-    /// the collections. Returns the new epoch and its key.
-    fn new_epoch_in(&self, tx: &Connection, collection: &Uuid) -> Result<(i64, Key)> {
-        let organization = self
+    /// The organization's public key, as the key file has it.
+    fn organization_public_key(&self) -> Result<Vec<u8>> {
+        Ok(self
             .keyring
             .organization
             .as_ref()
             .ok_or(Error::NotATeam)?
             .public_key
-            .clone();
-        self.new_epoch_for(tx, collection, &organization)
+            .clone())
+    }
+
+    /// A new key epoch for a collection (ADR 17), in the caller's transaction, which it must
+    /// commit and then reload the collections. Returns the new epoch and its key.
+    fn new_epoch_in(&self, tx: &Connection, collection: &Uuid) -> Result<(i64, Key)> {
+        let organization = self.organization_public_key()?;
+        self.new_epoch_for(tx, collection, Some(&organization), None)
     }
 
     /// A collection this person manages: an admin manages every one.
@@ -727,71 +775,68 @@ impl Vault {
             return Err(Error::NotATeam);
         }
         let open = self.readable(collection)?;
-        // Nobody but an admin manages a person's private collection.
-        if self.organization.is_none() && (open.owner.is_some() || !self.capabilities(open.role).manage) {
+        if !self.directory.may_manage(self.user_id, *collection) {
             return Err(Error::NotAllowed);
         }
         Ok(open)
     }
 
-    /// After a role admins make changes what key it holds, in memory: its grants sealed again for
-    /// the key it now holds, in one transaction with `also`. Going to a narrower key gives each of
-    /// its collections a new key, since its people held the old one.
-    pub(super) fn regrant(&self, role: Role, before: Held, also: impl FnOnce(&Connection) -> Result<()>) -> Result<()> {
-        let after = self.held(role);
+    /// After a role admins make changes what key it holds, in the caller's transaction: its
+    /// grants sealed again for the key it now holds. Going to a narrower key gives each of its
+    /// collections a new key, since its people held the old one.
+    pub(super) fn regrant(&self, tx: &Connection, role: Role, before: Held) -> Result<()> {
+        let directory = Directory::load(tx)?;
+        let after = directory.held(role);
+        if after == before {
+            return Ok(());
+        }
         let vault_id = self.keyring.vault_id;
-        let tx = self.conn.unchecked_transaction()?;
-        also(&tx)?;
-        if after != before {
-            let mut statement = tx.prepare("SELECT user_id, collection_id FROM grants WHERE role = ?1")?;
-            let grants = statement
-                .query_map(params![role.code()], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            drop(statement);
-            let mut rotated: Vec<Uuid> = Vec::new();
-            for (person, collection) in grants {
-                let (person, collection) = (parse_id(&person)?, parse_id(&collection)?);
-                if after == Held::Collection {
-                    tx.execute(
-                        "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
-                        params![person.to_string(), collection.to_string()],
-                    )?;
-                    let user = self.keyring.user(&person)?;
-                    let open = self.readable(&collection)?;
-                    insert_grant(
-                        &tx,
+        let mut rotated: Vec<Uuid> = Vec::new();
+        for grant in directory.grants.iter().filter(|g| g.role == role) {
+            if after == Held::Collection {
+                let user = self.keyring.user(&grant.person)?;
+                let open = self.readable(&grant.collection)?;
+                events::record(
+                    tx,
+                    self.user_id,
+                    grant_set(
                         &vault_id,
-                        &person,
+                        &grant.person,
                         &user_public_key(user, &self.keys, &self.user_id),
-                        &collection,
+                        &grant.collection,
                         open.full_key()?,
                         open.epoch,
                         role,
                         after,
-                    )?;
-                } else if !rotated.contains(&collection) {
-                    self.new_epoch_in(&tx, &collection)?;
-                    rotated.push(collection);
-                }
+                    ),
+                )?;
+            } else if !rotated.contains(&grant.collection) {
+                self.new_epoch_in(tx, &grant.collection)?;
+                rotated.push(grant.collection);
             }
         }
-        tx.commit()?;
         Ok(())
     }
 
-    /// As [`Vault::new_epoch_in`], sealing the new key to `organization`: a new organization
-    /// key's, while it is changing.
-    fn new_epoch_for(&self, tx: &Connection, collection: &Uuid, organization: &[u8]) -> Result<(i64, Key)> {
+    /// A new key epoch for a collection (ADR 17): a new key, which wraps the one before, sealed to
+    /// the people who keep their grants, other than `except`, whose grant the caller sets, and to
+    /// `organization`, the organization's public key, or a new one's while it is changing. What
+    /// is already stored stays under the key it was saved with, which whoever held it may have
+    /// kept, so the new key keeps someone who has lost the collection from reading what is saved
+    /// from now on. Each grant is sealed for the key its role holds as the transaction has it.
+    fn new_epoch_for(
+        &self,
+        tx: &Connection,
+        collection: &Uuid,
+        organization: Option<&[u8]>,
+        except: Option<Uuid>,
+    ) -> Result<(i64, Key)> {
         let vault_id = self.keyring.vault_id;
+        let me = self.user_id;
         let open = self.readable(collection)?;
         let old = open.full_key()?;
-        let stored: i64 = tx.query_row(
-            "SELECT epoch FROM collections WHERE id = ?1",
-            params![collection.to_string()],
-            |row| row.get(0),
-        )?;
+        let directory = Directory::load(tx)?;
+        let stored = directory.collection(*collection).ok_or(Error::NotFound)?.epoch;
         // Twice in one transaction would wrap the wrong key: the collections are reloaded between.
         if stored != open.epoch {
             return Err(Error::Corrupt(format!(
@@ -803,54 +848,49 @@ impl Vault {
         let wrap = |old: &Key, new: &Key, held: Held| {
             crypto::encrypt(new, &old[..], &epoch_aad(&vault_id, collection, epoch, held)).to_bytes()
         };
-        tx.execute(
-            "INSERT INTO collection_epochs (collection_id, epoch, created_at, previous, previous_batch, previous_summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                collection.to_string(),
+        events::record(
+            tx,
+            me,
+            Body::KeyEpoch {
+                collection: *collection,
                 epoch,
-                now_ms(),
-                wrap(old, &new, Held::Collection),
-                wrap(&batch_key(old, collection), &batch_key(&new, collection), Held::Batch),
-                wrap(&summary_key(old, collection), &summary_key(&new, collection), Held::Summary),
-            ],
+                previous: wrap(old, &new, Held::Collection),
+                previous_batch: wrap(&batch_key(old, collection), &batch_key(&new, collection), Held::Batch),
+                previous_summary: wrap(
+                    &summary_key(old, collection),
+                    &summary_key(&new, collection),
+                    Held::Summary,
+                ),
+            },
         )?;
-        tx.execute(
-            "UPDATE collections SET epoch = ?1 WHERE id = ?2",
-            params![epoch, collection.to_string()],
-        )?;
-        let mut statement = tx.prepare("SELECT user_id, role FROM grants WHERE collection_id = ?1")?;
-        let grants = statement
-            .query_map(params![collection.to_string()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(statement);
-        tx.execute(
-            "DELETE FROM grants WHERE collection_id = ?1",
-            params![collection.to_string()],
-        )?;
-        for (person, role) in grants {
-            let person = parse_id(&person)?;
-            let user = self.keyring.user(&person)?;
-            let role = parse_role(&role)?;
-            insert_grant(
+        for grant in directory
+            .grants
+            .iter()
+            .filter(|g| g.collection == *collection && Some(g.person) != except)
+        {
+            let user = self.keyring.user(&grant.person)?;
+            events::record(
                 tx,
-                &vault_id,
-                &person,
-                &user_public_key(user, &self.keys, &self.user_id),
-                collection,
-                &new,
-                epoch,
-                role,
-                self.held(role),
+                me,
+                grant_set(
+                    &vault_id,
+                    &grant.person,
+                    &user_public_key(user, &self.keys, &self.user_id),
+                    collection,
+                    &new,
+                    epoch,
+                    grant.role,
+                    directory.held(grant.role),
+                ),
             )?;
         }
-        tx.execute(
-            "DELETE FROM organization_grants WHERE collection_id = ?1",
-            params![collection.to_string()],
-        )?;
-        insert_organization_grant(tx, &vault_id, organization, collection, &new, epoch)?;
+        if let Some(organization) = organization {
+            events::record(
+                tx,
+                me,
+                organization_grant_set(&vault_id, organization, collection, &new, epoch),
+            )?;
+        }
         Ok((epoch, new))
     }
 
@@ -907,47 +947,52 @@ fn open_by_organization_recovery(keyring: &Keyring, words: &str) -> Result<(KeyP
     Ok((pair, database_key))
 }
 
-/// New keys for a person, under `password`: the database key, their grants and, for an admin, the
-/// organization key are sealed to them again. Their recovery key goes, since it opened the old
-/// private key; `one_time` makes them choose a password and get a new one at their next sign-in.
+/// New keys for a person, under `password`, in the caller's transaction, which it commits once
+/// `keyring` is written: the database key, their grants and, for an admin, the organization key
+/// are sealed to them again. Their recovery key goes, since it opened the old private key;
+/// `one_time` makes them choose a password and get a new one at their next sign-in. `actor` is
+/// the admin who does it.
+#[allow(clippy::too_many_arguments)]
 fn rekey_person(
-    conn: &Connection,
+    tx: &Connection,
     keyring: &mut Keyring,
     organization: &KeyPair,
     database_key: &Key,
     person: Uuid,
     password: &str,
     one_time: bool,
+    actor: Uuid,
 ) -> Result<()> {
     let vault_id = keyring.vault_id;
     let keys = KeyPair::generate();
-    let collections = organization_collections(conn, keyring, organization)?;
-    let mut statement = conn.prepare("SELECT collection_id, role FROM grants WHERE user_id = ?1")?;
-    let grants = statement
-        .query_map(params![person.to_string()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
-    let tx = conn.unchecked_transaction()?;
-    tx.execute("DELETE FROM grants WHERE user_id = ?1", params![person.to_string()])?;
-    for (collection, role) in grants {
-        let collection = parse_id(&collection)?;
+    let collections = organization_collections(tx, keyring, organization)?;
+    let directory = Directory::load(tx)?;
+    events::record(
+        tx,
+        actor,
+        Body::PersonKeysChanged {
+            person,
+            public_key: keys.public.clone(),
+        },
+    )?;
+    for grant in directory.grants.iter().filter(|g| g.person == person) {
         let open = collections
             .iter()
-            .find(|c| c.id == collection)
+            .find(|c| c.id == grant.collection)
             .ok_or_else(|| Error::Corrupt("a collection is not sealed to the organization".into()))?;
-        let role = parse_role(&role)?;
-        insert_grant(
-            &tx,
-            &vault_id,
-            &person,
-            &keys.public,
-            &collection,
-            &open.key,
-            open.epoch,
-            role,
-            held_in(conn, role)?,
+        events::record(
+            tx,
+            actor,
+            grant_set(
+                &vault_id,
+                &person,
+                &keys.public,
+                &grant.collection,
+                &open.key,
+                open.epoch,
+                grant.role,
+                directory.held(grant.role),
+            ),
         )?;
     }
     let old = keyring.user(&person)?.clone();
@@ -956,7 +1001,6 @@ fn rekey_person(
     if old.organization_key.is_some() {
         user.organization_key = Some(seal_organization_key(&vault_id, &user, organization));
     }
-    tx.commit()?;
     *super::user_mut(keyring, &person) = user;
     Ok(())
 }
@@ -1046,27 +1090,6 @@ pub(super) fn organization_collections(
         .collect()
 }
 
-/// Which key a grant of a role holds, from the roles kept in the database, for when no vault is
-/// open to ask (Vault::held).
-fn held_in(conn: &Connection, role: Role) -> Result<Held> {
-    Ok(match role {
-        Role::Operator => Held::Batch,
-        Role::Custom(id) => {
-            let may: Option<String> = conn
-                .query_row("SELECT may FROM roles WHERE id = ?1", params![id.to_string()], |row| {
-                    row.get(0)
-                })
-                .optional()?;
-            if may.is_some_and(|may| may.split(',').any(|part| part == "chemistry")) {
-                Held::Collection
-            } else {
-                Held::Summary
-            }
-        }
-        _ => Held::Collection,
-    })
-}
-
 pub(super) fn people(keyring: &Keyring) -> Vec<Person> {
     let mut people: Vec<Person> = keyring.users.iter().map(person).collect();
     people.sort_by_key(|p| p.name.to_lowercase());
@@ -1080,22 +1103,6 @@ fn person(user: &KeyringUser) -> Person {
         admin: user.organization_key.is_some(),
         must_set_password: user.must_set_password,
     }
-}
-
-/// A name, trimmed, that nobody else in the vault has.
-fn checked_name(keyring: &Keyring, name: &str, except: Option<Uuid>) -> Result<String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(Error::NameMissing);
-    }
-    let taken = keyring
-        .users
-        .iter()
-        .any(|user| Some(user.id) != except && user.name.trim().to_lowercase() == name.to_lowercase());
-    if taken {
-        return Err(Error::NameTaken);
-    }
-    Ok(name.to_owned())
 }
 
 /// A user's public key. A one-person vault's file did not keep it, so the unlocked person's own
@@ -1223,19 +1230,25 @@ pub(super) fn finish_organization_change(conn: &Connection, keyring: &mut Keyrin
     Ok(())
 }
 
-/// Makes a collection and its key.
-fn create_collection(conn: &Connection, name: &str, owner: Option<Uuid>) -> Result<(Uuid, Key)> {
+/// Makes a collection, by `actor`, and its key.
+fn create_collection(conn: &Connection, actor: Uuid, name: &str, owner: Option<Uuid>) -> Result<(Uuid, Key)> {
     let id = Uuid::new_v4();
-    conn.execute(
-        "INSERT INTO collections (id, created_at, name, owner_id) VALUES (?1, ?2, ?3, ?4)",
-        params![id.to_string(), now_ms(), name, owner.map(|o| o.to_string())],
+    events::record(
+        conn,
+        actor,
+        Body::CollectionCreated {
+            collection: id,
+            name: name.to_owned(),
+            owner,
+        },
     )?;
     Ok((id, crypto::random_key()))
 }
 
+/// A grant of a role on a collection, its key sealed to a person at an epoch: what they hold of
+/// the collection's `key`.
 #[allow(clippy::too_many_arguments)]
-fn insert_grant(
-    conn: &Connection,
+pub(super) fn grant_set(
     vault_id: &Uuid,
     person: &Uuid,
     public_key: &[u8],
@@ -1244,7 +1257,7 @@ fn insert_grant(
     epoch: i64,
     role: Role,
     held: Held,
-) -> Result<()> {
+) -> Body {
     // A batch operator gets the batch key only, and a role that reads without chemistry the
     // summary key only, each made from the collection's `key`.
     let key = match held {
@@ -1252,35 +1265,22 @@ fn insert_grant(
         Held::Batch => super::batch_key(key, collection),
         Held::Summary => summary_key(key, collection),
     };
-    let sealed = crypto::seal_key(public_key, &key, &grant_info(vault_id, collection, person, held, epoch));
-    conn.execute(
-        "INSERT INTO grants (user_id, collection_id, enc, ciphertext, role, epoch) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![
-            person.to_string(),
-            collection.to_string(),
-            sealed.enc,
-            sealed.ciphertext,
-            role.code(),
-            epoch
-        ],
-    )?;
-    Ok(())
+    Body::GrantSet {
+        person: *person,
+        collection: *collection,
+        role,
+        epoch,
+        sealed: crypto::seal_key(public_key, &key, &grant_info(vault_id, collection, person, held, epoch)),
+    }
 }
 
-fn insert_organization_grant(
-    conn: &Connection,
-    vault_id: &Uuid,
-    organization: &[u8],
-    collection: &Uuid,
-    key: &Key,
-    epoch: i64,
-) -> Result<()> {
-    let sealed = crypto::seal_key(organization, key, &organization_grant_info(vault_id, collection, epoch));
-    conn.execute(
-        "INSERT INTO organization_grants (collection_id, enc, ciphertext, epoch) VALUES (?1, ?2, ?3, ?4)",
-        params![collection.to_string(), sealed.enc, sealed.ciphertext, epoch],
-    )?;
-    Ok(())
+/// A collection's key at an epoch, sealed to the organization.
+fn organization_grant_set(vault_id: &Uuid, organization: &[u8], collection: &Uuid, key: &Key, epoch: i64) -> Body {
+    Body::OrganizationGrantSet {
+        collection: *collection,
+        epoch,
+        sealed: crypto::seal_key(organization, key, &organization_grant_info(vault_id, collection, epoch)),
+    }
 }
 
 fn organization_grant_info(vault_id: &Uuid, collection_id: &Uuid, epoch: i64) -> Vec<u8> {

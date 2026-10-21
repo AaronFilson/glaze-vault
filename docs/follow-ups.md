@@ -29,8 +29,11 @@ Work decided on but not done yet, with the reason it waits.
 
 - Phase 2, the LAN host and replicas: [the plan](plans/phase-2-lan-host.md), with every default in
   its section 8 accepted. Stage 1 (key epochs, the change log, tombstones and forks,
-  [ADR 17](adr/0017-key-epochs-change-log.md)) is built; stage 2, the directory as events and
-  shared access checks, is next. Its stage 3 builds the item below.
+  [ADR 17](adr/0017-key-epochs-change-log.md)) and stage 2 (the directory as events and shared
+  access checks, [ADR 18](adr/0018-directory-events.md)) are built; stage 3, signatures and the
+  audit log, is next, and builds the item below.
+- Stage 4 (ADR 20): how people's key file entries reach their devices, now that events carry
+  public keys only; and the move event carrying the rows that replace the old ones.
 - Before replicas (stage 7): the fork notice in the firing log, mix log, batch sheets, limit sets
   and price lists, which show a forked record's newest for now; and a user guide page on forks.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its

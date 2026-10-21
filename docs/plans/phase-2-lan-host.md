@@ -6,8 +6,9 @@ log (ADR 16, `Kind::Mix` under the batch key) and takes schema 7. So this plan's
 start at 8 and its new ADRs at 17. Where it is not sure what the code or a crate does, it says so.
 
 Decisions for Aaron are in [section 8](#8-open-questions-for-aaron), each with a recommended
-default. On 2026-10-20 Aaron accepted every default. Stage 1 is built
-([ADR 17](../adr/0017-key-epochs-change-log.md)).
+default. On 2026-10-20 Aaron accepted every default. Stages 1 and 2 are built
+([ADR 17](../adr/0017-key-epochs-change-log.md), [ADR 18](../adr/0018-directory-events.md)), so
+the later ADRs here are numbered from 19.
 
 ## Summary
 
@@ -166,6 +167,9 @@ This is `Vault::prepare_host(staging: &Path) -> HostSetup`, in `crates/core/src/
 7. Mark the app's own vault as a replica: mode = replica, the host's address `127.0.0.1:<port>`, the host's pinned key, the device key, and cursors set to the current highest sequence number per scope (it already has every row). A `meta` row `converting` records each step, so an unlock after a crash finishes or rolls back, as `finish_organization_change` does.
 
 ### 2.4 Access checks shared by `Vault` and `HostStore`
+
+Built in stage 2 ([ADR 18](../adr/0018-directory-events.md)) as `access::Directory`, with
+`check(actor, &Body)` in place of `check_event`.
 
 Move the decisions out of `Vault` into pure functions over a metadata view:
 
@@ -375,6 +379,10 @@ Items the client pushed come back in later pulls. They are inserted with `INSERT
 
 ### 3.10 Key distribution
 
+Changed by [ADR 18](../adr/0018-directory-events.md): events carry public keys only, since they are
+kept for good, and a password change makes no event. How key file entries reach a person's
+devices is decided in ADR 20.
+
 - A person's collection keys stay where they are today: grants sealed to their X25519 public key. They travel as `GrantSet` events, which hold the sealed box, so the host forwards sealed keys it cannot open.
 - An admin adding a person makes the person's keys on their own client, exactly as `add_person` does today. `PersonAdded` carries the key file entry (private key under the one-time password), the certificate and the grants.
 - The person's first sign-in on a device picks up that entry. `set_own_password` emits `PersonKeysChanged` (new password and recovery wrappings), signed by the person.
@@ -579,13 +587,13 @@ Sizes: S is under 500 lines changed, M is 500 to 1,500, L is 1,500 to 3,000. Tes
 | # | Stage | Contents | Useful on its own | Size |
 | --- | --- | --- | --- | --- |
 | 1 | **Key epochs, change log, tombstones** (schema 8) | `collection_epochs` and epoch columns. `rotate_collection_key_for` becomes `new_epoch`, and `OpenCollection` keeps epoch keys. Drafts encrypted at the current epoch, and read through the chain. The `changes` table, filled from existing rows in `created_at, rowid` order. `attachments.sha256`. The `erased` table, written by `erase`. `heads()` shows forks, plus `resolve_fork` and `supersedes`, and a small fork notice in the editor using `compare.ts`. Draft ADR 17. | Removing a person, or a grant, no longer re-encrypts the collection. Forks are resolvable. | L |
-| 2 | **Directory as events, shared access checks** (schema 9) | An `events` table. Each operation in `team.rs` and `roles.rs` builds an `Event` and calls `apply(&tx, &event)`. `access.rs` gains `Directory`, `may_change`, `may_manage` and `check_event`. `move_records` and `erase` write events. Existing grants, roles and collections are filled in as events made from the existing rows (unsigned until stage 3). No change visible on screen. | All team logic in one place that the host can call. | L |
-| 3 | **Signatures and the audit log** (schema 10) | `signing.rs`, `certificates`, signature columns, attestation at unlock, `Signed` in history. The audit table and chain, and `Vault::note` from the page for opening, printing and exporting. An admin screen listing the log, with CSV export. ADR 18. Closes the Teams follow-up. | Who saved what, and a log, on one computer. | L |
-| 4 | **Sync core, no network** | `core::host::HostStore`: a blind open, `accept(push)`, assigning sequence numbers, `pull(device, cursors)` filtering. `core::replica`: apply, pending items, sealing again, cursors. `crates/sync` with `proto.rs` and sans-IO sessions. In-process tests with one host and two or three clients, including the convergence test. The `test-kdf` feature. Draft ADR 19. | Proves the model before any socket. | L |
-| 5 | **Transport, pairing, hostd in the foreground** | `sync::net`: rustls with pinned keys (decide between raw public keys and rcgen), SPAKE2 with the exporter binding, `mdns-sd`, framing. `crates/hostd` with `run`. Loopback TLS tests. A dev-only CLI client for trying it by hand. ADR 20. | A working host that developers can run. | L |
-| 6 | **Host mode in the app** | `Vault::prepare_host`, the conversion screen, `hostd install` and `uninstall` per OS with elevation, firewall rule, sidecar bundling, updater handling. The host machine's app as a loopback replica. "Pair a computer", the Devices list, "Stop serving". Service smoke-test CI. ADR 21. | Teams can serve the LAN. Clients come next. | L |
+| 2 | **Directory as events, shared access checks** (schema 9) | An `events` table. Each operation in `team.rs` and `roles.rs` builds an `Event` and calls `apply(&tx, &event)`. `access.rs` gains `Directory`, `may_change`, `may_manage` and `check_event`. `move_records` and `erase` write events. Existing grants, roles and collections are filled in as events made from the existing rows (unsigned until stage 3). No change visible on screen. ADR 18. **Built.** | All team logic in one place that the host can call. | L |
+| 3 | **Signatures and the audit log** (schema 10) | `signing.rs`, `certificates`, signature columns, attestation at unlock, `Signed` in history. The audit table and chain, and `Vault::note` from the page for opening, printing and exporting. An admin screen listing the log, with CSV export. ADR 19. Closes the Teams follow-up. | Who saved what, and a log, on one computer. | L |
+| 4 | **Sync core, no network** | `core::host::HostStore`: a blind open, `accept(push)`, assigning sequence numbers, `pull(device, cursors)` filtering. `core::replica`: apply, pending items, sealing again, cursors. `crates/sync` with `proto.rs` and sans-IO sessions. In-process tests with one host and two or three clients, including the convergence test. The `test-kdf` feature. Draft ADR 20. | Proves the model before any socket. | L |
+| 5 | **Transport, pairing, hostd in the foreground** | `sync::net`: rustls with pinned keys (decide between raw public keys and rcgen), SPAKE2 with the exporter binding, `mdns-sd`, framing. `crates/hostd` with `run`. Loopback TLS tests. A dev-only CLI client for trying it by hand. ADR 21. | A working host that developers can run. | L |
+| 6 | **Host mode in the app** | `Vault::prepare_host`, the conversion screen, `hostd install` and `uninstall` per OS with elevation, firewall rule, sidecar bundling, updater handling. The host machine's app as a loopback replica. "Pair a computer", the Devices list, "Stop serving". Service smoke-test CI. ADR 22. | Teams can serve the LAN. Clients come next. | L |
 | 7 | **Client mode** | The join flow, the background sync task in the app (a second connection, `vault-changed` events), the sync status indicator, photos in chunks, the checkout button, `NeedsHost` for admin actions while offline, "Leave this vault". The LAN e2e suite. | Workstations and laptops work. | L |
-| 8 | **Offline limits, revocation, host backups** | `OfflinePolicy`, `Vault::writable`, nag and read-only banners, extension codes, revoked-device wipe, the lost-device flow, `generation` and a restore on the host, host backups (daily ones kept by `hostd`, and `RequestBackup`). ADR 22. | Finishes ADR 5. | M |
+| 8 | **Offline limits, revocation, host backups** | `OfflinePolicy`, `Vault::writable`, nag and read-only banners, extension codes, revoked-device wipe, the lost-device flow, `generation` and a restore on the host, host backups (daily ones kept by `hostd`, and `RequestBackup`). ADR 23. | Finishes ADR 5. | M |
 
 The LAN update mirror (ADR 5, "Updates on the LAN") comes after stage 8, as a follow-up.
 
@@ -623,11 +631,12 @@ Each has a recommended default. Aaron accepted all of them on 2026-10-20.
 This repo writes each record once, and a later change gets a new record. So "change" below means a new record, plus a note at the top of the old one (as ADR 7's "Drafts are replaced by ADR 8").
 
 - **New 17. Key epochs, the change log and tombstones.** Replaces ADR 3's "Removing a grant … re-encrypts it", ADR 12's re-encryption on removal and on taking admin away, and ADR 14's "Changing a collection's key re-encrypts its attachments". Says how ADR 9's erasure works with replicas.
-- **New 18. Signed revisions, key certificates and the audit log.** Builds the parts of ADR 4 that were deferred ("Every revision is signed", "The audit log"), and the follow-up from ADR 12. Includes keys derived by HKDF, attestation, and what is audited.
-- **New 19. The sync protocol.** Scopes and cursors, what the host sends whom, forks and resolving them, checkout, moves as events, attachments in chunks, the generation on restore. Replaces ADR 5's "Batch logs, firing logs and notes are events" (firings and mixes are records; events are for the directory, erasures, moves and the audit log), and ADR 12's "with the LAN host a move becomes an event".
-- **New 20. Pairing, transport and discovery.** SPAKE2 bound to TLS with an exporter, rustls with ring and pinned keys, CBOR frames, `_glazevault._tcp`, the default port.
-- **New 21. hostd, the blind host and the three modes.** The crate split (adds `crates/sync` to ADR 1's list), services per OS, converting and stopping, the host on the same machine as a loopback replica, the host's keys and disk encryption, sidecar updates, and Linux hosting from `.deb`/`.rpm` only. Notes ADR 6's "the LAN host stops" step.
-- **New 22. Offline limits, revocation and lost devices.** Makes ADR 5's offline limits concrete: the code format, the clock rule, what read-only means in the core.
+- **New 18. The directory as events, and shared access checks.** Built in stage 2.
+- **New 19. Signed revisions, key certificates and the audit log.** Builds the parts of ADR 4 that were deferred ("Every revision is signed", "The audit log"), and the follow-up from ADR 12. Includes keys derived by HKDF, attestation, and what is audited.
+- **New 20. The sync protocol.** Scopes and cursors, what the host sends whom, forks and resolving them, checkout, moves as events, attachments in chunks, the generation on restore. Replaces ADR 5's "Batch logs, firing logs and notes are events" (firings and mixes are records; events are for the directory, erasures, moves and the audit log), and the move event of ADR 18 carrying the rows that replace the old ones. Also how people's key file entries reach their devices.
+- **New 21. Pairing, transport and discovery.** SPAKE2 bound to TLS with an exporter, rustls with ring and pinned keys, CBOR frames, `_glazevault._tcp`, the default port.
+- **New 22. hostd, the blind host and the three modes.** The crate split (adds `crates/sync` to ADR 1's list), services per OS, converting and stopping, the host on the same machine as a loopback replica, the host's keys and disk encryption, sidecar updates, and Linux hosting from `.deb`/`.rpm` only. Notes ADR 6's "the LAN host stops" step.
+- **New 23. Offline limits, revocation and lost devices.** Makes ADR 5's offline limits concrete: the code format, the clock rule, what read-only means in the core.
 - **Change ADR 11.** The LAN suite: two apps and a foreground `hostd`, and the service smoke test.
 - **Change ADR 7.** Backups in host mode, and that clients do not make them.
 - **docs/follow-ups.md:** remove the Teams item when stage 3 lands. Add: syncing per-person settings, the LAN update mirror, a key per item if moves with photos get slow, and `SMAppService` once macOS 12 support is dropped.

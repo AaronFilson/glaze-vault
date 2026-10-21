@@ -2,8 +2,9 @@
 //! and attachment of each is encrypted again under the new collection's key, bound to it, so the
 //! people who could open the old one and not the new one cannot open them any more. A recipe
 //! moves with its firings and batch sheets, which the page names, since the core does not look
-//! inside what it keeps.
+//! inside what it keeps. Each record's move is an event (ADR 18), checked as the LAN host will.
 
+use super::events::{self, Body};
 use super::{Change, Kind, MAX_BATCH, Vault, attachments, log_change, parse_id, revision_aad, summaries};
 use crate::crypto;
 use crate::error::{Error, Result};
@@ -75,12 +76,17 @@ impl Vault {
                 })?
                 .collect::<rusqlite::Result<Vec<Row>>>()?;
             drop(statement);
-            // The record leaves the change log where it was and goes on at its end, as moved.
-            tx.execute(
-                "DELETE FROM changes WHERE item_id IN (
-                    SELECT id FROM revisions WHERE record_id = ?1 AND kind = ?2
-                    UNION ALL SELECT id FROM attachments WHERE record_id = ?1 AND kind = ?2)",
-                params![record_id.to_string(), kind.as_str()],
+            // The move is an event (ADR 18): the record leaves the change log where it was and
+            // goes on after it, as moved.
+            events::record(
+                &tx,
+                self.user_id,
+                Body::Moved {
+                    record: record_id,
+                    kind,
+                    from,
+                    to,
+                },
             )?;
             for (id, number, parent, deleted, nonce, ciphertext, summary_nonce, summary, at, supersedes) in revisions {
                 let revision_id = parse_id(&id)?;
@@ -357,15 +363,41 @@ mod tests {
         assert_eq!(history[0].revision_id, second.revision_id);
         assert_eq!(history.len(), 2);
         assert_eq!(&ana.attachment(photo.id).unwrap().1[..], b"tile");
-        // The moved rows go to the end of the change log, under their new collection.
-        let moved: Vec<String> = ana
+        // The moved rows go to the end of the change log, under their new collection, each
+        // record's after the event that moved it, which is in both collections' parts of the log.
+        let moved: Vec<(String, String)> = ana
             .conn
-            .prepare("SELECT collection_id FROM changes ORDER BY seq DESC LIMIT 4")
+            .prepare("SELECT item, collection_id FROM changes ORDER BY seq DESC LIMIT 8")
             .unwrap()
-            .query_map([], |row| row.get(0))
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert!(moved.iter().all(|c| *c == production.to_string()));
+        let (to, from) = (production.to_string(), shared.to_string());
+        let entry = |item: &str, collection: &str| (item.to_owned(), collection.to_owned());
+        assert_eq!(
+            moved,
+            [
+                entry("attachment", &to),
+                entry("revision", &to),
+                entry("event", &to),
+                entry("event", &from),
+                entry("revision", &to),
+                entry("revision", &to),
+                entry("event", &to),
+                entry("event", &from),
+            ]
+        );
+        let kept = events::kept(&ana.conn);
+        let moves: Vec<&Body> = kept
+            .iter()
+            .filter(|(name, _, _)| name == "moved")
+            .map(|(_, _, body)| body)
+            .collect();
+        assert!(matches!(
+            moves[..],
+            [Body::Moved { record: r, from: f, to: t, .. }, Body::Moved { record: g, .. }]
+                if *r == first.record_id && *f == shared && *t == production && *g == firing.record_id
+        ));
     }
 }

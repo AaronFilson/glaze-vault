@@ -3,7 +3,8 @@
 Proposed, 2026-10-16. Makes the first part of [ADR 4](0004-roles-and-collections.md) and
 [ADR 6](0006-one-person-first.md)'s growing step concrete; the LAN host ([ADR 5](0005-lan-host-and-replicas.md))
 comes later. Re-encrypting a collection when someone loses it, or when admin is taken away, is
-replaced by key epochs in [ADR 17](0017-key-epochs-change-log.md).
+replaced by key epochs in [ADR 17](0017-key-epochs-change-log.md). Changes to people, roles,
+collections and grants, and moves, are events from [ADR 18](0018-directory-events.md).
 
 ## Context
 
