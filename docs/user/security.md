@@ -35,6 +35,13 @@ keeping the method secret.
 - **Exports** (CSV and JSON) are **not encrypted**. Anyone with the file can read your recipes.
 - **Printouts** are marked Confidential, but they are paper.
 
+## Who did what
+
+Each revision is signed by whoever saved it, and the vault keeps a log of what everyone did, each
+entry signed and chained to the one before. Both show changes made to the vault's files outside
+Glaze Vault; on one computer they cannot stop someone who can unlock the vault from making them.
+See [Who did what](audit-log.md).
+
 ## Locking
 
 The vault [locks by itself](settings.md#locking-by-itself) after 15 minutes without use, unless

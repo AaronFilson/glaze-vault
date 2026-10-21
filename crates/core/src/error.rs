@@ -60,6 +60,8 @@ pub enum Error {
     NotAnAdmin,
     #[error("This record changed again while you were choosing a version. Look again, then choose.")]
     ForkChanged,
+    #[error("A signature does not match what it signs.")]
+    BadSignature,
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -102,6 +104,7 @@ impl Error {
             Error::RemovingAdmin => "removing-admin",
             Error::NotAnAdmin => "not-an-admin",
             Error::ForkChanged => "fork-changed",
+            Error::BadSignature => "bad-signature",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",

@@ -28,17 +28,19 @@ Work decided on but not done yet, with the reason it waits.
 ## Teams ([ADR 12](adr/0012-teams-on-one-computer.md))
 
 - Phase 2, the LAN host and replicas: [the plan](plans/phase-2-lan-host.md), with every default in
-  its section 8 accepted. Stage 1 (key epochs, the change log, tombstones and forks,
-  [ADR 17](adr/0017-key-epochs-change-log.md)) and stage 2 (the directory as events and shared
-  access checks, [ADR 18](adr/0018-directory-events.md)) are built; stage 3, signatures and the
-  audit log, is next, and builds the item below.
+  its section 8 accepted. Stages 1 to 3 are built: key epochs, the change log, tombstones and
+  forks ([ADR 17](adr/0017-key-epochs-change-log.md)); the directory as events and shared access
+  checks ([ADR 18](adr/0018-directory-events.md)); and signed revisions, key certificates and the
+  audit log ([ADR 19](adr/0019-signatures-and-audit-log.md)). Stage 4, the sync core without a
+  network, is next.
 - Stage 4 (ADR 20): how people's key file entries reach their devices, now that events carry
-  public keys only; and the move event carrying the rows that replace the old ones.
+  public keys only; the move event carrying the rows that replace the old ones; and the host
+  refusing certificates by when they arrive, revoked or from a retired organization key, and
+  keeping and signing the audit log.
+- The audit log notes opening recipes, materials, batch sheets and firings; mixes, limit sets and
+  price lists could be noted too. Signatures of attachments are kept but not shown anywhere yet.
 - Before replicas (stage 7): the fork notice in the firing log, mix log, batch sheets, limit sets
   and price lists, which show a forked record's newest for now; and a user guide page on forks.
-- With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
-  author's key, under keys the organization signs, and the audit log of who viewed, printed,
-  exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
 
 ## Clay bodies
 

@@ -141,8 +141,9 @@ To print a recipe or a batch sheet, see [Printing](printing.md).
 ### Earlier revisions
 
 Once a recipe has been saved more than once, **Earlier revisions** below the Save button lists
-them, with when each was saved. Choose one to see it as it was, with its unity formula; you can
-print it too. It cannot be changed.
+them, with when each was saved and, in a shared vault, who saved it (see
+[who did what](audit-log.md#who-saved-a-revision)). Choose one to see it as it was, with its unity
+formula; you can print it too. It cannot be changed.
 
 - **Use this revision** puts it back in the editor. Saving it adds it as the newest revision, so
   the revisions after it are kept too.

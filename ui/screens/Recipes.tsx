@@ -291,6 +291,12 @@ export function Recipes({
     if (printRequest) window.print();
   }, [printRequest]);
 
+  // The audit log notes each record opened (ADR 19); the core notes each once a sign-in.
+  useOpened('recipe', recipe.current?.recordId);
+  useOpened('material', material.current?.recordId);
+  useOpened('batch', sheet?.recordId);
+  useOpened('firing', firing?.current?.recordId);
+
   const library = useMemo(() => materialLibrary(materials.map((m) => m.content)), [materials]);
   const shownRecipe = recipe.viewing?.content ?? recipe.draft;
   const prices =
@@ -572,6 +578,11 @@ export function Recipes({
     setPrintJob(job);
     setPrinting(false);
     setPrintRequest((n) => n + 1);
+    const printed = job.kind === 'batch' ? sheet : (recipe.viewing ?? recipe.current);
+    if (printed) {
+      const detail = job.kind === 'batch' ? `${job.size} ${job.unit}` : `revision ${printed.number}`;
+      api.note({ action: 'printed', kind: job.kind, record: printed.recordId, detail }).catch(() => {});
+    }
   };
 
   if (newWords) {
@@ -1395,4 +1406,11 @@ function PrintOptions({
       </div>
     </form>
   );
+}
+
+/** Notes in the audit log that a record was opened. A note that fails does not stop the page. */
+function useOpened(kind: Kind, recordId: string | undefined) {
+  useEffect(() => {
+    if (recordId) api.note({ action: 'opened', kind, record: recordId }).catch(() => {});
+  }, [kind, recordId]);
 }

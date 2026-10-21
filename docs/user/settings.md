@@ -35,6 +35,11 @@ has set a vault aside: see [the vault that was there before](backups.md#the-vaul
 
 See [Importing](importing.md).
 
+## Audit log
+
+Who did what in the vault: for admins in a shared vault, and for you in a vault for one. See
+[Who did what](audit-log.md).
+
 ## Password
 
 Type your current password, then the new one twice, and choose **Change password**. Your

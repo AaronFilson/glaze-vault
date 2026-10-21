@@ -25,10 +25,10 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 11. [Importing](importing.md): recipes and materials from other programs and spreadsheets
 12. [Sharing a vault with others](sharing.md): people, roles and collections
 13. [Settings](settings.md): locking by itself, your password, updates
-14. [How your recipes are protected](security.md)
+14. [Who did what](audit-log.md): who saved each revision, and the audit log
+15. [How your recipes are protected](security.md)
 
 ## Coming later
 
-- **More for teams:** a record of who did what, which comes with other computers on your network.
 - **Other computers on your network,** and laptops that take a copy of their part of the vault
   where there is no network, then bring their changes back.

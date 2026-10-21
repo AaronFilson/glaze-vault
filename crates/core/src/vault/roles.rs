@@ -110,7 +110,7 @@ impl Vault {
             may,
         };
         let tx = self.conn.unchecked_transaction()?;
-        events::record(&tx, self.user_id, Body::RoleCreated { role: role.clone() })?;
+        events::record(&tx, &self.signer, Body::RoleCreated { role: role.clone() })?;
         if !may.chemistry {
             self.ready_for(Held::Summary)?;
         }
@@ -132,7 +132,7 @@ impl Vault {
         };
         let before = self.held(Role::Custom(id));
         let tx = self.conn.unchecked_transaction()?;
-        events::record(&tx, self.user_id, Body::RoleChanged { role })?;
+        events::record(&tx, &self.signer, Body::RoleChanged { role })?;
         if !may.chemistry {
             self.ready_for(Held::Summary)?;
         }
@@ -143,7 +143,7 @@ impl Vault {
 
     /// Deletes a role nobody has.
     pub fn delete_role(&mut self, id: Uuid) -> Result<()> {
-        events::record(&self.conn, self.user_id, Body::RoleDeleted { role: id })?;
+        events::record(&self.conn, &self.signer, Body::RoleDeleted { role: id })?;
         self.load_collections()
     }
 }

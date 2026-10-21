@@ -62,6 +62,8 @@ impl Vault {
     /// each collection's summary key, and every recipe revision gets its summary. Only someone
     /// who holds every collection's key can: the person of a one-person vault, or an admin. Until
     /// then nobody can be given a role that reads without chemistry, since only admins give roles.
+    /// The rows it changes lose their signatures, and the same person vouches for them right after
+    /// (signatures.rs).
     pub(super) fn change_to_summaries(&mut self) -> Result<()> {
         if self.summaries || self.user().must_set_password {
             return Ok(());
@@ -137,13 +139,15 @@ impl Vault {
                 if kind == Kind::Firing.as_str() {
                     let sealed = crypto::encrypt(&summary, &plaintext, &aad);
                     tx.execute(
-                        "UPDATE revisions SET nonce = ?1, ciphertext = ?2 WHERE id = ?3",
+                        "UPDATE revisions SET nonce = ?1, ciphertext = ?2, signature = NULL, signer_id = NULL, signed_as = NULL
+                         WHERE id = ?3",
                         params![sealed.nonce, sealed.ciphertext, revision],
                     )?;
                 } else {
                     let sealed = seal(&summary, &serde_json::from_slice(&plaintext)?, &aad)?;
                     tx.execute(
-                        "UPDATE revisions SET summary_nonce = ?1, summary = ?2 WHERE id = ?3",
+                        "UPDATE revisions SET summary_nonce = ?1, summary = ?2, signature = NULL, signer_id = NULL, signed_as = NULL
+                         WHERE id = ?3",
                         params![sealed.nonce, sealed.ciphertext, revision],
                     )?;
                 }
@@ -184,7 +188,8 @@ impl Vault {
                 );
                 let sealed = crypto::encrypt(&summary, &plaintext, &aad);
                 tx.execute(
-                    "UPDATE attachments SET nonce = ?1, ciphertext = ?2, sha256 = ?3 WHERE id = ?4",
+                    "UPDATE attachments SET nonce = ?1, ciphertext = ?2, sha256 = ?3, signature = NULL, signer_id = NULL,
+                     signed_as = NULL WHERE id = ?4",
                     params![
                         &sealed.nonce,
                         &sealed.ciphertext,

@@ -16,6 +16,7 @@ import { exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJs
 import type { Firing } from '../firing';
 import { ImportError, readImport, type ImportPlan } from '../importFormats';
 import { editableCollections, may } from '../team';
+import { AuditLog } from './AuditLog';
 import { NewPassword } from './NewPassword';
 import { ManagedPeople, People, ShareVault } from './Team';
 
@@ -141,6 +142,11 @@ export function Settings({
           partly={[recipes, materials, firings].some((list) => exportable<{ collectionId?: string }>(list).length < list.length)}
         />
       )}
+      {admin && access && (
+        <Section title="Audit log">
+          <AuditLog access={access} people={status.people} records={recordNames(recipes, materials, firings)} />
+        </Section>
+      )}
       <ChangePassword />
       <RecoveryKey onNewRecoveryKey={onNewRecoveryKey} />
       <Updates status={status} update={update} onUpdate={onUpdate} onInstall={onInstall} />
@@ -233,6 +239,31 @@ function SetAsideVaults({ onSwitch, error }: { onSwitch: (name: string) => void;
       <p className="hint">The folders are in the vault folder; delete one there once you are sure you do not need it.</p>
     </Section>
   );
+}
+
+/** What an export held, for the audit log: the format and how many records. */
+function exported(kind: string, recipes: number, materials: number, firings: number): string {
+  switch (kind) {
+    case 'json':
+      return `${recipes} recipes and ${materials} materials as JSON`;
+    case 'xml':
+      return `${recipes} recipes as Insight XML`;
+    case 'materials-csv':
+      return `${materials} materials as CSV`;
+    case 'firings-csv':
+      return `${firings} firings as CSV`;
+    default:
+      return `${recipes} recipes as CSV`;
+  }
+}
+
+/** What the audit log calls the records this person can open. */
+function recordNames(recipes: RecipeHead[], materials: MaterialHead[], firings: Firing[]): Record<string, string> {
+  return Object.fromEntries([
+    ...recipes.map((r) => [r.recordId, r.content.name] as const),
+    ...materials.map((m) => [m.recordId, m.content.name] as const),
+    ...firings.map((f) => [f.recordId, `${f.content.recipeName} fired ${f.content.firedOn}`] as const)
+  ]);
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -394,7 +425,11 @@ function Export({
           : exportFileName(kind, now);
     try {
       const saved = await api.saveExport(fileName, contents);
-      if (saved) setMessage(`Saved ${saved}.`);
+      if (saved) {
+        setMessage(`Saved ${saved}.`);
+        const detail = exported(kind, recipes.length, materials.length, firings.length);
+        api.note({ action: 'exported', detail }).catch(() => {});
+      }
     } catch (e) {
       setError(errorText(e));
     }

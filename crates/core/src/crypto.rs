@@ -228,6 +228,25 @@ pub(crate) mod b64 {
     }
 }
 
+/// Base64 for byte fields in JSON that may be left out.
+pub(crate) mod b64_option {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    pub fn serialize<S: Serializer>(bytes: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match bytes {
+            Some(bytes) => s.serialize_str(&STANDARD.encode(bytes)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        Option::<String>::deserialize(d)?
+            .map(|text| STANDARD.decode(text).map_err(D::Error::custom))
+            .transpose()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

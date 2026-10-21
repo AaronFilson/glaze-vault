@@ -4,15 +4,19 @@
 //! way a team's is, so it can grow into one (docs/adr/0012-teams-on-one-computer.md, in `team`).
 
 mod attachments;
+mod audit;
 mod events;
 mod moving;
 mod roles;
+mod signatures;
 mod summaries;
 mod team;
 
 pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
+pub use audit::{AuditEntry, AuditLog, Note};
 pub(crate) use events::Body;
 pub use roles::{Capabilities, CustomRole};
+pub use signatures::{SignatureCheck, Signed, SignedAs};
 pub use team::{Collection, Grant, Person};
 
 use crate::access::{Directory, Role};
@@ -22,9 +26,11 @@ use crate::error::{Error, Result};
 use crate::files;
 use crate::keyring::{self, Keyring, KeyringUser};
 use crate::recovery::RecoveryKey;
+use crate::signing::{self, Signer};
 use crate::store;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -53,6 +59,10 @@ pub struct Vault {
     /// Who is in the vault, who holds what on each collection, and the roles admins made: what
     /// the checks of who may do what read (access.rs).
     directory: Directory,
+    /// This person's signing key, which signs what they save (ADR 19).
+    signer: Signer,
+    /// The records opened this sign-in, each noted in the audit log once.
+    opened: HashSet<Uuid>,
     /// Whether firings are kept under each collection's summary key and every recipe revision has
     /// a summary (summaries.rs). Vaults from before are changed over by the first person to
     /// unlock who holds every collection's key.
@@ -180,6 +190,11 @@ pub struct Revision {
     /// record's listed revision has them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub forks: Vec<Fork>,
+    /// The person who saved it.
+    pub author: Uuid,
+    /// Who signed it and whether it checks (ADR 19). Only a record's history has it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed: Option<Signed>,
 }
 
 /// Another newest revision of a forked record.
@@ -249,16 +264,18 @@ impl Vault {
         let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
         let collection_id = Uuid::new_v4();
         let collection_key = crypto::random_key();
+        let signer = Signer::new(vault_id, user_id, &keys);
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO meta (name, value) VALUES ('vault_id', ?1), ('default_collection', ?2), ('summaries', '1')",
             params![vault_id.to_string(), collection_id.to_string()],
         )?;
         events::mark_filled(&tx)?;
+        audit::note(&tx, &signer, audit::Entry::new("created"))?;
         // Its person, its collection, and their grant of it.
         events::record(
             &tx,
-            user_id,
+            &signer,
             Body::PersonAdded {
                 person: user_id,
                 name: String::new(),
@@ -267,7 +284,7 @@ impl Vault {
         )?;
         events::record(
             &tx,
-            user_id,
+            &signer,
             Body::CollectionCreated {
                 collection: collection_id,
                 name: String::new(),
@@ -276,7 +293,7 @@ impl Vault {
         )?;
         events::record(
             &tx,
-            user_id,
+            &signer,
             team::grant_set(
                 &vault_id,
                 &user_id,
@@ -287,6 +304,11 @@ impl Vault {
                 Role::Admin,
                 Held::Collection,
             ),
+        )?;
+        events::record(
+            &tx,
+            &signer,
+            signatures::own_certificate(&vault_id, &keys, user_id, None),
         )?;
         tx.commit()?;
         keyring.write(&dir.join(KEYRING_FILE))?;
@@ -311,6 +333,8 @@ impl Vault {
             default_collection: collection_id,
             organization: None,
             directory,
+            signer,
+            opened: HashSet::new(),
             summaries: true,
         };
         Ok((vault, recovery))
@@ -352,7 +376,8 @@ impl Vault {
     pub fn change_password(&mut self, current: &str, new_password: &str) -> Result<()> {
         check_password(new_password)?;
         self.check_current_password(current)?;
-        self.set_password(new_password)
+        self.set_password(new_password)?;
+        audit::note(&self.conn, &self.signer, audit::Entry::new("password-changed"))
     }
 
     /// Makes a new recovery key and returns it to show once. The old one stops opening the vault
@@ -369,6 +394,7 @@ impl Vault {
         user_mut(&mut keyring, &self.user_id).private_key_by_recovery = Some(sealed);
         keyring.write(&self.dir.join(KEYRING_FILE))?;
         self.keyring = keyring;
+        audit::note(&self.conn, &self.signer, audit::Entry::new("recovery-key-changed"))?;
         Ok(recovery)
     }
 
@@ -456,6 +482,7 @@ impl Vault {
             file_name: file_name_of(path),
         };
         self.set_meta("last_backup", &serde_json::to_string(&last)?)?;
+        audit::note(&self.conn, &self.signer, audit::Entry::new("backed-up"))?;
         Ok(last)
     }
 
@@ -541,7 +568,7 @@ impl Vault {
             };
             self.set_meta("last_backup", &serde_json::to_string(&last)?)?;
         }
-        Ok(())
+        audit::note(&self.conn, &self.signer, audit::Entry::new("restored"))
     }
 
     /// The vaults a restore set aside in `dir`, newest first.
@@ -648,7 +675,7 @@ impl Vault {
         // log, and leaves its tombstone.
         events::record(
             &self.conn,
-            self.user_id,
+            &self.signer,
             Body::Erased {
                 record: record_id,
                 kind,
@@ -771,11 +798,38 @@ impl Vault {
             .map(|key| summaries::seal(&key, content, &aad))
             .transpose()?;
         let (summary_nonce, summary) = summary.map(|s| (s.nonce, s.ciphertext)).unzip();
+        let signed = self.sign_as_author(|role, signer| {
+            let facts = signing::RevisionFacts {
+                vault: &self.keyring.vault_id,
+                id: &revision_id,
+                record: &record_id,
+                kind: kind.as_str(),
+                collection: &collection_id,
+                epoch,
+                number,
+                parent: parent.as_ref(),
+                deleted,
+                supersedes: supersedes.as_deref(),
+                author: &self.user_id,
+                at: saved_at,
+                nonce: &sealed.nonce,
+                ciphertext: &sealed.ciphertext,
+                summary: summary_nonce.as_deref().zip(summary.as_deref()),
+            };
+            signing::revision_payload(&facts, role, signer)
+        });
         let author = self.user_id.to_string();
+        let action = if deleted { "deleted" } else { "saved" };
+        let entry = audit::Entry::of(action, kind, record_id, collection_id);
+        let entry = if supersedes.is_some() {
+            entry.detail("resolved a fork")
+        } else {
+            entry
+        };
         atomically(&self.conn, |conn| {
             conn.execute(
-            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted, summary_nonce, summary, epoch, supersedes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted, summary_nonce, summary, epoch, supersedes, signature, signer_id, signed_as)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 revision_id.to_string(),
                 record_id.to_string(),
@@ -792,9 +846,13 @@ impl Vault {
                 summary,
                 epoch,
                 supersedes,
+                signed.signature,
+                signed.signer.to_string(),
+                signed.role.code(),
             ],
             )?;
-            log_change(conn, Change::Revision, &revision_id, &collection_id, kind)
+            log_change(conn, Change::Revision, &revision_id, &collection_id, kind)?;
+            audit::note(conn, &self.signer, entry)
         })?;
         // Saved on one branch of a fork, the record is still forked.
         let forks = match parent {
@@ -810,6 +868,8 @@ impl Vault {
             deleted,
             collection_id,
             forks,
+            author: self.user_id,
+            signed: None,
         })
     }
 
@@ -901,6 +961,12 @@ impl Vault {
         if revisions.is_empty() {
             return Err(Error::NotFound);
         }
+        // Who signed each, checked against the certificates the vault holds.
+        let trust = self.trust()?;
+        let mut revisions = revisions;
+        for revision in &mut revisions {
+            revision.signed = self.revision_signed(&trust, &revision.revision_id)?;
+        }
         Ok(revisions)
     }
 
@@ -926,10 +992,11 @@ impl Vault {
             Option<Vec<u8>>,
             i64,
             Option<String>,
+            String,
         );
         let mut statement = self.conn.prepare(&format!(
             "SELECT r.id, r.record_id, r.parent_id, r.number, r.collection_id, r.created_at, r.nonce, r.ciphertext,
-                    r.deleted, r.summary_nonce, r.summary, r.epoch, r.supersedes
+                    r.deleted, r.summary_nonce, r.summary, r.epoch, r.supersedes, r.author_id
              FROM revisions r {where_clause}"
         ))?;
         let rows = statement.query_map(values, |row| {
@@ -947,6 +1014,7 @@ impl Vault {
                 row.get(10)?,
                 row.get(11)?,
                 row.get(12)?,
+                row.get(13)?,
             ))
         })?;
         let mut revisions = Vec::new();
@@ -965,6 +1033,7 @@ impl Vault {
                 summary,
                 epoch,
                 supersedes,
+                author,
             ): Row = row?;
             let (revision_id, record_id, collection_id) =
                 (parse_id(&id)?, parse_id(&record_id)?, parse_id(&collection_id)?);
@@ -1008,6 +1077,8 @@ impl Vault {
                 deleted,
                 collection_id,
                 forks: Vec::new(),
+                author: parse_id(&author)?,
+                signed: None,
             });
         }
         Ok(revisions)
@@ -1055,6 +1126,7 @@ impl Vault {
             (Some(_), Some(sealed)) => Some(team::open_organization_key(&keyring, &keys, user_id, sealed)?),
             _ => None,
         };
+        let signer = Signer::new(keyring.vault_id, user_id, &keys);
         let mut vault = Vault {
             dir: dir.to_owned(),
             keyring,
@@ -1065,6 +1137,8 @@ impl Vault {
             default_collection: parse_id(&default_collection)?,
             organization,
             directory: Directory::default(),
+            signer,
+            opened: HashSet::new(),
             summaries: false,
         };
         vault.summaries = vault.meta(summaries::META)?.is_some();
@@ -1073,6 +1147,11 @@ impl Vault {
         // next unlock; it does not keep anyone out. Until it is done, nobody can be given a role
         // that reads without chemistry.
         let _ = vault.change_to_summaries();
+        // Likewise certifying this person's signing key, and vouching for what was saved before
+        // signing (signatures.rs), which needs the change-over done first: it changes rows.
+        let _ = vault.certify_myself();
+        let _ = vault.attest();
+        audit::note(&vault.conn, &vault.signer, audit::Entry::new("signed-in"))?;
         Ok(vault)
     }
 

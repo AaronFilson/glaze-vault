@@ -3,8 +3,8 @@
 //! page never chooses where files are written.
 
 use glaze_vault_core::{
-    Attachment, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error, Grant, Kind, LastBackup,
-    MAX_ATTACHMENT_BYTES, Person, Revision, Role, SetAside, Settings, Vault,
+    Attachment, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error, Grant, Kind,
+    LastBackup, MAX_ATTACHMENT_BYTES, Note, Person, Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -357,6 +357,18 @@ fn resolve_fork(state: State<AppState>, kind: Kind, keep: Uuid, others: Vec<Uuid
 #[tauri::command(async)]
 fn move_records(state: State<AppState>, records: Vec<(Kind, Uuid)>, to: Uuid) -> CommandResult<()> {
     with_vault(&state, |vault| vault.move_records(&records, to))
+}
+
+/// Tells the audit log what the page did: opened, printed or exported (ADR 19).
+#[tauri::command(async)]
+fn note(state: State<AppState>, note: Note) -> CommandResult<()> {
+    with_vault(&state, |vault| vault.note(note))
+}
+
+/// The audit log, newest first: `limit` entries, or all of them. For an admin.
+#[tauri::command(async)]
+fn audit_log(state: State<AppState>, limit: Option<usize>) -> CommandResult<AuditLog> {
+    with_vault(&state, |vault| vault.audit_log(limit))
 }
 
 /// Removes every revision of a deleted record. Returns how many there were.
@@ -959,6 +971,8 @@ pub fn run() {
             resolve_fork,
             erase_record,
             move_records,
+            note,
+            audit_log,
             choose_photo,
             add_attachment,
             get_attachment,

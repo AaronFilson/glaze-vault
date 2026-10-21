@@ -80,7 +80,7 @@ impl Vault {
             // goes on after it, as moved.
             events::record(
                 &tx,
-                self.user_id,
+                &self.signer,
                 Body::Moved {
                     record: record_id,
                     kind,
@@ -125,6 +125,7 @@ impl Vault {
                         params![sealed.nonce, sealed.ciphertext, id],
                     )?;
                 }
+                self.sign_moved_revision(&tx, &revision_id)?;
                 log_change(&tx, Change::Revision, &revision_id, &to, kind)?;
             }
 
@@ -168,6 +169,7 @@ impl Vault {
                         id
                     ],
                 )?;
+                self.sign_moved_attachment(&tx, &attachment_id)?;
                 log_change(&tx, Change::Attachment, &attachment_id, &to, kind)?;
             }
         }
