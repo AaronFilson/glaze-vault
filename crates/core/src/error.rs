@@ -62,6 +62,12 @@ pub enum Error {
     ForkChanged,
     #[error("A signature does not match what it signs.")]
     BadSignature,
+    #[error("This vault cannot serve the network yet: {0}")]
+    NotReadyToHost(&'static str),
+    #[error("This computer may no longer sync with the vault.")]
+    Revoked,
+    #[error("Deleting it has not reached the vault's host yet. Erase it once this computer has synced.")]
+    NotSynced,
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -105,6 +111,9 @@ impl Error {
             Error::NotAnAdmin => "not-an-admin",
             Error::ForkChanged => "fork-changed",
             Error::BadSignature => "bad-signature",
+            Error::NotReadyToHost(_) => "not-ready-to-host",
+            Error::Revoked => "revoked",
+            Error::NotSynced => "not-synced",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",

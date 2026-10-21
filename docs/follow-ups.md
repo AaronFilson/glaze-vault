@@ -31,12 +31,16 @@ Work decided on but not done yet, with the reason it waits.
   its section 8 accepted. Stages 1 to 3 are built: key epochs, the change log, tombstones and
   forks ([ADR 17](adr/0017-key-epochs-change-log.md)); the directory as events and shared access
   checks ([ADR 18](adr/0018-directory-events.md)); and signed revisions, key certificates and the
-  audit log ([ADR 19](adr/0019-signatures-and-audit-log.md)). Stage 4, the sync core without a
-  network, is next.
-- Stage 4 (ADR 20): how people's key file entries reach their devices, now that events carry
-  public keys only; the move event carrying the rows that replace the old ones; and the host
-  refusing certificates by when they arrive, revoked or from a retired organization key, and
-  keeping and signing the audit log.
+  audit log ([ADR 19](adr/0019-signatures-and-audit-log.md)); and the sync core, a blind host and
+  replicas tested without a network ([ADR 20](adr/0020-sync-core.md)). Stage 5, the transport,
+  pairing and `hostd` in the foreground, is next.
+- Left from the sync core, for the stages that need them: the host keeping and signing the audit
+  log (the computers' logs stay on them for now); a new organization recovery sheet or key reaching
+  every computer's key file; resetting someone, or making or taking an admin, from a computer that
+  does not have their key file entry (stage 6, from the host computer); directory changes on a
+  replica waiting for the host (stage 7, the plan's question 5), since one the host refuses leaves
+  the replica apart; listing a record's newest revisions by the host's order; and the host
+  checking that what a revision supersedes is its record's.
 - The audit log notes opening recipes, materials, batch sheets and firings; mixes, limit sets and
   price lists could be noted too. Signatures of attachments are kept but not shown anywhere yet.
 - Before replicas (stage 7): the fork notice in the firing log, mix log, batch sheets, limit sets

@@ -53,6 +53,15 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # Argon2id at its cheapest is for other crates' tests only (crates/core's test-kdf feature).
+      - name: No test password settings in the app
+        if: runner.os == 'Linux'
+        run: |
+          if cargo tree -e features -p glaze-vault --locked | grep -q test-kdf; then
+            echo "::error::The app is built with crates/core's test-kdf feature"
+            exit 1
+          fi
+
       # Every crate's tests run even when one fails, and what failed goes into an annotation.
       - name: Rust tests
         shell: bash

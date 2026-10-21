@@ -253,11 +253,16 @@ impl Body {
     }
 
     /// Where the event goes in the change log: the directory's scope (None), or a collection's.
-    /// A new key epoch and an erasure are in their collection's, before what uses them; a move is
-    /// in both collections', so those who read only the one it left learn it went.
+    /// A new key epoch and an erasure are in their collection's, before what uses them, and so are
+    /// a collection's making and name, which whoever comes to read it gets as they catch up on it
+    /// (ADR 20); a move is in both collections', so those who read only the one it left learn it
+    /// went.
     fn scopes(&self) -> Vec<Option<Uuid>> {
         match self {
-            Body::KeyEpoch { collection, .. } | Body::Erased { collection, .. } => vec![Some(*collection)],
+            Body::KeyEpoch { collection, .. }
+            | Body::Erased { collection, .. }
+            | Body::CollectionCreated { collection, .. }
+            | Body::CollectionRenamed { collection, .. } => vec![Some(*collection)],
             Body::Moved { from, to, .. } => vec![Some(*from), Some(*to)],
             _ => vec![None],
         }
@@ -334,6 +339,9 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
     for scope in event.body.scopes() {
         log(conn, event, scope, None)?;
     }
+    // Where it came in this store's change log, which orders certificates and the organization's
+    // keys (ADR 20), whatever the clocks of the computers that made them said.
+    let place = conn.last_insert_rowid();
     let at = event.at;
     let actor = || {
         event
@@ -401,10 +409,10 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
             )?;
             conn.execute("UPDATE people SET admin = 0", [])?;
             conn.execute("DELETE FROM organization_grants", [])?;
-            // With no organization, nothing it signed from now on is trusted.
+            // With no organization, nothing it signs from now on is trusted.
             conn.execute(
-                "UPDATE organization_keys SET retired_at = ?1 WHERE retired_at IS NULL",
-                params![at],
+                "UPDATE organization_keys SET retired_at = ?1, retired_place = ?2 WHERE retired_at IS NULL",
+                params![at, place],
             )?;
         }
         Body::CollectionCreated {
@@ -412,8 +420,11 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
             name,
             owner,
         } => {
+            // A replica may have the collection already, from a grant that came first (stand_in).
             conn.execute(
-                "INSERT INTO collections (id, created_at, name, owner_id) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO collections (id, created_at, name, owner_id) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (id) DO UPDATE SET created_at = excluded.created_at, name = excluded.name,
+                 owner_id = excluded.owner_id",
                 params![collection.to_string(), at, name, owner.map(|o| o.to_string())],
             )?;
         }
@@ -430,8 +441,10 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
             previous_batch,
             previous_summary,
         } => {
+            stand_in(conn, collection)?;
             conn.execute(
-                "INSERT INTO collection_epochs (collection_id, epoch, created_at, previous, previous_batch, previous_summary)
+                "INSERT OR IGNORE INTO collection_epochs
+                 (collection_id, epoch, created_at, previous, previous_batch, previous_summary)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     collection.to_string(),
@@ -443,7 +456,7 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
                 ],
             )?;
             conn.execute(
-                "UPDATE collections SET epoch = ?1 WHERE id = ?2",
+                "UPDATE collections SET epoch = max(epoch, ?1) WHERE id = ?2",
                 params![epoch, collection.to_string()],
             )?;
         }
@@ -454,6 +467,7 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
             epoch,
             sealed,
         } => {
+            stand_in(conn, collection)?;
             conn.execute(
                 "DELETE FROM grants WHERE user_id = ?1 AND collection_id = ?2",
                 params![person.to_string(), collection.to_string()],
@@ -481,6 +495,7 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
             epoch,
             sealed,
         } => {
+            stand_in(conn, collection)?;
             conn.execute(
                 "DELETE FROM organization_grants WHERE collection_id = ?1",
                 params![collection.to_string()],
@@ -501,8 +516,9 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
             proof,
         } => {
             conn.execute(
-                "INSERT INTO certificates (id, person_id, signing_key, encryption_key, issued_at, issuer_key, signature, proof)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO certificates
+                 (id, person_id, signing_key, encryption_key, issued_at, issuer_key, signature, proof, place)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     certificate.to_string(),
                     person.to_string(),
@@ -511,7 +527,8 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
                     issued_at,
                     issuer_key,
                     signature,
-                    proof
+                    proof,
+                    place
                 ],
             )?;
         }
@@ -523,12 +540,12 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
             // The organization has one signing key at a time: the one before it is retired, and
             // what it signs from now on is not trusted.
             conn.execute(
-                "UPDATE organization_keys SET retired_at = ?1 WHERE retired_at IS NULL",
-                params![at],
+                "UPDATE organization_keys SET retired_at = ?1, retired_place = ?2 WHERE retired_at IS NULL",
+                params![at, place],
             )?;
             conn.execute(
-                "INSERT INTO organization_keys (signing_key, encryption_key, added_at) VALUES (?1, ?2, ?3)",
-                params![signing_key, encryption_key, at],
+                "INSERT INTO organization_keys (signing_key, encryption_key, added_at, place) VALUES (?1, ?2, ?3, ?4)",
+                params![signing_key, encryption_key, at, place],
             )?;
         }
         Body::RoleCreated { role } => {
@@ -573,13 +590,25 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
                 params![record, kind],
             )?;
             conn.execute(
-                "INSERT INTO erased (record_id, kind, collection_id, erased_at, erased_by) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR IGNORE INTO erased (record_id, kind, collection_id, erased_at, erased_by)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![record, kind, collection.to_string(), at, actor()?.to_string()],
             )?;
         }
         // Its revisions and attachments leave the change log where they were, and are logged
-        // again as they are written for the collection they move to.
-        Body::Moved { record, kind, .. } => forget_record(conn, &record.to_string(), kind.as_str())?,
+        // again as they are written for the collection they move to. Those still in the
+        // collection it left go: a store that cannot read where it went keeps nothing of it, and
+        // one that can gets them again, encrypted for there, after the event.
+        Body::Moved { record, kind, from, .. } => {
+            let (record, kind) = (record.to_string(), kind.as_str());
+            forget_record(conn, &record, kind)?;
+            for table in ["revisions", "attachments"] {
+                conn.execute(
+                    &format!("DELETE FROM {table} WHERE record_id = ?1 AND kind = ?2 AND collection_id = ?3"),
+                    params![record, kind, from.to_string()],
+                )?;
+            }
+        }
     }
     Ok(())
 }
@@ -626,6 +655,16 @@ fn forget_record(conn: &Connection, record: &str, kind: &str) -> Result<()> {
             SELECT id FROM revisions WHERE record_id = ?1 AND kind = ?2
             UNION ALL SELECT id FROM attachments WHERE record_id = ?1 AND kind = ?2)",
         params![record, kind],
+    )?;
+    Ok(())
+}
+
+/// A collection a replica has not been told of yet, standing in until the event that makes it
+/// arrives with the rest of the collection (ADR 20). Where the collection is known, nothing.
+fn stand_in(conn: &Connection, collection: &Uuid) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO collections (id, created_at, name) VALUES (?1, 0, '')",
+        params![collection.to_string()],
     )?;
     Ok(())
 }

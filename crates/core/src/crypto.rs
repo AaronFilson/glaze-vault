@@ -77,10 +77,11 @@ pub struct PasswordKdf {
 }
 
 /// Memory and passes for new passwords. Tests make many vaults, each hashing several passwords,
-/// so they use the least Argon2id allows; unlocking uses whatever is stored, so nothing else differs.
-#[cfg(not(test))]
+/// so they use the least Argon2id allows, as do other crates' tests with the `test-kdf` feature;
+/// unlocking uses whatever is stored, so nothing else differs.
+#[cfg(not(any(test, feature = "test-kdf")))]
 const NEW_KDF: (u32, u32) = (64 * 1024, 3);
-#[cfg(test)]
+#[cfg(any(test, feature = "test-kdf"))]
 const NEW_KDF: (u32, u32) = (8, 1);
 
 impl PasswordKdf {

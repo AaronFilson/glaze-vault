@@ -139,9 +139,14 @@ impl Vault {
                 if kind == Kind::Firing.as_str() {
                     let sealed = crypto::encrypt(&summary, &plaintext, &aad);
                     tx.execute(
-                        "UPDATE revisions SET nonce = ?1, ciphertext = ?2, signature = NULL, signer_id = NULL, signed_as = NULL
-                         WHERE id = ?3",
-                        params![sealed.nonce, sealed.ciphertext, revision],
+                        "UPDATE revisions SET nonce = ?1, ciphertext = ?2, content_hash = ?3, signature = NULL, signer_id = NULL,
+                         signed_as = NULL WHERE id = ?4",
+                        params![
+                            sealed.nonce,
+                            sealed.ciphertext,
+                            crate::store::content_hash(&sealed.nonce, &sealed.ciphertext),
+                            revision
+                        ],
                     )?;
                 } else {
                     let sealed = seal(&summary, &serde_json::from_slice(&plaintext)?, &aad)?;

@@ -358,7 +358,7 @@ impl Vault {
     /// role; someone who manages the collection may give any but an admin's or a manager's, to
     /// anyone but an admin, a manager or themselves (access.rs).
     pub fn set_role(&mut self, person: Uuid, collection: Uuid, role: Option<Role>) -> Result<()> {
-        let user = self.keyring.user(&person)?.clone();
+        let public_key = self.public_key_of(person)?;
         let vault_id = self.keyring.vault_id;
         let previous = self.directory.grant(person, collection).map(|g| g.role);
         match role {
@@ -381,16 +381,7 @@ impl Vault {
                 events::record(
                     &tx,
                     &self.signer,
-                    grant_set(
-                        &vault_id,
-                        &person,
-                        &user.public_key,
-                        &collection,
-                        &key,
-                        epoch,
-                        role,
-                        held,
-                    ),
+                    grant_set(&vault_id, &person, &public_key, &collection, &key, epoch, role, held),
                 )?;
                 tx.commit()?;
             }
@@ -781,6 +772,23 @@ impl Vault {
         self.organization.as_ref().ok_or(Error::NotAllowed)
     }
 
+    /// A person's public key, to seal keys to, from the directory, which knows everyone: on a
+    /// replica the key file has only the people who sign in at it (ADR 20).
+    fn public_key_of(&self, person: Uuid) -> Result<Vec<u8>> {
+        if person == self.user_id {
+            return Ok(self.keys.public.clone());
+        }
+        let key: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT public_key FROM people WHERE id = ?1 AND removed_at IS NULL",
+                params![person.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        key.filter(|key| !key.is_empty()).ok_or(Error::NoSuchPerson)
+    }
+
     /// The organization's public key, as the key file has it.
     pub(super) fn organization_public_key(&self) -> Result<Vec<u8>> {
         Ok(self
@@ -824,7 +832,6 @@ impl Vault {
         let mut rotated: Vec<Uuid> = Vec::new();
         for grant in directory.grants.iter().filter(|g| g.role == role) {
             if after == Held::Collection {
-                let user = self.keyring.user(&grant.person)?;
                 let open = self.readable(&grant.collection)?;
                 events::record(
                     tx,
@@ -832,7 +839,7 @@ impl Vault {
                     grant_set(
                         &vault_id,
                         &grant.person,
-                        &user_public_key(user, &self.keys, &self.user_id),
+                        &self.public_key_of(grant.person)?,
                         &grant.collection,
                         open.full_key()?,
                         open.epoch,
@@ -897,14 +904,13 @@ impl Vault {
             .iter()
             .filter(|g| g.collection == *collection && Some(g.person) != except)
         {
-            let user = self.keyring.user(&grant.person)?;
             events::record(
                 tx,
                 &self.signer,
                 grant_set(
                     &vault_id,
                     &grant.person,
-                    &user_public_key(user, &self.keys, &self.user_id),
+                    &self.public_key_of(grant.person)?,
                     collection,
                     &new,
                     epoch,
@@ -994,7 +1000,7 @@ fn rekey_person(
     signer: &Signer,
 ) -> Result<()> {
     let vault_id = keyring.vault_id;
-    let collections = organization_collections(tx, keyring, organization)?;
+    let collections = organization_collections(tx, keyring, organization, false)?;
     let directory = Directory::load(tx)?;
     events::record(
         tx,
@@ -1073,11 +1079,13 @@ pub(super) fn open_organization_key(
     Ok(pair)
 }
 
-/// Every collection, opened with the organization's key, for an admin.
+/// Every collection, opened with the organization's key, for an admin. On a replica that is still
+/// catching up, a collection whose newest key has not all arrived is left closed until it has.
 pub(super) fn organization_collections(
     conn: &Connection,
     keyring: &Keyring,
     organization: &KeyPair,
+    catching_up: bool,
 ) -> Result<Vec<OpenCollection>> {
     type Row = (String, String, Option<String>, Vec<u8>, Vec<u8>, i64, i64);
     let mut statement = conn.prepare(
@@ -1097,33 +1105,39 @@ pub(super) fn organization_collections(
             ))
         })?
         .collect::<rusqlite::Result<Vec<Row>>>()?;
-    rows.into_iter()
-        .map(|(id, name, owner, enc, ciphertext, epoch, current)| {
-            let id = parse_id(&id)?;
-            if epoch != current {
-                return Err(Error::Corrupt(format!(
-                    "collection {id} is sealed to the organization at an earlier key"
-                )));
+    let mut collections = Vec::new();
+    for (id, name, owner, enc, ciphertext, epoch, current) in rows {
+        let id = parse_id(&id)?;
+        if epoch != current {
+            if catching_up {
+                continue;
             }
-            let key = crypto::open_key(
-                organization,
-                &SealedBox { enc, ciphertext },
-                &organization_grant_info(&keyring.vault_id, &id, epoch),
-            )
-            .ok_or_else(|| Error::Corrupt("a collection key does not open with the organization key".into()))?;
-            let older = older_keys(conn, &keyring.vault_id, &id, Held::Collection, epoch, &key)?;
-            Ok(OpenCollection {
-                id,
-                name,
-                owner: owner.as_deref().map(parse_id).transpose()?,
-                role: Role::Admin,
-                held: Held::Collection,
-                epoch,
-                key,
-                older,
-            })
-        })
-        .collect()
+            return Err(Error::Corrupt(format!(
+                "collection {id} is sealed to the organization at an earlier key"
+            )));
+        }
+        let key = crypto::open_key(
+            organization,
+            &SealedBox { enc, ciphertext },
+            &organization_grant_info(&keyring.vault_id, &id, epoch),
+        )
+        .ok_or_else(|| Error::Corrupt("a collection key does not open with the organization key".into()))?;
+        let older = match older_keys(conn, &keyring.vault_id, &id, Held::Collection, epoch, &key) {
+            Err(_) if catching_up => continue,
+            older => older?,
+        };
+        collections.push(OpenCollection {
+            id,
+            name,
+            owner: owner.as_deref().map(parse_id).transpose()?,
+            role: Role::Admin,
+            held: Held::Collection,
+            epoch,
+            key,
+            older,
+        });
+    }
+    Ok(collections)
 }
 
 pub(super) fn people(keyring: &Keyring) -> Vec<Person> {
@@ -1215,7 +1229,7 @@ fn new_organization(
     }
 }
 
-const PENDING_ORGANIZATION: &str = "pending_organization";
+pub(super) const PENDING_ORGANIZATION: &str = "pending_organization";
 
 /// A new organization key on its way into the key file, kept in the database with the
 /// collections sealed to it (Vault::take_admin_away). Nothing in it opens without an admin's own

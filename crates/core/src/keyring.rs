@@ -96,6 +96,57 @@ impl Keyring {
     }
 }
 
+/// A person's key file entry without the database key, which each store seals to them itself:
+/// what reaches each of their computers (ADR 20). It opens nothing without their password,
+/// recovery key, or, for the organization's key, their private key.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonEntry {
+    pub id: Uuid,
+    pub name: String,
+    pub password_kdf: PasswordKdf,
+    pub private_key: Sealed,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key_by_recovery: Option<Sealed>,
+    #[serde(with = "crate::crypto::b64")]
+    pub public_key: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_key: Option<SealedBox>,
+    #[serde(default)]
+    pub must_set_password: bool,
+}
+
+impl PersonEntry {
+    pub fn of(user: &KeyringUser) -> PersonEntry {
+        PersonEntry {
+            id: user.id,
+            name: user.name.clone(),
+            password_kdf: user.password_kdf.clone(),
+            private_key: user.private_key.clone(),
+            private_key_by_recovery: user.private_key_by_recovery.clone(),
+            public_key: user.public_key.clone(),
+            organization_key: user.organization_key.clone(),
+            must_set_password: user.must_set_password,
+        }
+    }
+
+    /// The entry as this store keeps it, with its own database key sealed to the person.
+    pub fn with_database_key(self, database_key: SealedBox) -> KeyringUser {
+        KeyringUser {
+            id: self.id,
+            name: self.name,
+            password_kdf: self.password_kdf,
+            private_key: self.private_key,
+            private_key_by_recovery: self.private_key_by_recovery,
+            database_key,
+            previous_database_key: None,
+            public_key: self.public_key,
+            organization_key: self.organization_key,
+            must_set_password: self.must_set_password,
+        }
+    }
+}
+
 pub fn private_key_aad(vault_id: &Uuid, user_id: &Uuid, by: &str) -> Vec<u8> {
     format!("glaze-vault v1 private-key by {by} vault {vault_id} user {user_id}").into_bytes()
 }
