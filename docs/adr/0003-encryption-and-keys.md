@@ -1,6 +1,7 @@
 # 3. Encryption: SQLCipher, keys per collection, sealed to each user
 
-Proposed, 2026-10-14.
+Proposed, 2026-10-14. Re-encrypting when a grant is removed is replaced by key epochs in
+[ADR 17](0017-key-epochs-change-log.md).
 
 ## Context
 

@@ -58,6 +58,8 @@ pub enum Error {
     RemovingAdmin,
     #[error("That person is not an admin.")]
     NotAnAdmin,
+    #[error("This record changed again while you were choosing a version. Look again, then choose.")]
+    ForkChanged,
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -99,6 +101,7 @@ impl Error {
             Error::ManagersOnlyLower => "managers-only-lower",
             Error::RemovingAdmin => "removing-admin",
             Error::NotAnAdmin => "not-an-admin",
+            Error::ForkChanged => "fork-changed",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",

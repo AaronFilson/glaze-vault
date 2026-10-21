@@ -19,6 +19,7 @@ import {
 import { hasSheet, isClay, MATERIAL_CLASSES, SHEET_FIELDS, tidySheet, type DataSheet, type MaterialClass } from '../materialData';
 import type { Editor } from '../useEditor';
 import { DeletedList, DeletedNotice } from './Deleted';
+import { ForkNotice } from './ForkNotice';
 import { MaterialCompare } from './MaterialCompare';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
 
@@ -65,6 +66,7 @@ export function Materials({
   onDelete,
   onRestore,
   onErase,
+  onKeepVersion,
   renameInRecipes,
   onRenameInRecipes,
   readOnly = false,
@@ -85,6 +87,8 @@ export function Materials({
   onDelete: () => void;
   onRestore: () => void;
   onErase: () => void;
+  /** Ends a fork of the record shown by keeping one of its newest revisions (ADR 17). */
+  onKeepVersion: (revisionId: string) => void;
   /** Whether saving a new name changes it in the recipes that use the old one too. */
   renameInRecipes: boolean;
   onRenameInRecipes: (rename: boolean) => void;
@@ -179,6 +183,9 @@ export function Materials({
             onUse={onUseRevision}
             onBack={() => editor.setViewing(null)}
           />
+        )}
+        {current && !viewing && (
+          <ForkNotice head={current} name={current.content.name} readOnly={readOnly} onKeep={onKeepVersion} />
         )}
         {readOnly && current && !viewing && (
           <p className="hint" role="status">

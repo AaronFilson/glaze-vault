@@ -178,6 +178,16 @@ export interface Revision<Content> {
   /** The revision that deleted its record, with the content it had, to restore (ADR 9). */
   deleted?: boolean;
   collectionId?: string;
+  /** The record's other newest revisions, when it was changed in two places at once (ADR 17). */
+  forks?: Fork[];
+}
+
+/** Another newest revision of a record that forked. */
+export interface Fork {
+  revisionId: string;
+  savedAt: number;
+  /** That branch deleted the record, on a computer that did not see the other change. */
+  deleted: boolean;
 }
 
 export type RecipeHead = Revision<RecipeContent>;
@@ -277,6 +287,10 @@ export const api = {
   /** The deleted records, newest first. */
   deletedRecords: <Content>(kind: Kind) =>
     invoke<Revision<Content>[]>('deleted_records', { kind }).then((list) => (kind === 'recipe' ? list.map(filled) : list)),
+  /** Ends a fork: keeps `keep`, one of a record's newest revisions, and sets aside `others`, all the
+   * rest of them. Returns the revision that does so. */
+  resolveFork: <Content>(kind: Kind, keep: string, others: string[]) =>
+    invoke<Revision<Content>>('resolve_fork', { kind, keep, others }),
   /** Moves records, with all their revisions and attachments, to another collection, all or none. */
   moveRecords: (records: [Kind, string][], to: string) => invoke<void>('move_records', { records, to }),
   /** Removes every revision of a deleted record; returns how many there were. */

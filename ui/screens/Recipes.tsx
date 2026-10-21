@@ -493,6 +493,32 @@ export function Recipes({
     }
   };
 
+  /** Ends a fork of the open record by keeping one of its newest revisions (ADR 17). */
+  const keepVersion = <Content,>(r: Records<Content>, keep: string) =>
+    leave(r.kind, async () => {
+      const head = r.editor.current;
+      if (!head) return;
+      const others = [head.revisionId, ...(head.forks ?? []).map((fork) => fork.revisionId)].filter(
+        (id) => id !== keep
+      );
+      try {
+        const saved = await api.resolveFork<Content>(r.kind, keep, others);
+        r.setHeads((list) => [
+          ...(saved.deleted ? [] : [saved]),
+          ...list.filter((other) => other.recordId !== saved.recordId)
+        ]);
+        if (saved.deleted) {
+          r.setDeleted((list) => [saved, ...list]);
+          r.editor.show(null);
+        } else {
+          r.editor.show(saved);
+        }
+        r.setError('');
+      } catch (e) {
+        r.setError(errorText(e));
+      }
+    });
+
   const eraseRecord = async <Content,>(r: Records<Content>) => {
     const gone = r.editor.viewing!;
     try {
@@ -1171,6 +1197,7 @@ export function Recipes({
             void restoreRecord(records.material, clash?.content.name);
           }}
           onErase={() => setConfirming({ action: 'erase', kind: 'material' })}
+          onKeepVersion={(keep) => keepVersion(records.material, keep)}
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
           readOnly={!canEdit(access, material.current ? material.current.collectionId : newIn('material'), 'material')}
@@ -1205,6 +1232,19 @@ export function Recipes({
           onDelete={() => setConfirming({ action: 'delete', kind: 'recipe' })}
           onRestore={() => void restoreRecord(records.recipe)}
           onErase={() => setConfirming({ action: 'erase', kind: 'recipe' })}
+          onKeepVersion={(keep) => keepVersion(records.recipe, keep)}
+          onCompareFork={
+            chemistry && recipe.current
+              ? (revisionId) => {
+                  const recordId = recipe.current!.recordId;
+                  setComparing([
+                    { recordId, number: null },
+                    { recordId, number: null, revisionId }
+                  ]);
+                  setView('compare');
+                }
+              : undefined
+          }
           onCompare={
             canCompare
               ? (number) => {

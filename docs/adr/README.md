@@ -21,3 +21,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0014](0014-firing-log-and-photos.md)    | The firing log, and photos kept as attachments                         | 2026-10-16 |
 | [0015](0015-chemistry-tools.md)          | Chemistry tools: line blends, limit formulas and costs                 | 2026-10-16 |
 | [0016](0016-mix-log.md)                  | The mix log: batches as they were mixed                                | 2026-10-20 |
+| [0017](0017-key-epochs-change-log.md)    | Key epochs, the change log and tombstones                              | 2026-10-20 |

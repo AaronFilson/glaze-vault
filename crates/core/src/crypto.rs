@@ -134,6 +134,30 @@ pub fn narrower_key(key: &Key, info: &[u8]) -> Key {
     narrower
 }
 
+/// SHA-256 of the parts, one after another.
+pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
+    use sha2::Digest;
+    let mut hasher = Sha256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
+impl Sealed {
+    /// The nonce and then the ciphertext, for a BLOB column.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        [self.nonce.as_slice(), &self.ciphertext].concat()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Sealed> {
+        (bytes.len() > 24).then(|| Sealed {
+            nonce: bytes[..24].to_vec(),
+            ciphertext: bytes[24..].to_vec(),
+        })
+    }
+}
+
 /// A user's X25519 key pair. Keys are sealed to the public key; the private key never leaves
 /// memory unencrypted.
 pub struct KeyPair {

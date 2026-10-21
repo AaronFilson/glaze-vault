@@ -110,6 +110,11 @@ export function fakeCore({
         revisions.set(gone.revisionId, gone);
         return gone;
       }
+      case 'resolve_fork': {
+        saved += 1;
+        const kept = [...recipes, ...materials, ...history].find((r) => r.revisionId === a.keep)!;
+        return { ...kept, revisionId: `resolved-revision-${saved}`, number: kept.number + 1, forks: undefined };
+      }
       case 'erase_record':
         return 2;
       case 'choose_import':
