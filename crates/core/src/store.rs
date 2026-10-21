@@ -130,6 +130,28 @@ const MIGRATIONS: &[&str] = &[
         erased_at INTEGER NOT NULL,
         erased_by TEXT NOT NULL
     );",
+    // 9: the directory as events (ADR 18). Each change to people, admins, collections, grants and
+    // roles, and each record erased or moved, is kept as an event, its body JSON as it was made,
+    // and the change log lists it. `people` is who is in the vault, as the key file says on one
+    // computer, so that checks of who may do what need nothing but the database. A vault from
+    // before gets the events it would have made, from what it holds, when it is next unlocked
+    // (vault::events::fill): its people are only in its key file.
+    "CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        actor_id TEXT,
+        collection_id TEXT,
+        created_at INTEGER NOT NULL,
+        body TEXT NOT NULL
+    );
+    CREATE TABLE people (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        public_key BLOB NOT NULL,
+        admin INTEGER NOT NULL DEFAULT 0,
+        added_at INTEGER NOT NULL,
+        removed_at INTEGER
+    );",
 ];
 
 /// A step a migration needs that SQL cannot do, run in its transaction after its SQL.

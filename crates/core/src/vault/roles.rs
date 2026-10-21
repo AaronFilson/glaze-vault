@@ -5,15 +5,15 @@
 //! holds the summary key only (summaries.rs), so changing that gives its collections new keys.
 //! Reading batch sheets alone stays the batch operator's, whose grant holds the batch key.
 
-use super::{Held, Kind, Vault, now_ms, parse_id};
+use super::events::{self, Body};
+use super::{Held, Kind, Vault};
 use crate::access::Role;
-use crate::error::{Error, Result};
-use rusqlite::{OptionalExtension, params};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// A role an admin made.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomRole {
     pub id: Uuid,
@@ -48,14 +48,14 @@ impl Capabilities {
         chemistry: true,
         manage: false,
     };
-    const NONE: Capabilities = Capabilities {
+    pub(crate) const NONE: Capabilities = Capabilities {
         export: false,
         print: false,
         chemistry: false,
         manage: false,
     };
 
-    fn code(self) -> String {
+    pub(crate) fn code(self) -> String {
         [
             (self.export, "export"),
             (self.print, "print"),
@@ -68,7 +68,7 @@ impl Capabilities {
         .join(",")
     }
 
-    fn parse(text: &str) -> Capabilities {
+    pub(crate) fn parse(text: &str) -> Capabilities {
         let has = |name: &str| text.split(',').any(|part| part == name);
         Capabilities {
             export: has("export"),
@@ -79,108 +79,43 @@ impl Capabilities {
     }
 }
 
-/// The built-in roles' names, which a role an admin makes cannot take.
-const BUILT_IN_NAMES: [&str; 6] = ["batch operator", "operator", "chemist", "tester", "formulator", "admin"];
-
 impl Vault {
     /// Whether a role lets this person make and change records of a kind.
     pub(super) fn may_change(&self, role: Role, kind: Kind) -> bool {
-        match (role.changes(kind), role) {
-            (Some(may), _) => may,
-            (None, Role::Custom(id)) => self
-                .roles
-                .iter()
-                .any(|r| r.id == id && r.changes.contains(&kind) && (r.may.chemistry || kind == Kind::Firing)),
-            (None, _) => false,
-        }
+        self.directory.changes(role, kind)
     }
 
-    /// What a role may do besides changing records. A batch operator reads no chemistry, but
-    /// prints and exports its batch sheets as before.
+    /// What a role may do besides changing records.
     pub(super) fn capabilities(&self, role: Role) -> Capabilities {
-        match role {
-            Role::Operator => Capabilities {
-                chemistry: false,
-                ..Capabilities::BUILT_IN
-            },
-            Role::Custom(id) => self
-                .roles
-                .iter()
-                .find(|r| r.id == id)
-                .map_or(Capabilities::NONE, |r| r.may),
-            _ => Capabilities::BUILT_IN,
-        }
+        self.directory.capabilities(role)
     }
 
     /// Which key a grant of a role holds.
     pub(super) fn held(&self, role: Role) -> Held {
-        match role {
-            Role::Operator => Held::Batch,
-            Role::Custom(_) if !self.capabilities(role).chemistry => Held::Summary,
-            _ => Held::Collection,
-        }
-    }
-
-    pub(super) fn load_roles(&mut self) -> Result<()> {
-        let mut statement = self
-            .conn
-            .prepare("SELECT id, name, changes, may FROM roles ORDER BY created_at, rowid")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(statement);
-        self.roles = rows
-            .into_iter()
-            .map(|(id, name, changes, may)| {
-                Ok(CustomRole {
-                    id: parse_id(&id)?,
-                    name,
-                    changes: changes.split(',').filter_map(Kind::parse).collect(),
-                    may: Capabilities::parse(&may),
-                })
-            })
-            .collect::<Result<_>>()?;
-        Ok(())
+        self.directory.held(role)
     }
 
     /// The roles admins have made, for anyone signed in to a team's vault: what their collections
     /// call each other's roles.
     pub fn custom_roles(&self) -> Vec<CustomRole> {
-        self.roles.clone()
+        self.directory.roles.clone()
     }
 
     /// Makes a role, for an admin to give people.
     pub fn create_role(&mut self, name: &str, changes: &[Kind], may: Capabilities) -> Result<CustomRole> {
-        self.admin()?;
-        let name = self.role_name(name, None)?;
-        check(changes, may)?;
-        if !may.chemistry {
-            self.ready_for(Held::Summary)?;
-        }
         let role = CustomRole {
             id: Uuid::new_v4(),
-            name,
+            name: name.trim().to_owned(),
             changes: tidy(changes),
             may,
         };
-        self.conn.execute(
-            "INSERT INTO roles (id, name, changes, may, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                role.id.to_string(),
-                role.name,
-                joined(&role.changes),
-                may.code(),
-                now_ms()
-            ],
-        )?;
-        self.load_roles()?;
+        let tx = self.conn.unchecked_transaction()?;
+        events::record(&tx, self.user_id, Body::RoleCreated { role: role.clone() })?;
+        if !may.chemistry {
+            self.ready_for(Held::Summary)?;
+        }
+        tx.commit()?;
+        self.load_collections()?;
         Ok(role)
     }
 
@@ -189,94 +124,28 @@ impl Vault {
     /// people held the old one; the other way, their grants are sealed again with the
     /// collection's key.
     pub fn change_role(&mut self, id: Uuid, name: &str, changes: &[Kind], may: Capabilities) -> Result<()> {
-        self.admin()?;
-        let name = self.role_name(name, Some(id))?;
-        check(changes, may)?;
-        if !may.chemistry {
-            self.ready_for(Held::Summary)?;
-        }
-        let index = self.roles.iter().position(|r| r.id == id).ok_or(Error::NoSuchRole)?;
-        let before = self.roles[index].clone();
-        let role = Role::Custom(id);
-        let held_before = self.held(role);
-        self.roles[index] = CustomRole {
+        let role = CustomRole {
             id,
-            name: name.clone(),
+            name: name.trim().to_owned(),
             changes: tidy(changes),
             may,
         };
-        let changed = self.regrant(role, held_before, |tx| {
-            tx.execute(
-                "UPDATE roles SET name = ?1, changes = ?2, may = ?3 WHERE id = ?4",
-                params![name, joined(&tidy(changes)), may.code(), id.to_string()],
-            )?;
-            Ok(())
-        });
-        if let Err(e) = changed {
-            self.roles[index] = before;
-            return Err(e);
+        let before = self.held(Role::Custom(id));
+        let tx = self.conn.unchecked_transaction()?;
+        events::record(&tx, self.user_id, Body::RoleChanged { role })?;
+        if !may.chemistry {
+            self.ready_for(Held::Summary)?;
         }
-        self.load_roles()?;
+        self.regrant(&tx, Role::Custom(id), before)?;
+        tx.commit()?;
         self.load_collections()
     }
 
     /// Deletes a role nobody has.
     pub fn delete_role(&mut self, id: Uuid) -> Result<()> {
-        self.admin()?;
-        let used: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT 1 FROM grants WHERE role = ?1 LIMIT 1",
-                params![Role::Custom(id).code()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if used.is_some() {
-            return Err(Error::RoleInUse);
-        }
-        if self
-            .conn
-            .execute("DELETE FROM roles WHERE id = ?1", params![id.to_string()])?
-            == 0
-        {
-            return Err(Error::NoSuchRole);
-        }
-        self.load_roles()
+        events::record(&self.conn, self.user_id, Body::RoleDeleted { role: id })?;
+        self.load_collections()
     }
-
-    /// A role about to be given: a custom one must be in this vault.
-    pub(super) fn known_role(&self, role: Role) -> Result<()> {
-        match role {
-            Role::Custom(id) if !self.roles.iter().any(|r| r.id == id) => Err(Error::NoSuchRole),
-            _ => Ok(()),
-        }
-    }
-
-    fn role_name(&self, name: &str, except: Option<Uuid>) -> Result<String> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(Error::NameMissing);
-        }
-        let lower = name.to_lowercase();
-        if BUILT_IN_NAMES.contains(&lower.as_str())
-            || self
-                .roles
-                .iter()
-                .any(|r| Some(r.id) != except && r.name.to_lowercase() == lower)
-        {
-            return Err(Error::RoleNameTaken);
-        }
-        Ok(name.to_owned())
-    }
-}
-
-/// A role that reads without chemistry may log firings and nothing else, and does not manage: a
-/// manager gives others the collection's key, so must hold it.
-fn check(changes: &[Kind], may: Capabilities) -> Result<()> {
-    if !may.chemistry && (may.manage || changes.iter().any(|&kind| kind != Kind::Firing)) {
-        return Err(Error::ChemistryNeeded);
-    }
-    Ok(())
 }
 
 /// Each kind once, in a fixed order.
@@ -284,13 +153,15 @@ fn tidy(changes: &[Kind]) -> Vec<Kind> {
     Kind::ALL.into_iter().filter(|kind| changes.contains(kind)).collect()
 }
 
-fn joined(changes: &[Kind]) -> String {
+/// How a role's kinds are kept: comma-separated.
+pub(crate) fn joined(changes: &[Kind]) -> String {
     changes.iter().map(|kind| kind.as_str()).collect::<Vec<_>>().join(",")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
     use serde_json::json;
 
     const PASSWORD: &str = "cone six oxidation";

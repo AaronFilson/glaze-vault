@@ -43,10 +43,11 @@ mod tests {
         let messy = format!("  {}\n", words.join("   ").to_uppercase());
         assert_eq!(*RecoveryKey::parse(&messy).unwrap().entropy(), *key.entropy());
 
+        // The checksum is 8 bits, so 1 swap in 256 still passes it; it never gives the same key.
         let mut wrong = words.clone();
         wrong.swap(0, 1);
         if wrong != words {
-            assert!(RecoveryKey::parse(&wrong.join(" ")).is_err());
+            assert!(!RecoveryKey::parse(&wrong.join(" ")).is_ok_and(|k| *k.entropy() == *key.entropy()));
         }
         assert!(RecoveryKey::parse(&words[..12].join(" ")).is_err());
     }

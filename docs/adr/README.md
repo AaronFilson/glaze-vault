@@ -22,3 +22,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0015](0015-chemistry-tools.md)          | Chemistry tools: line blends, limit formulas and costs                 | 2026-10-16 |
 | [0016](0016-mix-log.md)                  | The mix log: batches as they were mixed                                | 2026-10-20 |
 | [0017](0017-key-epochs-change-log.md)    | Key epochs, the change log and tombstones                              | 2026-10-20 |
+| [0018](0018-directory-events.md)         | The directory as events, and shared access checks                      | 2026-10-21 |
