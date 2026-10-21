@@ -5,6 +5,7 @@
 
 use super::events::{self, Body, Renamed};
 use super::roles::Capabilities;
+use super::signatures;
 use super::{
     Held, KEYRING_FILE, Kind, OpenCollection, Vault, batch_key, check_password, epoch_aad, epoch_words, grant_info,
     now_ms, older_keys, parse_id, summary_key,
@@ -14,6 +15,7 @@ use crate::crypto::{self, Key, KeyPair, PasswordKdf, SealedBox};
 use crate::error::{Error, Result};
 use crate::keyring::{self, Keyring, KeyringUser, Organization};
 use crate::recovery::RecoveryKey;
+use crate::signing::{self, Signer};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -160,7 +162,7 @@ impl Vault {
         let tx = self.conn.unchecked_transaction()?;
         events::record(
             &tx,
-            me,
+            &self.signer,
             Body::TeamFormed {
                 person: me,
                 name,
@@ -168,10 +170,24 @@ impl Vault {
                 organization_key: organization.public.clone(),
             },
         )?;
+        // The organization's signing key vouches for people's keys from now on, starting with
+        // this person's.
+        signatures::add_organization_key(&tx, &self.signer, &organization)?;
+        events::record(
+            &tx,
+            &self.signer,
+            signatures::organization_certificate(
+                &vault_id,
+                &organization,
+                me,
+                &signing::public(&self.signer.key),
+                &self.keys.public,
+            ),
+        )?;
         if self.readable(&self.default_collection).is_ok_and(|c| c.name.is_empty()) {
             events::record(
                 &tx,
-                me,
+                &self.signer,
                 Body::CollectionRenamed {
                     collection: self.default_collection,
                     name: SHARED.into(),
@@ -181,7 +197,7 @@ impl Vault {
         for collection in &self.collections {
             events::record(
                 &tx,
-                me,
+                &self.signer,
                 organization_grant_set(
                     &vault_id,
                     &organization.public,
@@ -193,10 +209,10 @@ impl Vault {
         }
         // A vault that was a team's before keeps the private collection it had.
         if !self.collections.iter().any(|c| c.owner == Some(me)) {
-            let (private, key) = create_collection(&tx, me, "", Some(me))?;
+            let (private, key) = create_collection(&tx, &self.signer, "", Some(me))?;
             events::record(
                 &tx,
-                me,
+                &self.signer,
                 grant_set(
                     &vault_id,
                     &me,
@@ -210,7 +226,7 @@ impl Vault {
             )?;
             events::record(
                 &tx,
-                me,
+                &self.signer,
                 organization_grant_set(&vault_id, &organization.public, &private, &key, 1),
             )?;
         }
@@ -233,7 +249,6 @@ impl Vault {
         check_password(one_time_password)?;
         let name = name.trim().to_owned();
         let vault_id = self.keyring.vault_id;
-        let me = self.user_id;
         let id = Uuid::new_v4();
         let keys = KeyPair::generate();
         let database_key = self.database_key()?;
@@ -242,17 +257,26 @@ impl Vault {
         let tx = self.conn.unchecked_transaction()?;
         events::record(
             &tx,
-            me,
+            &self.signer,
             Body::PersonAdded {
                 person: id,
                 name,
                 public_key: keys.public.clone(),
             },
         )?;
-        let (private, key) = create_collection(&tx, me, "", Some(id))?;
+        // Their keys are made here, so the organization certifies their signing key at once.
+        let organization_pair = self.admin()?;
+        signatures::add_organization_key(&tx, &self.signer, organization_pair)?;
+        let signing_key = signing::public(&signing::person_key(&keys));
         events::record(
             &tx,
-            me,
+            &self.signer,
+            signatures::organization_certificate(&vault_id, organization_pair, id, &signing_key, &keys.public),
+        )?;
+        let (private, key) = create_collection(&tx, &self.signer, "", Some(id))?;
+        events::record(
+            &tx,
+            &self.signer,
             grant_set(
                 &vault_id,
                 &id,
@@ -266,7 +290,7 @@ impl Vault {
         )?;
         events::record(
             &tx,
-            me,
+            &self.signer,
             organization_grant_set(&vault_id, &organization, &private, &key, 1),
         )?;
         for (collection, role) in roles {
@@ -274,7 +298,7 @@ impl Vault {
             let collection = self.readable(collection)?;
             events::record(
                 &tx,
-                me,
+                &self.signer,
                 grant_set(
                     &vault_id,
                     &id,
@@ -336,7 +360,6 @@ impl Vault {
     pub fn set_role(&mut self, person: Uuid, collection: Uuid, role: Option<Role>) -> Result<()> {
         let user = self.keyring.user(&person)?.clone();
         let vault_id = self.keyring.vault_id;
-        let me = self.user_id;
         let previous = self.directory.grant(person, collection).map(|g| g.role);
         match role {
             Some(role) => {
@@ -357,7 +380,7 @@ impl Vault {
                 };
                 events::record(
                     &tx,
-                    me,
+                    &self.signer,
                     grant_set(
                         &vault_id,
                         &person,
@@ -375,7 +398,7 @@ impl Vault {
             // takes it away and changes the key.
             None if previous.is_some() => {
                 let tx = self.conn.unchecked_transaction()?;
-                events::record(&tx, me, Body::GrantRemoved { person, collection })?;
+                events::record(&tx, &self.signer, Body::GrantRemoved { person, collection })?;
                 self.new_epoch_in(&tx, &collection)?;
                 tx.commit()?;
             }
@@ -401,7 +424,7 @@ impl Vault {
                 .collect();
             // Their grants go and their collections get new keys all at once, or not at all.
             let tx = self.conn.unchecked_transaction()?;
-            events::record(&tx, self.user_id, Body::PersonRemoved { person })?;
+            events::record(&tx, &self.signer, Body::PersonRemoved { person })?;
             for collection in theirs {
                 self.new_epoch_in(&tx, &collection)?;
             }
@@ -434,9 +457,10 @@ impl Vault {
             organization,
             &database_key,
             person,
+            &KeyPair::generate(),
             one_time_password,
             true,
-            self.user_id,
+            &self.signer,
         )?;
         keyring.write(&self.dir.join(KEYRING_FILE))?;
         tx.commit()?;
@@ -456,7 +480,7 @@ impl Vault {
         }
         user.organization_key = Some(seal_organization_key(&vault_id, user, organization));
         let tx = self.conn.unchecked_transaction()?;
-        events::record(&tx, self.user_id, Body::AdminGiven { person })?;
+        events::record(&tx, &self.signer, Body::AdminGiven { person })?;
         keyring.write(&self.dir.join(KEYRING_FILE))?;
         tx.commit()?;
         self.keyring = keyring;
@@ -478,7 +502,6 @@ impl Vault {
         self.finish_organization_change()?;
         let user = self.keyring.user(&person)?.clone();
         let vault_id = self.keyring.vault_id;
-        let me = self.user_id;
         let organization = KeyPair::generate();
         let recovery = RecoveryKey::generate();
         let pending = PendingOrganization {
@@ -495,12 +518,15 @@ impl Vault {
         let tx = self.conn.unchecked_transaction()?;
         events::record(
             &tx,
-            me,
+            &self.signer,
             Body::AdminTaken {
                 person,
                 organization_key: organization.public.clone(),
             },
         )?;
+        // The new organization key's signing key vouches for keys from now on; what the old one
+        // certified stays good, and it can certify nothing more (ADR 19).
+        signatures::add_organization_key(&tx, &self.signer, &organization)?;
         let demoted: Vec<Uuid> = self
             .directory
             .grants
@@ -512,7 +538,7 @@ impl Vault {
             let open = self.readable(&collection)?;
             events::record(
                 &tx,
-                me,
+                &self.signer,
                 grant_set(
                     &vault_id,
                     &person,
@@ -579,10 +605,10 @@ impl Vault {
         let organization = self.admin()?.public.clone();
         let name = collection_name(name)?;
         let tx = self.conn.unchecked_transaction()?;
-        let (id, key) = create_collection(&tx, self.user_id, &name, None)?;
+        let (id, key) = create_collection(&tx, &self.signer, &name, None)?;
         events::record(
             &tx,
-            self.user_id,
+            &self.signer,
             organization_grant_set(&self.keyring.vault_id, &organization, &id, &key, 1),
         )?;
         tx.commit()?;
@@ -604,7 +630,7 @@ impl Vault {
         let name = collection_name(name)?;
         events::record(
             &self.conn,
-            self.user_id,
+            &self.signer,
             Body::CollectionRenamed { collection: id, name },
         )?;
         self.load_collections()
@@ -633,6 +659,9 @@ impl Vault {
             return Err(Error::NotAllowed);
         }
         events::fill(&conn, &keyring, None)?;
+        // The admin signs with their new key, which the organization certifies in the same step.
+        let keys = KeyPair::generate();
+        let signer = Signer::new(keyring.vault_id, admin, &keys);
         let tx = conn.unchecked_transaction()?;
         rekey_person(
             &tx,
@@ -640,9 +669,10 @@ impl Vault {
             &organization,
             &database_key,
             admin,
+            &keys,
             new_password,
             false,
-            admin,
+            &signer,
         )?;
         keyring.write(&dir.join(KEYRING_FILE))?;
         tx.commit()?;
@@ -712,7 +742,7 @@ impl Vault {
             for collection in &self.collections {
                 events::record(
                     &tx,
-                    me,
+                    &self.signer,
                     grant_set(
                         &vault_id,
                         &me,
@@ -725,7 +755,7 @@ impl Vault {
                     ),
                 )?;
             }
-            events::record(&tx, me, Body::TeamDisbanded { renamed })?;
+            events::record(&tx, &self.signer, Body::TeamDisbanded { renamed })?;
             for collection in &self.collections {
                 self.new_epoch_for(&tx, &collection.id, None, None)?;
             }
@@ -752,7 +782,7 @@ impl Vault {
     }
 
     /// The organization's public key, as the key file has it.
-    fn organization_public_key(&self) -> Result<Vec<u8>> {
+    pub(super) fn organization_public_key(&self) -> Result<Vec<u8>> {
         Ok(self
             .keyring
             .organization
@@ -798,7 +828,7 @@ impl Vault {
                 let open = self.readable(&grant.collection)?;
                 events::record(
                     tx,
-                    self.user_id,
+                    &self.signer,
                     grant_set(
                         &vault_id,
                         &grant.person,
@@ -832,7 +862,6 @@ impl Vault {
         except: Option<Uuid>,
     ) -> Result<(i64, Key)> {
         let vault_id = self.keyring.vault_id;
-        let me = self.user_id;
         let open = self.readable(collection)?;
         let old = open.full_key()?;
         let directory = Directory::load(tx)?;
@@ -850,7 +879,7 @@ impl Vault {
         };
         events::record(
             tx,
-            me,
+            &self.signer,
             Body::KeyEpoch {
                 collection: *collection,
                 epoch,
@@ -871,7 +900,7 @@ impl Vault {
             let user = self.keyring.user(&grant.person)?;
             events::record(
                 tx,
-                me,
+                &self.signer,
                 grant_set(
                     &vault_id,
                     &grant.person,
@@ -887,7 +916,7 @@ impl Vault {
         if let Some(organization) = organization {
             events::record(
                 tx,
-                me,
+                &self.signer,
                 organization_grant_set(&vault_id, organization, collection, &new, epoch),
             )?;
         }
@@ -947,11 +976,11 @@ fn open_by_organization_recovery(keyring: &Keyring, words: &str) -> Result<(KeyP
     Ok((pair, database_key))
 }
 
-/// New keys for a person, under `password`, in the caller's transaction, which it commits once
-/// `keyring` is written: the database key, their grants and, for an admin, the organization key
-/// are sealed to them again. Their recovery key goes, since it opened the old private key;
-/// `one_time` makes them choose a password and get a new one at their next sign-in. `actor` is
-/// the admin who does it.
+/// New keys for a person, `keys`, under `password`, in the caller's transaction, which it commits
+/// once `keyring` is written: the database key, their grants and, for an admin, the organization
+/// key are sealed to them again, and the organization certifies their new signing key. Their
+/// recovery key goes, since it opened the old private key; `one_time` makes them choose a password
+/// and get a new one at their next sign-in. `signer` signs the events: the admin who does it.
 #[allow(clippy::too_many_arguments)]
 fn rekey_person(
     tx: &Connection,
@@ -959,17 +988,17 @@ fn rekey_person(
     organization: &KeyPair,
     database_key: &Key,
     person: Uuid,
+    keys: &KeyPair,
     password: &str,
     one_time: bool,
-    actor: Uuid,
+    signer: &Signer,
 ) -> Result<()> {
     let vault_id = keyring.vault_id;
-    let keys = KeyPair::generate();
     let collections = organization_collections(tx, keyring, organization)?;
     let directory = Directory::load(tx)?;
     events::record(
         tx,
-        actor,
+        signer,
         Body::PersonKeysChanged {
             person,
             public_key: keys.public.clone(),
@@ -982,7 +1011,7 @@ fn rekey_person(
             .ok_or_else(|| Error::Corrupt("a collection is not sealed to the organization".into()))?;
         events::record(
             tx,
-            actor,
+            signer,
             grant_set(
                 &vault_id,
                 &person,
@@ -995,8 +1024,15 @@ fn rekey_person(
             ),
         )?;
     }
+    signatures::add_organization_key(tx, signer, organization)?;
+    let signing_key = signing::public(&signing::person_key(keys));
+    events::record(
+        tx,
+        signer,
+        signatures::organization_certificate(&vault_id, organization, person, &signing_key, &keys.public),
+    )?;
     let old = keyring.user(&person)?.clone();
-    let mut user = new_user(&vault_id, person, old.name, &keys, password, database_key);
+    let mut user = new_user(&vault_id, person, old.name, keys, password, database_key);
     user.must_set_password = one_time;
     if old.organization_key.is_some() {
         user.organization_key = Some(seal_organization_key(&vault_id, &user, organization));
@@ -1230,12 +1266,12 @@ pub(super) fn finish_organization_change(conn: &Connection, keyring: &mut Keyrin
     Ok(())
 }
 
-/// Makes a collection, by `actor`, and its key.
-fn create_collection(conn: &Connection, actor: Uuid, name: &str, owner: Option<Uuid>) -> Result<(Uuid, Key)> {
+/// Makes a collection, signed by `signer`, and its key.
+fn create_collection(conn: &Connection, signer: &Signer, name: &str, owner: Option<Uuid>) -> Result<(Uuid, Key)> {
     let id = Uuid::new_v4();
     events::record(
         conn,
-        actor,
+        signer,
         Body::CollectionCreated {
             collection: id,
             name: name.to_owned(),

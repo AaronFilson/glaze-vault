@@ -9,6 +9,7 @@ mod error;
 mod files;
 mod keyring;
 mod recovery;
+mod signing;
 mod store;
 mod vault;
 
@@ -17,6 +18,7 @@ pub use backup::EXTENSION as BACKUP_EXTENSION;
 pub use error::Error;
 pub use recovery::RecoveryKey;
 pub use vault::{
-    Attachment, BackupInfo, Capabilities, Collection, Credential, CustomRole, Fork, Grant, Kind, LastBackup,
-    MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS, Person, Revision, SetAside, Settings, Vault,
+    Attachment, AuditEntry, AuditLog, BackupInfo, Capabilities, Collection, Credential, CustomRole, Fork, Grant, Kind,
+    LastBackup, MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS, Note, Person, Revision, SetAside, Settings, SignatureCheck,
+    Signed, SignedAs, Vault,
 };

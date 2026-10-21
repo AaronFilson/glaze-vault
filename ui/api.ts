@@ -180,6 +180,46 @@ export interface Revision<Content> {
   collectionId?: string;
   /** The record's other newest revisions, when it was changed in two places at once (ADR 17). */
   forks?: Fork[];
+  /** The person who saved it. */
+  author?: string;
+  /** Who signed it and whether that checks (ADR 19). Only a record's history has it. */
+  signed?: Signed;
+}
+
+/** A signature over a revision: by whom, in what capacity, and whether it checks. */
+export interface Signed {
+  by: string;
+  /** Saved it; vouched for it, as it was saved before revisions were signed; or moved it. */
+  as: 'author' | 'attester' | 'mover';
+  /** Good; good but by a key no admin has certified yet; or not matching what it signs. */
+  check: SignatureCheck;
+}
+
+export type SignatureCheck = 'good' | 'unconfirmed' | 'bad';
+
+/** What the page tells the audit log, which only it knows (ADR 19). */
+export type Note =
+  | { action: 'opened'; kind: Kind; record: string }
+  | { action: 'printed'; kind: Kind; record: string; detail?: string }
+  | { action: 'exported'; detail: string };
+
+/** One thing someone did. Ids only: names come from what this person can open. */
+export interface AuditEntry {
+  seq: number;
+  at: number;
+  person: string | null;
+  action: string;
+  kind: Kind | null;
+  record: string | null;
+  collection: string | null;
+  detail: string | null;
+  check: SignatureCheck;
+}
+
+/** The audit log, newest first, and whether its chain is whole. */
+export interface AuditLog {
+  entries: AuditEntry[];
+  intact: boolean;
 }
 
 /** Another newest revision of a record that forked. */
@@ -293,6 +333,10 @@ export const api = {
     invoke<Revision<Content>>('resolve_fork', { kind, keep, others }),
   /** Moves records, with all their revisions and attachments, to another collection, all or none. */
   moveRecords: (records: [Kind, string][], to: string) => invoke<void>('move_records', { records, to }),
+  /** Tells the audit log what the page did. Failing to does not stop the page. */
+  note: (note: Note) => invoke<void>('note', { note }),
+  /** The audit log, newest first: `limit` entries, or all. For an admin. */
+  auditLog: (limit: number | null) => invoke<AuditLog>('audit_log', { limit }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),
   newRecoveryKey: (password: string) => invoke<string[]>('new_recovery_key', { password }),

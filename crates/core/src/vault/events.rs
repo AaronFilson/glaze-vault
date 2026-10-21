@@ -9,7 +9,8 @@ use crate::access::{Directory, Role};
 use crate::crypto::SealedBox;
 use crate::error::{Error, Result};
 use crate::keyring::Keyring;
-use crate::vault::{Capabilities, CustomRole, atomically, roles};
+use crate::signing::{self, As, Signer};
+use crate::vault::{Capabilities, CustomRole, atomically, audit, roles};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -21,6 +22,47 @@ pub(crate) struct Event {
     pub actor: Option<Uuid>,
     pub at: i64,
     pub body: Body,
+    /// The body as JSON, as it was made: what is kept and what a signature covers.
+    pub json: String,
+    pub signed: Option<SignedBy>,
+}
+
+/// A signature over an item, whose key made it, and in what capacity (ADR 19).
+#[derive(Clone)]
+pub(crate) struct SignedBy {
+    pub signature: Vec<u8>,
+    pub signer: Uuid,
+    pub role: As,
+}
+
+impl Event {
+    /// A new event, not signed yet.
+    pub fn new(actor: Option<Uuid>, at: i64, body: Body) -> Result<Event> {
+        let json = serde_json::to_string(&body)?;
+        Ok(Event {
+            id: Uuid::new_v4(),
+            actor,
+            at,
+            body,
+            json,
+            signed: None,
+        })
+    }
+
+    /// What a signature over the event covers.
+    pub fn payload(&self, vault: &Uuid, role: As, signer: &Uuid) -> Vec<u8> {
+        signing::event_payload(
+            vault,
+            &self.id,
+            self.body.name(),
+            self.actor.as_ref(),
+            self.body.collection().as_ref(),
+            self.at,
+            &self.json,
+            role,
+            signer,
+        )
+    }
 }
 
 /// What an event changes. Kept as JSON, as it was made: the stored text is never written again.
@@ -108,6 +150,34 @@ pub(crate) enum Body {
         epoch: i64,
         sealed: SealedBox,
     },
+    /// That a signing key and an encryption key are a person's (signing.rs): issued by the
+    /// organization, whose key `issuer_key` is, or by the person for themselves, with `proof`
+    /// that they hold the person's secret in a team's vault.
+    CertificateIssued {
+        certificate: Uuid,
+        person: Uuid,
+        #[serde(with = "crate::crypto::b64")]
+        signing_key: Vec<u8>,
+        #[serde(with = "crate::crypto::b64")]
+        encryption_key: Vec<u8>,
+        issued_at: i64,
+        #[serde(with = "crate::crypto::b64")]
+        issuer_key: Vec<u8>,
+        #[serde(with = "crate::crypto::b64")]
+        signature: Vec<u8>,
+        #[serde(default, with = "crate::crypto::b64_option", skip_serializing_if = "Option::is_none")]
+        proof: Option<Vec<u8>>,
+    },
+    /// The organization's signing key, and its encryption key, signed with the signing key: the
+    /// key certificates are trusted by.
+    OrganizationKeyAdded {
+        #[serde(with = "crate::crypto::b64")]
+        signing_key: Vec<u8>,
+        #[serde(with = "crate::crypto::b64")]
+        encryption_key: Vec<u8>,
+        #[serde(with = "crate::crypto::b64")]
+        signature: Vec<u8>,
+    },
     RoleCreated {
         role: CustomRole,
     },
@@ -157,6 +227,8 @@ impl Body {
             Body::GrantSet { .. } => "grant-set",
             Body::GrantRemoved { .. } => "grant-removed",
             Body::OrganizationGrantSet { .. } => "organization-grant-set",
+            Body::CertificateIssued { .. } => "certificate-issued",
+            Body::OrganizationKeyAdded { .. } => "organization-key-added",
             Body::RoleCreated { .. } => "role-created",
             Body::RoleChanged { .. } => "role-changed",
             Body::RoleDeleted { .. } => "role-deleted",
@@ -191,6 +263,44 @@ impl Body {
         }
     }
 
+    /// What the audit log keeps of the event: ids, and never the keys or names it carries.
+    fn audit_entry(&self) -> audit::Entry<'static> {
+        match self {
+            Body::Erased {
+                record,
+                kind,
+                collection,
+            } => audit::Entry::of("erased", *kind, *record, *collection),
+            Body::Moved { record, kind, from, to } => {
+                audit::Entry::of("moved", *kind, *record, *to).detail(format!("from {from}"))
+            }
+            _ => {
+                let subject = match self {
+                    Body::PersonAdded { person, .. }
+                    | Body::PersonKeysChanged { person, .. }
+                    | Body::PersonRemoved { person }
+                    | Body::AdminGiven { person }
+                    | Body::AdminTaken { person, .. }
+                    | Body::TeamFormed { person, .. }
+                    | Body::GrantSet { person, .. }
+                    | Body::GrantRemoved { person, .. }
+                    | Body::CertificateIssued { person, .. } => Some(format!("person {person}")),
+                    Body::RoleCreated { role } | Body::RoleChanged { role } => Some(format!("role {}", role.id)),
+                    Body::RoleDeleted { role } => Some(format!("role {role}")),
+                    _ => None,
+                };
+                let entry = audit::Entry {
+                    collection: self.collection(),
+                    ..audit::Entry::new(self.name())
+                };
+                match subject {
+                    Some(subject) => entry.detail(subject),
+                    None => entry,
+                }
+            }
+        }
+    }
+
     /// The kind of record an erasure or a move is of.
     fn record_kind(&self) -> Option<Kind> {
         match self {
@@ -200,17 +310,21 @@ impl Body {
     }
 }
 
-/// Checks that `actor` may make a change, against the directory as it is in `conn`, and applies
-/// it. Several in one transaction each see the ones before.
-pub(crate) fn record(conn: &Connection, actor: Uuid, body: Body) -> Result<()> {
-    Directory::load(conn)?.check(actor, &body)?;
-    let event = Event {
-        id: Uuid::new_v4(),
-        actor: Some(actor),
-        at: now_ms(),
-        body,
-    };
-    atomically(conn, |conn| apply(conn, &event))
+/// Checks that the signer may make a change, against the directory as it is in `conn`, signs it
+/// and applies it. Several in one transaction each see the ones before.
+pub(crate) fn record(conn: &Connection, signer: &Signer, body: Body) -> Result<()> {
+    Directory::load(conn)?.check(signer.person, &body)?;
+    let mut event = Event::new(Some(signer.person), now_ms(), body)?;
+    let payload = event.payload(&signer.vault, As::Author, &signer.person);
+    event.signed = Some(SignedBy {
+        signature: signer.sign(&payload),
+        signer: signer.person,
+        role: As::Author,
+    });
+    atomically(conn, |conn| {
+        apply(conn, &event)?;
+        audit::note(conn, signer, event.body.audit_entry())
+    })
 }
 
 /// Keeps an event, adds it to the change log, and writes what it changes to the tables. It does
@@ -237,11 +351,21 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
                 "UPDATE people SET public_key = ?1 WHERE id = ?2",
                 params![public_key, person.to_string()],
             )?;
+            // Certificates of the keys they had no longer hold.
+            conn.execute(
+                "UPDATE certificates SET revoked_at = ?1
+                 WHERE person_id = ?2 AND encryption_key != ?3 AND revoked_at IS NULL",
+                params![at, person.to_string(), public_key],
+            )?;
         }
         Body::PersonRemoved { person } => {
             conn.execute("DELETE FROM grants WHERE user_id = ?1", params![person.to_string()])?;
             conn.execute(
                 "UPDATE people SET removed_at = ?1 WHERE id = ?2",
+                params![at, person.to_string()],
+            )?;
+            conn.execute(
+                "UPDATE certificates SET revoked_at = ?1 WHERE person_id = ?2 AND revoked_at IS NULL",
                 params![at, person.to_string()],
             )?;
         }
@@ -271,8 +395,17 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
                 "UPDATE people SET removed_at = ?1 WHERE id != ?2 AND removed_at IS NULL",
                 params![at, actor],
             )?;
+            conn.execute(
+                "UPDATE certificates SET revoked_at = ?1 WHERE person_id != ?2 AND revoked_at IS NULL",
+                params![at, actor],
+            )?;
             conn.execute("UPDATE people SET admin = 0", [])?;
             conn.execute("DELETE FROM organization_grants", [])?;
+            // With no organization, nothing it signed from now on is trusted.
+            conn.execute(
+                "UPDATE organization_keys SET retired_at = ?1 WHERE retired_at IS NULL",
+                params![at],
+            )?;
         }
         Body::CollectionCreated {
             collection,
@@ -357,6 +490,47 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
                 params![collection.to_string(), sealed.enc, sealed.ciphertext, epoch],
             )?;
         }
+        Body::CertificateIssued {
+            certificate,
+            person,
+            signing_key,
+            encryption_key,
+            issued_at,
+            issuer_key,
+            signature,
+            proof,
+        } => {
+            conn.execute(
+                "INSERT INTO certificates (id, person_id, signing_key, encryption_key, issued_at, issuer_key, signature, proof)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    certificate.to_string(),
+                    person.to_string(),
+                    signing_key,
+                    encryption_key,
+                    issued_at,
+                    issuer_key,
+                    signature,
+                    proof
+                ],
+            )?;
+        }
+        Body::OrganizationKeyAdded {
+            signing_key,
+            encryption_key,
+            ..
+        } => {
+            // The organization has one signing key at a time: the one before it is retired, and
+            // what it signs from now on is not trusted.
+            conn.execute(
+                "UPDATE organization_keys SET retired_at = ?1 WHERE retired_at IS NULL",
+                params![at],
+            )?;
+            conn.execute(
+                "INSERT INTO organization_keys (signing_key, encryption_key, added_at) VALUES (?1, ?2, ?3)",
+                params![signing_key, encryption_key, at],
+            )?;
+        }
         Body::RoleCreated { role } => {
             conn.execute(
                 "INSERT INTO roles (id, name, changes, may, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -412,15 +586,20 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
 
 /// Keeps an event, without the change log or what it changes.
 fn keep(conn: &Connection, event: &Event) -> Result<()> {
+    let signed = event.signed.as_ref();
     conn.execute(
-        "INSERT INTO events (id, type, actor_id, collection_id, created_at, body) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO events (id, type, actor_id, collection_id, created_at, body, signature, signer_id, signed_as)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             event.id.to_string(),
             event.body.name(),
             event.actor.map(|a| a.to_string()),
             event.body.collection().map(|c| c.to_string()),
             event.at,
-            serde_json::to_string(&event.body)?
+            event.json,
+            signed.map(|s| &s.signature),
+            signed.map(|s| s.signer.to_string()),
+            signed.map(|s| s.role.code()),
         ],
     )?;
     Ok(())
@@ -494,13 +673,9 @@ pub(super) fn fill(conn: &Connection, keyring: &Keyring, unlocker: Option<(Uuid,
     let tx = conn.unchecked_transaction()?;
     let now = now_ms();
     let mut events: Vec<Event> = Vec::new();
-    let mut push = |at: i64, body: Body| {
-        events.push(Event {
-            id: Uuid::new_v4(),
-            actor: None,
-            at,
-            body,
-        })
+    let mut push = |at: i64, body: Body| -> Result<()> {
+        events.push(Event::new(None, at, body)?);
+        Ok(())
     };
 
     let team = keyring.organization.is_some();
@@ -518,10 +693,10 @@ pub(super) fn fill(conn: &Connection, keyring: &Keyring, unlocker: Option<(Uuid,
                 name: user.name.clone(),
                 public_key,
             },
-        );
+        )?;
     }
     for user in keyring.users.iter().filter(|u| team && u.organization_key.is_some()) {
-        push(now, Body::AdminGiven { person: user.id });
+        push(now, Body::AdminGiven { person: user.id })?;
     }
 
     type Shelf = (String, String, Option<String>, i64);
@@ -537,7 +712,7 @@ pub(super) fn fill(conn: &Connection, keyring: &Keyring, unlocker: Option<(Uuid,
                 name,
                 owner: owner.as_deref().map(parse_id).transpose()?,
             },
-        );
+        )?;
     }
 
     type MadeRole = (String, String, String, String, i64);
@@ -554,7 +729,7 @@ pub(super) fn fill(conn: &Connection, keyring: &Keyring, unlocker: Option<(Uuid,
             changes: changes.split(',').filter_map(Kind::parse).collect(),
             may: Capabilities::parse(&may),
         };
-        push(at, Body::RoleCreated { role });
+        push(at, Body::RoleCreated { role })?;
     }
 
     type Epoch = (String, i64, i64, Vec<u8>, Vec<u8>, Vec<u8>);
@@ -585,7 +760,7 @@ pub(super) fn fill(conn: &Connection, keyring: &Keyring, unlocker: Option<(Uuid,
                 previous_batch,
                 previous_summary,
             },
-        );
+        )?;
     }
 
     type Grant = (String, String, String, i64, Vec<u8>, Vec<u8>);
@@ -612,7 +787,7 @@ pub(super) fn fill(conn: &Connection, keyring: &Keyring, unlocker: Option<(Uuid,
                 epoch,
                 sealed: SealedBox { enc, ciphertext },
             },
-        );
+        )?;
     }
 
     type OrganizationGrant = (String, i64, Vec<u8>, Vec<u8>);
@@ -628,7 +803,7 @@ pub(super) fn fill(conn: &Connection, keyring: &Keyring, unlocker: Option<(Uuid,
                 epoch,
                 sealed: SealedBox { enc, ciphertext },
             },
-        );
+        )?;
     }
 
     // Everything in the change log moves up to make room at its start, in two steps, so no two
@@ -655,16 +830,15 @@ pub(super) fn fill(conn: &Connection, keyring: &Keyring, unlocker: Option<(Uuid,
         })?
         .collect::<rusqlite::Result<Vec<Tombstone>>>()?;
     for (record, kind, collection, at, by) in tombstones {
-        let event = Event {
-            id: Uuid::new_v4(),
-            actor: Some(parse_id(&by)?),
+        let event = Event::new(
+            Some(parse_id(&by)?),
             at,
-            body: Body::Erased {
+            Body::Erased {
                 record: parse_id(&record)?,
                 kind: Kind::parse(&kind).ok_or_else(|| Error::Corrupt(format!("unknown kind {kind}")))?,
                 collection: parse_id(&collection)?,
             },
-        };
+        )?;
         keep(&tx, &event)?;
         tx.execute(
             "UPDATE changes SET item = 'event', item_id = ?1 WHERE item = 'erased' AND item_id = ?2",
@@ -716,7 +890,12 @@ mod tests {
     fn tables(conn: &Connection) -> Vec<Vec<String>> {
         rows(
             conn,
-            &["SELECT id, name, public_key, admin, added_at, removed_at FROM people ORDER BY id"],
+            &[
+                "SELECT id, name, public_key, admin, added_at, removed_at FROM people ORDER BY id",
+                "SELECT id, person_id, signing_key, encryption_key, issued_at, issuer_key, signature, proof, revoked_at
+                 FROM certificates ORDER BY id",
+                "SELECT signing_key, encryption_key, added_at, retired_at FROM organization_keys ORDER BY signing_key",
+            ],
         )
         .into_iter()
         .chain(but_people(conn))
@@ -771,7 +950,7 @@ mod tests {
     fn logged(conn: &Connection) -> Vec<Event> {
         let mut statement = conn
             .prepare(
-                "SELECT e.id, e.actor_id, e.created_at, e.body FROM events e
+                "SELECT e.id, e.actor_id, e.created_at, e.body, e.signature, e.signer_id, e.signed_as FROM events e
                  JOIN (SELECT item_id, min(seq) AS seq FROM changes WHERE item = 'event' GROUP BY item_id) c
                  ON c.item_id = e.id ORDER BY c.seq",
             )
@@ -783,16 +962,25 @@ mod tests {
                     row.get::<_, Option<String>>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
                 ))
             })
             .unwrap()
             .map(|row| {
-                let (id, actor, at, body) = row.unwrap();
+                let (id, actor, at, body, signature, signer, role) = row.unwrap();
                 Event {
                     id: parse_id(&id).unwrap(),
                     actor: actor.map(|a| parse_id(&a).unwrap()),
                     at,
                     body: serde_json::from_str(&body).unwrap(),
+                    json: body,
+                    signed: signature.map(|signature| SignedBy {
+                        signature,
+                        signer: parse_id(&signer.unwrap()).unwrap(),
+                        role: As::parse(&role.unwrap()).unwrap(),
+                    }),
                 }
             })
             .collect()
@@ -901,7 +1089,8 @@ mod tests {
                 "UPDATE changes SET item = 'erased', item_id = '{erased}'
                  WHERE item_id = (SELECT id FROM events WHERE type = 'erased');
                  DELETE FROM changes WHERE item = 'event';
-                 DELETE FROM events; DELETE FROM people; DELETE FROM meta WHERE name = '{FILLED}';"
+                 DELETE FROM events; DELETE FROM people; DELETE FROM meta WHERE name = '{FILLED}';
+                 DELETE FROM certificates; DELETE FROM organization_keys;"
             ))
             .unwrap();
         drop(ana);
@@ -910,10 +1099,22 @@ mod tests {
         assert_eq!(but_people(&ana.conn), before);
         assert_eq!(people_now(&ana.conn), people);
         let events = logged(&ana.conn);
+        // Besides those, the unlock lists the organization's key and certifies Ana's.
+        let trust: Vec<String> = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.body,
+                    Body::OrganizationKeyAdded { .. } | Body::CertificateIssued { .. }
+                )
+            })
+            .map(|e| e.id.to_string())
+            .collect();
+        assert!(!trust.is_empty());
         assert!(
-            events
-                .iter()
-                .all(|e| e.actor.is_none() || matches!(e.body, Body::Erased { .. }))
+            events.iter().all(|e| e.actor.is_none()
+                || matches!(e.body, Body::Erased { .. })
+                || trust.contains(&e.id.to_string()))
         );
         let (_replica_dir, replica) = replayed(&ana.conn);
         assert_eq!(tables(&replica), tables(&ana.conn));
@@ -930,7 +1131,12 @@ mod tests {
             .unwrap();
         let made = events.iter().filter(|e| e.actor.is_none()).count();
         assert!(order[..made].iter().all(|(item, _)| item == "event"));
-        assert_eq!(as_saved(order[made..].to_vec()), saved);
+        let rest: Vec<(String, String)> = order[made..]
+            .iter()
+            .filter(|(_, id)| !trust.contains(id))
+            .cloned()
+            .collect();
+        assert_eq!(as_saved(rest), saved);
         let latest = ana.save(Kind::Recipe, None, &json!({ "name": "Celadon" })).unwrap();
         let last: String = ana
             .conn
@@ -959,7 +1165,8 @@ mod tests {
                 Event { body: Body::PersonAdded { person, .. }, .. },
                 Event { body: Body::CollectionCreated { owner: None, .. }, .. },
                 Event { body: Body::GrantSet { role: Role::Admin, epoch: 1, .. }, .. },
-            ] if *person == me
+                Event { body: Body::CertificateIssued { person: certified, signing_key, issuer_key, .. }, .. },
+            ] if *person == me && *certified == me && signing_key == issuer_key
         ));
         assert!(events.iter().all(|e| e.actor == Some(me)));
         // Its person's public key is in the directory, though its key file does not keep it.
@@ -1029,9 +1236,11 @@ mod tests {
             Role::Formulator,
             crate::vault::Held::Collection,
         );
-        assert!(matches!(record(&ana.conn, ben.id, forged), Err(Error::NotAllowed)));
+        let as_ben = Signer::new(ana.keyring.vault_id, ben.id, &crate::crypto::KeyPair::generate());
+        assert!(matches!(record(&ana.conn, &as_ben, forged), Err(Error::NotAllowed)));
+        let stranger = Signer::new(ana.keyring.vault_id, Uuid::new_v4(), &ana.keys);
         assert!(matches!(
-            record(&ana.conn, Uuid::new_v4(), Body::PersonRemoved { person: ben.id }),
+            record(&ana.conn, &stranger, Body::PersonRemoved { person: ben.id }),
             Err(Error::NotAllowed)
         ));
         assert_eq!(tables(&ana.conn), before);

@@ -6,8 +6,9 @@
 //! as the LAN host will, makes the same checks as the vault on one computer (ADR 18).
 
 use crate::error::{Error, Result};
+use crate::signing;
 use crate::vault::{Body, Capabilities, CustomRole, Held, Kind};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
@@ -96,6 +97,10 @@ pub(crate) struct Directory {
     pub collections: Vec<Shelf>,
     pub grants: Vec<Granted>,
     pub roles: Vec<CustomRole>,
+    /// The vault's id, which signatures name.
+    pub vault: Uuid,
+    /// The organization's signing key now, which issues certificates: at most one.
+    pub organization_keys: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -207,11 +212,20 @@ impl Directory {
                 })
             })
             .collect::<Result<_>>()?;
+        let vault: Option<String> = conn
+            .query_row("SELECT value FROM meta WHERE name = 'vault_id'", [], |row| row.get(0))
+            .optional()?;
+        let organization_keys = conn
+            .prepare("SELECT signing_key FROM organization_keys WHERE retired_at IS NULL ORDER BY added_at")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<Vec<u8>>>>()?;
         Ok(Directory {
             people,
             collections,
             grants,
             roles,
+            vault: vault.as_deref().map(parse_id).transpose()?.unwrap_or_default(),
+            organization_keys,
         })
     }
 
@@ -512,6 +526,43 @@ impl Directory {
                 }
                 Ok(())
             }
+            Body::CertificateIssued {
+                person: id,
+                signing_key,
+                encryption_key,
+                issued_at,
+                issuer_key,
+                signature,
+                ..
+            } => {
+                person(id)?;
+                let payload = signing::certificate_payload(&self.vault, id, signing_key, encryption_key, *issued_at);
+                if !signing::verify(issuer_key, &payload, signature) {
+                    return Err(Error::BadSignature);
+                }
+                // Someone vouches for their own key; only an admin, with an organization key the
+                // vault knows, for anyone's.
+                let own = issuer_key == signing_key && *id == actor;
+                if own || self.in_charge(actor) && self.organization_keys.contains(issuer_key) {
+                    Ok(())
+                } else {
+                    Err(Error::NotAllowed)
+                }
+            }
+            Body::OrganizationKeyAdded {
+                signing_key,
+                encryption_key,
+                signature,
+            } => {
+                in_charge()?;
+                team()?;
+                let payload = signing::organization_key_payload(&self.vault, signing_key, encryption_key);
+                if signing::verify(signing_key, &payload, signature) {
+                    Ok(())
+                } else {
+                    Err(Error::BadSignature)
+                }
+            }
             Body::RoleCreated { role } => {
                 in_charge()?;
                 team()?;
@@ -669,6 +720,7 @@ mod tests {
                         ..Capabilities::BUILT_IN
                     },
                 }],
+                ..Directory::default()
             },
             ana,
             ben,
@@ -870,7 +922,7 @@ mod tests {
                 role: Role::Admin,
                 epoch: 1,
             }],
-            roles: Vec::new(),
+            ..Directory::default()
         };
         assert!(!alone.is_team());
         assert!(alone.may_change(me, collection, Kind::Material));

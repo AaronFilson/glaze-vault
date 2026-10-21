@@ -389,6 +389,14 @@ table.lines td.num {
   width: 7rem;
 }
 
+table.audit td {
+  vertical-align: top;
+}
+
+table.audit td:first-child {
+  white-space: nowrap;
+}
+
 .num,
 .num input {
   text-align: right;

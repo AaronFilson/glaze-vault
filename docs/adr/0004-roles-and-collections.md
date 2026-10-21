@@ -2,7 +2,8 @@
 
 Proposed, 2026-10-14. Re-encrypting when a grant is removed is replaced by key epochs in
 [ADR 17](0017-key-epochs-change-log.md). The one access check reads a directory of metadata, and
-changes to it are events, in [ADR 18](0018-directory-events.md).
+changes to it are events, in [ADR 18](0018-directory-events.md). Signed revisions and the audit log
+are built in [ADR 19](0019-signatures-and-audit-log.md).
 
 ## Context
 

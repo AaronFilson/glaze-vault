@@ -4,6 +4,22 @@ import { api, errorText, type Kind, type Revision } from '../api';
 const when = (savedAt: number) =>
   new Date(savedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
+/** Who saved a revision, and what its signature says (docs/adr/0019-signatures-and-audit-log.md).
+ * In a one-person vault there is nobody to name, so only a signature that does not check is said. */
+export function savedBy(revision: Revision<unknown>, names: Record<string, string>, team: boolean): string {
+  const name = (id: string | undefined) => (id ? (names[id] ?? 'someone no longer in the vault') : 'someone');
+  const parts: string[] = [];
+  if (team && revision.author) parts.push(`by ${name(revision.author)}`);
+  const signed = revision.signed;
+  if (signed?.check === 'bad') parts.push('⚠ changed outside the app: its signature does not match');
+  else if (signed?.check === 'unconfirmed') parts.push('signed with a key no admin has certified yet');
+  if (team && signed?.check !== 'bad') {
+    if (signed?.as === 'attester') parts.push(`vouched for by ${name(signed.by)}`);
+    if (signed?.as === 'mover') parts.push(`moved by ${name(signed.by)}`);
+  }
+  return parts.join(' · ');
+}
+
 /** A record's earlier revisions, to look at one. Loaded when opened. */
 export function RevisionHistory<Content>({
   kind,
@@ -19,6 +35,8 @@ export function RevisionHistory<Content>({
   const [open, setOpen] = useState(false);
   const [revisions, setRevisions] = useState<Revision<Content>[] | null>(null);
   const [error, setError] = useState('');
+  // The lock screen's list of people names everyone in a team's vault.
+  const [names, setNames] = useState<Record<string, string> | null>(null);
 
   // A new save makes the list out of date.
   useEffect(() => setRevisions(null), [current.revisionId]);
@@ -31,6 +49,15 @@ export function RevisionHistory<Content>({
       .catch((e) => setError(errorText(e)));
   }, [open, revisions, kind, current.recordId, current.revisionId]);
 
+  useEffect(() => {
+    if (!open || names) return;
+    api
+      .status()
+      .then((status) => setNames(Object.fromEntries(status.people.map((p) => [p.id, p.name]))))
+      .catch(() => setNames({}));
+  }, [open, names]);
+  const team = !!names && Object.keys(names).length > 0;
+
   if (current.number < 2) return null;
   return (
     <details className="history" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
@@ -39,17 +66,21 @@ export function RevisionHistory<Content>({
       {!revisions && !error && <p className="hint">Loading…</p>}
       {revisions && (
         <ul className="list">
-          {revisions.map((revision) => (
-            <li key={revision.revisionId}>
-              <button
-                type="button"
-                aria-current={revision.revisionId === viewing?.revisionId}
-                onClick={() => onView(revision.revisionId === viewing?.revisionId ? null : revision)}
-              >
-                Revision {revision.number} · {when(revision.savedAt)}
-              </button>
-            </li>
-          ))}
+          {revisions.map((revision) => {
+            const by = savedBy(revision, names ?? {}, team);
+            return (
+              <li key={revision.revisionId}>
+                <button
+                  type="button"
+                  aria-current={revision.revisionId === viewing?.revisionId}
+                  onClick={() => onView(revision.revisionId === viewing?.revisionId ? null : revision)}
+                >
+                  Revision {revision.number} · {when(revision.savedAt)}
+                </button>
+                {by && <span className={revision.signed?.check === 'bad' ? 'warn' : 'hint'}> {by}</span>}
+              </li>
+            );
+          })}
         </ul>
       )}
     </details>

@@ -360,6 +360,20 @@ export const scenarios: Scenario[] = [
     }
   },
   {
+    name: 'The audit log lists what was done, signed',
+    async run(app) {
+      await app.run(
+        'click "Settings"',
+        'click "Show the audit log"',
+        'expect "| You | Changed their password |" 30000',
+        'expect "| You | Exported ("',
+        'expect "| You | Made the vault |"',
+        'expect not "outside the app"',
+        'click "Back to recipes"'
+      );
+    }
+  },
+  {
     name: 'Make a new recovery key, and the old one stops working',
     async run(app, vault) {
       const oldWords = vault.recoveryWords;

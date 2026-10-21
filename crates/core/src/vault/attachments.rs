@@ -3,9 +3,10 @@
 //! their own table so a revision only names them. An attachment is never changed: a record stops
 //! naming it in a new revision, and erasing the record removes it.
 
-use super::{Change, Kind, Vault, log_change, now_ms, parse_id};
+use super::{Change, Kind, Vault, audit, log_change, now_ms, parse_id};
 use crate::crypto;
 use crate::error::{Error, Result};
+use crate::signing::{self, AttachmentFacts};
 use crate::store;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -66,10 +67,27 @@ impl Vault {
             bytes,
             &aad(&attachment.id, &record_id, kind.as_str(), &collection_id, media_type),
         );
+        let sha256 = store::attachment_hash(&sealed.nonce, &sealed.ciphertext);
+        let signed = self.sign_as_author(|role, signer| {
+            let facts = AttachmentFacts {
+                vault: &self.keyring.vault_id,
+                id: &attachment.id,
+                record: &record_id,
+                kind: kind.as_str(),
+                collection: &collection_id,
+                epoch,
+                media_type,
+                size: attachment.size as i64,
+                author: &self.user_id,
+                at: attachment.created_at,
+                sha256: &sha256,
+            };
+            signing::attachment_payload(&facts, role, signer)
+        });
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO attachments (id, record_id, kind, collection_id, media_type, size, author_id, created_at, nonce, ciphertext, epoch, sha256)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO attachments (id, record_id, kind, collection_id, media_type, size, author_id, created_at, nonce, ciphertext, epoch, sha256, signature, signer_id, signed_as)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 attachment.id.to_string(),
                 record_id.to_string(),
@@ -82,10 +100,18 @@ impl Vault {
                 sealed.nonce,
                 sealed.ciphertext,
                 epoch,
-                store::attachment_hash(&sealed.nonce, &sealed.ciphertext),
+                sha256,
+                signed.signature,
+                signed.signer.to_string(),
+                signed.role.code(),
             ],
         )?;
         log_change(&tx, Change::Attachment, &attachment.id, &collection_id, kind)?;
+        audit::note(
+            &tx,
+            &self.signer,
+            audit::Entry::of("attached", kind, record_id, collection_id).detail(media_type),
+        )?;
         tx.commit()?;
         Ok(attachment)
     }

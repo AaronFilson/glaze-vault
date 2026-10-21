@@ -152,6 +152,55 @@ const MIGRATIONS: &[&str] = &[
         added_at INTEGER NOT NULL,
         removed_at INTEGER
     );",
+    // 10: signatures and the audit log (ADR 19). Each revision, attachment and event keeps the
+    // signature of whoever made it, moved it or vouched for it after (`signed_as`), and whose key
+    // that was. Certificates say a signing key is a person's, signed by the organization, whose
+    // signing keys are listed with when each was its key, or by the key itself in a one-person
+    // vault. The audit log is a hash chain of what people did, each entry signed by them;
+    // `device_id` and `host_seq` are for the LAN host.
+    "ALTER TABLE revisions ADD COLUMN signature BLOB;
+    ALTER TABLE revisions ADD COLUMN signer_id TEXT;
+    ALTER TABLE revisions ADD COLUMN signed_as TEXT;
+    ALTER TABLE attachments ADD COLUMN signature BLOB;
+    ALTER TABLE attachments ADD COLUMN signer_id TEXT;
+    ALTER TABLE attachments ADD COLUMN signed_as TEXT;
+    ALTER TABLE events ADD COLUMN signature BLOB;
+    ALTER TABLE events ADD COLUMN signer_id TEXT;
+    ALTER TABLE events ADD COLUMN signed_as TEXT;
+    CREATE TABLE certificates (
+        id TEXT PRIMARY KEY,
+        person_id TEXT NOT NULL,
+        signing_key BLOB NOT NULL,
+        encryption_key BLOB NOT NULL,
+        issued_at INTEGER NOT NULL,
+        issuer_key BLOB NOT NULL,
+        signature BLOB NOT NULL,
+        proof BLOB,
+        revoked_at INTEGER
+    );
+    CREATE INDEX certificates_by_person ON certificates(person_id);
+    CREATE TABLE organization_keys (
+        signing_key BLOB PRIMARY KEY,
+        encryption_key BLOB NOT NULL,
+        added_at INTEGER NOT NULL,
+        retired_at INTEGER
+    );
+    CREATE TABLE audit (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT UNIQUE NOT NULL,
+        at INTEGER NOT NULL,
+        person_id TEXT,
+        device_id TEXT,
+        action TEXT NOT NULL,
+        kind TEXT,
+        record_id TEXT,
+        collection_id TEXT,
+        detail TEXT,
+        prev_hash BLOB NOT NULL,
+        hash BLOB NOT NULL,
+        signature BLOB,
+        host_seq INTEGER
+    );",
 ];
 
 /// A step a migration needs that SQL cannot do, run in its transaction after its SQL.
