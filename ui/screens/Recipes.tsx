@@ -38,6 +38,8 @@ import { priceListFor } from '../prices';
 import { Compare, type Side } from './Compare';
 import { FiringLog, type FiringEditing } from './FiringLog';
 import { firingOf, newFiring, sameFiring, type Firing, type FiringContent } from '../firing';
+import { MixLog, type MixEditing } from './MixLog';
+import { mixOf, newMix, sameMix, type Mix, type MixContent } from '../mix';
 import { ConfirmNotice } from './Deleted';
 import { Import } from './Import';
 import type { ImportPlan } from '../importFormats';
@@ -97,12 +99,15 @@ export function Recipes({
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
   const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
   const [view, setView] = useState<
-    'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'blend' | 'fit'
+    'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'mixes' | 'blend' | 'fit'
   >('recipes');
   // The firing log (ADR 14): every firing, the one being edited, and the recipe it is showing.
   const [firings, setFirings] = useState<Firing[]>([]);
   const [firing, setFiring] = useState<FiringEditing | null>(null);
   const [firingsOf, setFiringsOf] = useState<string | null>(null);
+  const [mixes, setMixes] = useState<Mix[]>([]);
+  const [mix, setMix] = useState<MixEditing | null>(null);
+  const [mixesOf, setMixesOf] = useState<string | null>(null);
   // The recipe a line blend starts from.
   const [blendFrom, setBlendFrom] = useState<string | null>(null);
   // People's own limit formulas, and the set the unity formula is compared with (ADR 15).
@@ -118,7 +123,7 @@ export function Recipes({
   const [comparing, setComparing] = useState<[Side, Side] | null>(null);
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [lastBackup, setLastBackup] = useState<LastBackup | null>(null);
-  const [kept, setKept] = useState({ recipe: false, material: false, firing: false });
+  const [kept, setKept] = useState({ recipe: false, material: false, firing: false, mix: false });
   const [newWords, setNewWords] = useState<string[] | null>(null);
   const [organizationWords, setOrganizationWords] = useState<string[] | null>(null);
   // Who is signed in and what they can open; in a team's vault, names for other people's
@@ -165,14 +170,16 @@ export function Recipes({
       api.batchSheets(),
       api.firings(),
       api.limitSets(),
-      api.priceLists()
+      api.priceLists(),
+      api.mixes()
     ])
-      .then(([, heads, ownMaterials, batchSheets, allFirings, limits, priceLists]) => {
+      .then(([, heads, ownMaterials, batchSheets, allFirings, limits, priceLists, allMixes]) => {
         setPriceLists(priceLists);
         setRecipes(heads);
         setMaterials(ownMaterials);
         setSheets(batchSheets);
         setFirings(allFirings);
+        setMixes(allMixes);
         setOwnLimits(limits);
       })
       .catch((e) => setError(errorText(e)));
@@ -180,7 +187,7 @@ export function Recipes({
 
   useEffect(() => {
     (async () => {
-      const [now, heads, ownMaterials, gone, goneMaterials, settings, last, draft, batchSheets, allFirings, limits, priceLists] =
+      const [now, heads, ownMaterials, gone, goneMaterials, settings, last, draft, batchSheets, allFirings, limits, priceLists, allMixes] =
         await Promise.all([
         loadAccess(),
         api.recipes(),
@@ -193,9 +200,11 @@ export function Recipes({
         api.batchSheets(),
         api.firings(),
         api.limitSets(),
-        api.priceLists()
+        api.priceLists(),
+        api.mixes()
       ]);
       setOwnLimits(limits);
+      setMixes(allMixes);
       setPriceLists(priceLists);
       setRecipes(heads);
       setSheets(batchSheets);
@@ -211,12 +220,15 @@ export function Recipes({
       const keptRecipe = draft?.recipe && restorePart(draft.recipe, heads, sameRecipe);
       const keptMaterial = draft?.material && restorePart(draft.material, ownMaterials, sameMaterial);
       const keptFiring = draft?.firing && restorePart(draft.firing, allFirings, sameFiring);
+      const keptMix = draft?.mix && restorePart(draft.mix, allMixes, sameMix);
       if (keptRecipe) recipe.show(keptRecipe.current, keptRecipe.content);
       if (keptMaterial) material.show(keptMaterial.current, keptMaterial.content);
       if (keptFiring) setFiring({ current: keptFiring.current, draft: keptFiring.content });
+      if (keptMix) setMix({ current: keptMix.current, draft: keptMix.content });
       if (keptMaterial && !keptRecipe) setView('materials');
       else if (keptFiring && !keptRecipe) setView('firings');
-      setKept({ recipe: !!keptRecipe, material: !!keptMaterial, firing: !!keptFiring });
+      else if (keptMix && !keptRecipe) setView('mixes');
+      setKept({ recipe: !!keptRecipe, material: !!keptMaterial, firing: !!keptFiring, mix: !!keptMix });
       setLoaded(true);
     })().catch((e) => setError(errorText(e)));
     // Once, on opening.
@@ -237,11 +249,24 @@ export function Recipes({
   const firingPartRef = useRef(firingPart);
   firingPartRef.current = firingPart;
 
+  // A mix being logged or changed, kept the same way.
+  const mixChanged = !!mix && (!mix.current || !sameMix(mix.current.content, mix.draft));
+  const mixPart: DraftPart<MixContent> | undefined =
+    mix && mixChanged
+      ? { recordId: mix.current?.recordId ?? null, revisionId: mix.current?.revisionId ?? null, content: mix.draft }
+      : undefined;
+  const editMix = (next: MixEditing | null) => {
+    if (!next || next.current !== mix?.current) setKept((k) => ({ ...k, mix: false }));
+    setMix(next);
+  };
+  const mixPartRef = useRef(mixPart);
+  mixPartRef.current = mixPart;
+
   // Keeps unsaved edits as an encrypted draft a moment after the last change, and forgets the
   // draft as soon as nothing is unsaved.
   const unsaved: Draft | null =
-    recipe.part || material.part || firingPart
-      ? { recipe: recipe.part, material: material.part, firing: firingPart }
+    recipe.part || material.part || firingPart || mixPart
+      ? { recipe: recipe.part, material: material.part, firing: firingPart, mix: mixPart }
       : null;
   const unsavedJson = JSON.stringify(unsaved);
   useEffect(() => {
@@ -391,12 +416,12 @@ export function Recipes({
     if (problems.length) setMaterialError(problems.join(' '));
   };
 
-  // A firing being edited is kept for next time rather than asked about: its editor may not be
-  // on the screen to save it from.
+  // A firing or mix being edited is kept for next time rather than asked about: its editor may
+  // not be on the screen to save it from.
   const lock = () =>
     leave('all', async () => {
-      const firing = firingPartRef.current;
-      if (firing) await writeDraft(() => api.lockWithDraft({ firing }));
+      const [firing, mix] = [firingPartRef.current, mixPartRef.current];
+      if (firing || mix) await writeDraft(() => api.lockWithDraft({ firing, mix }));
       else await api.lock();
       onLocked('manual');
     });
@@ -656,15 +681,18 @@ export function Recipes({
     if (!team || !access || !current || recipe.viewing) return null;
     const ownFirings = firings.filter((f) => f.content.recipe === current.recordId);
     const ownSheets = sheets.filter((s) => s.content.recipe === current.recordId);
+    const ownMixes = mixes.filter((m) => mixOf(m.content, current.recordId));
     const kinds: Kind[] = [
       'recipe',
       ...(ownFirings.length ? (['firing'] as const) : []),
-      ...(ownSheets.length ? (['batch'] as const) : [])
+      ...(ownSheets.length ? (['batch'] as const) : []),
+      ...(ownMixes.length ? (['mix'] as const) : [])
     ];
     if (!kinds.every((kind) => canEdit(access, current.collectionId, kind))) return null;
     const along = [
       ownFirings.length ? (ownFirings.length === 1 ? 'its firing' : `its ${ownFirings.length} firings`) : '',
-      ownSheets.length ? 'its batch sheet' : ''
+      ownSheets.length ? 'its batch sheet' : '',
+      ownMixes.length ? (ownMixes.length === 1 ? 'its mix' : `its ${ownMixes.length} mixes`) : ''
     ].filter(Boolean);
     return (
       <MoveTo
@@ -680,7 +708,8 @@ export function Recipes({
             [
               ['recipe', current.recordId],
               ...ownFirings.map((f): [Kind, string] => ['firing', f.recordId]),
-              ...ownSheets.map((s): [Kind, string] => ['batch', s.recordId])
+              ...ownSheets.map((s): [Kind, string] => ['batch', s.recordId]),
+              ...ownMixes.map((m): [Kind, string] => ['mix', m.recordId])
             ],
             to
           );
@@ -689,6 +718,7 @@ export function Recipes({
           setRecipes((list) => moved(list, [current.recordId]));
           setFirings((list) => moved(list, ownFirings.map((f) => f.recordId)));
           setSheets((list) => moved(list, ownSheets.map((s) => s.recordId)));
+          setMixes((list) => moved(list, ownMixes.map((m) => m.recordId)));
           recipe.rebase({ ...current, collectionId: to }, (draft) => draft);
         }}
       />
@@ -735,13 +765,24 @@ export function Recipes({
     if (!current || recipe.viewing) return null;
     // A body's firings include the glazes fired on it, as the log lists them.
     const count = firings.filter((f) => firingOf(f.content, current.recordId)).length;
+    const mixCount = mixes.filter((m) => mixOf(m.content, current.recordId)).length;
     const show = (editing: FiringEditing | null) => {
       setFiringsOf(current.recordId);
       if (editing) editFiring(editing);
       setView('firings');
     };
+    const showMixes = (editing: MixEditing | null) => {
+      setMixesOf(current.recordId);
+      if (editing) editMix(editing);
+      setView('mixes');
+    };
     return (
       <div className="row">
+        {mixCount > 0 && (
+          <button type="button" onClick={() => showMixes(null)}>
+            Mixes ({mixCount})
+          </button>
+        )}
         {count > 0 && (
           <button type="button" onClick={() => show(null)}>
             Firings ({count})
@@ -776,11 +817,19 @@ export function Recipes({
             Log a firing…
           </button>
         )}
+        {canEdit(access, current.collectionId, 'mix') && (
+          <button
+            type="button"
+            onClick={() => showMixes({ current: null, draft: newMix({ recipe: current }, new Date()) })}
+          >
+            Log a mix…
+          </button>
+        )}
       </div>
     );
   };
 
-  const viewButton = (name: 'materials' | 'settings' | 'batches' | 'firings', label: string) => (
+  const viewButton = (name: 'materials' | 'settings' | 'batches' | 'firings' | 'mixes', label: string) => (
     <button type="button" aria-pressed={view === name} onClick={() => setView(view === name ? 'recipes' : name)}>
       {label}
     </button>
@@ -796,6 +845,7 @@ export function Recipes({
               Print…
             </button>
           )}
+          {viewButton('mixes', 'Mix log')}
           {viewButton('firings', 'Firing log')}
           {team && viewButton('batches', 'Batch sheets')}
           {viewButton('materials', 'Materials')}
@@ -869,6 +919,17 @@ export function Recipes({
             onDiscard={() => {
               editFiring(firing.current ? { current: firing.current, draft: firing.current.content } : null);
               setKept((k) => ({ ...k, firing: false }));
+            }}
+          />
+        )}
+        {kept.mix && mixChanged && mix && (
+          <KeptNotice
+            name="a mix"
+            plain
+            onShow={view === 'mixes' ? undefined : () => setView('mixes')}
+            onDiscard={() => {
+              editMix(mix.current ? { current: mix.current, draft: mix.current.content } : null);
+              setKept((k) => ({ ...k, mix: false }));
             }}
           />
         )}
@@ -1049,6 +1110,7 @@ export function Recipes({
       ) : view === 'firings' ? (
         <FiringLog
           firings={firings}
+          mixes={mixes}
           recipes={recipes}
           access={access}
           editing={firing}
@@ -1058,6 +1120,19 @@ export function Recipes({
           onSaved={(saved) => setFirings((list) => [saved, ...list.filter((f) => f.recordId !== saved.recordId)])}
           onErased={(recordId) => setFirings((list) => list.filter((f) => f.recordId !== recordId))}
         />
+      ) : view === 'mixes' ? (
+        <MixLog
+          mixes={mixes}
+          recipes={recipes}
+          sheets={sheets}
+          access={access}
+          editing={mix}
+          onEdit={editMix}
+          forRecipe={mixesOf}
+          onForRecipe={setMixesOf}
+          onSaved={(saved) => setMixes((list) => [saved, ...list.filter((m) => m.recordId !== saved.recordId)])}
+          onErased={(recordId) => setMixes((list) => list.filter((m) => m.recordId !== recordId))}
+        />
       ) : view === 'batches' && access ? (
         <BatchSheets
           sheets={sheets}
@@ -1065,6 +1140,12 @@ export function Recipes({
           names={names}
           current={sheet}
           onOpen={setSheet}
+          mixCount={sheet ? mixes.filter((m) => m.content.sheet === sheet.recordId).length : 0}
+          onMixes={(of, logging) => {
+            setMixesOf(of.content.recipe);
+            if (logging) editMix({ current: null, draft: newMix({ sheet: of }, new Date()) });
+            setView('mixes');
+          }}
           onPrint={(size, unit) => print({ kind: 'batch', size, unit })}
           onDeleted={(gone) => {
             setSheets((list) => list.filter((s) => s.recordId !== gone.recordId));

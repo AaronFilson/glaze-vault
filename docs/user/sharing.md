@@ -60,9 +60,9 @@ Then give them a role on each shared collection, in the table:
 | Role | Can |
 |---|---|
 | No access | Nothing in that collection. |
-| Batch operator: weighs | Its batch sheets, and nothing else: no recipes, materials or chemistry. |
+| Batch operator: weighs | Its batch sheets, and logging [mixes](mix-log.md) of them, and nothing else: no recipes, materials or chemistry. |
 | Chemist: reads | Read its recipes and materials, and their chemistry. |
-| Tester: logs firings | Read as a chemist does, and log firings with their photos. |
+| Tester: logs firings | Read as a chemist does, and log firings with their photos, and mixes. |
 | Formulator: changes | Also make, change, delete and erase them. |
 | Admin | Everything, in every collection, and people, collections and backups. |
 
@@ -72,8 +72,8 @@ Someone who can only read a recipe sees it with its fields greyed out, and no **
 ### Your own roles
 
 Under **Roles**, below the people, an admin can make roles of their own: a name, what it
-changes, out of recipes, materials, batch sheets, firings, limit formulas and prices, and what
-else it **May** do. *Costing* might change only prices; *Glaze tester* firings and limit
+changes, out of recipes, materials, batch sheets, firings, mixes, limit formulas and prices, and
+what else it **May** do. *Costing* might change only prices; *Glaze tester* firings and limit
 formulas. Give it to people in the table like any other role.
 
 - **Reads recipes' chemistry**, ticked at first, reads everything in its collections, as a chemist

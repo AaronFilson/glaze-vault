@@ -9,12 +9,13 @@ use uuid::Uuid;
 /// an admin of its only collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
-    /// Reads batch sheets, and nothing else: no recipes, materials or chemistry. Their grant
-    /// holds only the collection's batch key (crate::vault::batch_key).
+    /// Reads batch sheets and logs mixes of them, and nothing else: no recipes, materials or
+    /// chemistry. Their grant holds only the collection's batch key (crate::vault::batch_key).
     Operator,
     /// Reads recipes, materials and their chemistry.
     Chemist,
-    /// Also logs firings, with their photos, and changes nothing else: someone who fires tests.
+    /// Also logs mixes and firings, with their photos, and changes nothing else: someone who
+    /// mixes and fires tests.
     Tester,
     /// Also makes, changes, deletes and erases them.
     Formulator,
@@ -56,8 +57,9 @@ impl Role {
     /// kinds are its own, so it says nothing here.
     pub fn changes(self, kind: Kind) -> Option<bool> {
         match self {
-            Role::Operator | Role::Chemist => Some(false),
-            Role::Tester => Some(kind == Kind::Firing),
+            Role::Operator => Some(kind == Kind::Mix),
+            Role::Chemist => Some(false),
+            Role::Tester => Some(matches!(kind, Kind::Firing | Kind::Mix)),
             Role::Formulator | Role::Admin => Some(true),
             Role::Custom(_) => None,
         }
@@ -103,10 +105,19 @@ mod tests {
     }
 
     #[test]
-    fn a_tester_logs_firings_and_changes_nothing_else() {
+    fn a_tester_logs_firings_and_mixes_and_changes_nothing_else() {
         assert_eq!(Role::Tester.changes(Kind::Firing), Some(true));
         assert_eq!(Role::Tester.changes(Kind::Recipe), Some(false));
+        assert_eq!(Role::Tester.changes(Kind::Mix), Some(true));
         assert_eq!(Role::Chemist.changes(Kind::Firing), Some(false));
+        assert_eq!(Role::Chemist.changes(Kind::Mix), Some(false));
         assert_eq!(Role::Formulator.changes(Kind::Prices), Some(true));
+    }
+
+    #[test]
+    fn a_batch_operator_logs_mixes_and_changes_nothing_else() {
+        assert_eq!(Role::Operator.changes(Kind::Mix), Some(true));
+        assert_eq!(Role::Operator.changes(Kind::Batch), Some(false));
+        assert_eq!(Role::Operator.changes(Kind::Firing), Some(false));
     }
 }

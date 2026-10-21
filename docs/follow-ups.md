@@ -27,19 +27,20 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Teams ([ADR 12](adr/0012-teams-on-one-computer.md))
 
+- Phase 2, the LAN host and replicas: [the plan](plans/phase-2-lan-host.md), for review before
+  any of it is built. Its stage 3 builds the item below.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).
 
 ## Clay bodies
 
-- The rest of the ranked list at the end of
-  [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault):
-  comparing materials side by side by their data sheets, a casting-slip batch record
-  (deflocculant added in steps, gravity and viscosity over days of ageing), and bar labels
-  printed for each step of a blend at each cone.
-- Lots on a batch as it is mixed, not only on a firing: the printed batch sheet has a blank Lot
-  column to write in.
+The ranked list at the end of
+[clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault)
+is built. Small things left from the mix log ([ADR 16](adr/0016-mix-log.md)):
+
+- Mixes in the CSV export, as the firing log has.
+- A printed mix record for the shop floor: the batch sheet with blank rows for the slip's steps.
 
 ## Engineering
 

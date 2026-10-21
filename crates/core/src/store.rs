@@ -81,6 +81,9 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE roles ADD COLUMN may TEXT NOT NULL DEFAULT 'export,print,chemistry';
     ALTER TABLE revisions ADD COLUMN summary_nonce BLOB;
     ALTER TABLE revisions ADD COLUMN summary BLOB;",
+    // 7: mixes (ADR 16), a kind of record older versions do not know, so they refuse the vault
+    // instead of failing on one. The tables do not change.
+    "",
 ];
 
 pub fn open(path: &Path, key: &Key) -> Result<Connection> {

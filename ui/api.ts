@@ -4,6 +4,7 @@ import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from '@tau
 import type { BatchSheet } from './batch';
 import type { Firing, FiringContent } from './firing';
 import type { LimitsContent } from './limits';
+import type { Mix, MixContent } from './mix';
 import type { PricesContent } from './prices';
 import type { MaterialContent, RecipeContent } from './chemistry';
 
@@ -141,6 +142,7 @@ export interface Draft {
   recipe?: DraftPart<RecipeContent>;
   material?: DraftPart<MaterialContent>;
   firing?: DraftPart<FiringContent>;
+  mix?: DraftPart<MixContent>;
 }
 
 export type RestoreWith =
@@ -155,7 +157,7 @@ export interface RestoreResult {
   recoveryWords: string[] | null;
 }
 
-export type Kind = 'recipe' | 'material' | 'batch' | 'firing' | 'limits' | 'prices';
+export type Kind = 'recipe' | 'material' | 'batch' | 'firing' | 'mix' | 'limits' | 'prices';
 
 /** A file kept with a record, such as a firing's photo. */
 export interface Attachment {
@@ -248,6 +250,7 @@ export const api = {
   materials: () => invoke<MaterialHead[]>('list_records', { kind: 'material' }),
   batchSheets: () => invoke<BatchSheet[]>('list_records', { kind: 'batch' }),
   firings: () => invoke<Firing[]>('list_records', { kind: 'firing' }),
+  mixes: () => invoke<Mix[]>('list_records', { kind: 'mix' }),
   limitSets: () => invoke<Revision<LimitsContent>[]>('list_records', { kind: 'limits' }),
   priceLists: () => invoke<Revision<PricesContent>[]>('list_records', { kind: 'prices' }),
   /** Asks for a photo and returns its bytes; empty if cancelled. */

@@ -230,6 +230,8 @@ mod tests {
             .unwrap();
         ana.save_in(Kind::Batch, shared, &json!({ "recipe": recipe.record_id }))
             .unwrap();
+        ana.save_in(Kind::Mix, shared, &json!({ "recipe": recipe.record_id }))
+            .unwrap();
         let firing = ana
             .save_in(Kind::Firing, shared, &json!({ "recipe": recipe.record_id }))
             .unwrap();
@@ -252,6 +254,7 @@ mod tests {
         assert_eq!(heads[0].content, json!({ "name": "Shino", "cone": "10" }));
         assert!(as_ben.heads(Kind::Material).unwrap().is_empty());
         assert!(as_ben.heads(Kind::Batch).unwrap().is_empty());
+        assert!(as_ben.heads(Kind::Mix).unwrap().is_empty());
         assert_eq!(as_ben.heads(Kind::Firing).unwrap().len(), 1);
         assert_eq!(&as_ben.attachment(photo.id).unwrap().1[..], b"tile");
         as_ben

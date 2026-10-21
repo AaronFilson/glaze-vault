@@ -17,13 +17,15 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 5. [Your own materials](materials.md): your supplier's analyses, stains and additives
 6. [The firing log](firing-log.md): how each firing went, a test bar's shrinkage and
    absorption, and photos
-7. [Blends, limits and costs](chemistry-tools.md): line blends, limit formulas, what a recipe costs
-8. [Printing](printing.md): a recipe, or a batch sheet for weighing out
-9. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
-10. [Importing](importing.md): recipes and materials from other programs and spreadsheets
-11. [Sharing a vault with others](sharing.md): people, roles and collections
-12. [Settings](settings.md): locking by itself, your password, updates
-13. [How your recipes are protected](security.md)
+7. [The mix log](mix-log.md): each batch as it was mixed, the lot of each material, and a slip's
+   deflocculant and readings as it ages
+8. [Blends, limits and costs](chemistry-tools.md): line blends, limit formulas, what a recipe costs
+9. [Printing](printing.md): a recipe, or a batch sheet for weighing out
+10. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
+11. [Importing](importing.md): recipes and materials from other programs and spreadsheets
+12. [Sharing a vault with others](sharing.md): people, roles and collections
+13. [Settings](settings.md): locking by itself, your password, updates
+14. [How your recipes are protected](security.md)
 
 ## Coming later
 

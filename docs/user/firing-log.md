@@ -59,6 +59,9 @@ bag of each, clays most of all. A new bag of a clay can change a result, and thi
 trace it. The lots are kept by the order of the materials, without their names, so someone who
 [reads firings without chemistry](sharing.md) sees the lots but not the materials.
 
+If the batch fired was logged in the [mix log](mix-log.md), **Take the lots from a mix** fills
+them in from a mix of the same recipe revision.
+
 ## Glaze fit
 
 For a glaze, **Glaze fit** keeps the body it was fired on and how a fit test went:

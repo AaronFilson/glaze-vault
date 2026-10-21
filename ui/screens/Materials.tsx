@@ -19,6 +19,7 @@ import {
 import { hasSheet, isClay, MATERIAL_CLASSES, SHEET_FIELDS, tidySheet, type DataSheet, type MaterialClass } from '../materialData';
 import type { Editor } from '../useEditor';
 import { DeletedList, DeletedNotice } from './Deleted';
+import { MaterialCompare } from './MaterialCompare';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
 
 export const EMPTY_MATERIAL: MaterialContent = {
@@ -100,6 +101,7 @@ export function Materials({
   const check = useMemo(() => checkMaterial(shown), [shown]);
   const [copyFrom, setCopyFrom] = useState('');
   const copied = copyFrom.trim() ? standardAnalysis(copyFrom) : null;
+  const [comparing, setComparing] = useState(false);
 
   const usedIn = (name: string) =>
     name.trim()
@@ -114,12 +116,23 @@ export function Materials({
     setDraft({ ...draft, oxides: draft.oxides.map((l, i) => (i === index ? line : l)) });
   const unusedOxide = OXIDES.find((oxide) => !draft.oxides.some((line) => line.oxide === oxide)) ?? 'SiO2';
 
+  if (comparing) {
+    return (
+      <MaterialCompare materials={materials} initial={current?.recordId ?? null} onClose={() => setComparing(false)} />
+    );
+  }
+
   return (
     <>
       <nav className="sidebar no-print" aria-label="Your materials">
         {canCreate && (
           <button type="button" className="primary" onClick={() => onOpen(null)}>
             New material
+          </button>
+        )}
+        {materials.length > 1 && (
+          <button type="button" onClick={() => setComparing(true)}>
+            Compare…
           </button>
         )}
         {materials.length === 0 ? (

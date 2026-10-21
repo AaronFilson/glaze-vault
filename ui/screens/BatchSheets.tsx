@@ -25,6 +25,8 @@ export function BatchSheets({
   names,
   current,
   onOpen,
+  mixCount,
+  onMixes,
   onPrint,
   onDeleted
 }: {
@@ -33,6 +35,10 @@ export function BatchSheets({
   names: Record<string, string>;
   current: BatchSheet | null;
   onOpen: (sheet: BatchSheet) => void;
+  /** How many mixes the open sheet has. */
+  mixCount: number;
+  /** Shows the open sheet's mixes, and starts logging another when `logging`. */
+  onMixes: (sheet: BatchSheet, logging: boolean) => void;
   onPrint: (size: number, unit: BatchUnit) => void;
   onDeleted: (sheet: BatchSheet) => void;
 }) {
@@ -126,6 +132,16 @@ export function BatchSheets({
               {may(access, current.collectionId, 'print') && (
                 <button type="button" className="primary" disabled={!ready} onClick={() => onPrint(amount, unit)}>
                   Print
+                </button>
+              )}
+              {canEdit(access, current.collectionId, 'mix') && (
+                <button type="button" onClick={() => onMixes(current, true)}>
+                  Log a mix…
+                </button>
+              )}
+              {mixCount > 0 && (
+                <button type="button" onClick={() => onMixes(current, false)}>
+                  Mixes ({mixCount})
                 </button>
               )}
               {canEdit(access, current.collectionId, 'batch') && (

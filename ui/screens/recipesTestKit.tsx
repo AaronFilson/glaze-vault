@@ -38,7 +38,7 @@ export const spar: MaterialHead = {
 export const ONE_PERSON: Access = {
   team: false,
   me: { id: 'me', name: '', admin: false, mustSetPassword: false },
-  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: true }]
+  collections: [{ id: 'collection-1', name: '', owner: null, role: 'admin', changes: ['recipe', 'material', 'batch', 'firing', 'mix', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: true }]
 };
 
 /** A record the fake core refuses to save. */

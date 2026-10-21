@@ -11,7 +11,7 @@ const TEAM: Access = {
   team: true,
   me: { id: 'ben', name: 'Ben', admin: false, mustSetPassword: false },
   collections: [
-    { id: 'shared', name: 'Shared', owner: null, role: 'formulator', changes: ['recipe', 'material', 'batch', 'firing', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: false },
+    { id: 'shared', name: 'Shared', owner: null, role: 'formulator', changes: ['recipe', 'material', 'batch', 'firing', 'mix', 'limits', 'prices'] , export: true, print: true, chemistry: true, manage: false },
     { id: 'glazes', name: 'Production', owner: null, role: 'chemist', changes: [] , export: true, print: true, chemistry: true, manage: false },
     { id: 'weighing', name: 'Weighing', owner: null, role: 'operator', changes: [] , export: true, print: true, chemistry: false, manage: false }
   ]

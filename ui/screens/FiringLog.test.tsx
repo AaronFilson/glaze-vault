@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { RecipeHead } from '../api';
 import { EMPTY_BAR, newFiring, type Firing, type FiringContent } from '../firing';
+import { newMix, type Mix } from '../mix';
 import { FiringLog, type FiringEditing } from './FiringLog';
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -59,11 +60,22 @@ function fakeCore() {
   return saved;
 }
 
-function Log({ firings, forRecipe = null, start = null }: { firings: Firing[]; forRecipe?: string | null; start?: FiringEditing | null }) {
+function Log({
+  firings,
+  mixes = [],
+  forRecipe = null,
+  start = null
+}: {
+  firings: Firing[];
+  mixes?: Mix[];
+  forRecipe?: string | null;
+  start?: FiringEditing | null;
+}) {
   const [editing, setEditing] = useState<FiringEditing | null>(start);
   return (
     <FiringLog
       firings={firings}
+      mixes={mixes}
       recipes={[porcelain, clear]}
       access={null}
       editing={editing}
@@ -96,6 +108,28 @@ describe('a body’s firing', () => {
     await waitFor(() => expect(saved).toHaveLength(1));
     expect(saved[0].lots).toEqual(['bag 3', '', 'lot 7731']);
     expect(saved[0].bar).toEqual({ ...EMPTY_BAR, span: '100', bow: '0.5', sag: '3', disk: '2' });
+  });
+
+  it('takes the lots from a mix of the revision fired', async () => {
+    const saved = fakeCore();
+    const mix: Mix = {
+      recordId: 'm1',
+      revisionId: 'm1-1',
+      number: 1,
+      savedAt: 1,
+      content: { ...newMix({ recipe: { recordId: 'p', number: 2 } }, new Date(2026, 9, 17)), lots: ['bag 4', 'C-9', 'S-2'] }
+    };
+    // A mix of another revision has nothing to give.
+    const older: Mix = { ...mix, recordId: 'm0', content: { ...mix.content, recipeNumber: 1, mixedOn: '2026-10-01' } };
+    const draft = newFiring({ recordId: 'p', number: 2, name: 'Cone 6 porcelain' }, new Date(2026, 9, 18));
+    render(<Log firings={[]} mixes={[mix, older]} start={{ current: null, draft }} />);
+    const from = screen.getByLabelText('Take the lots from a mix') as HTMLSelectElement;
+    expect([...from.options].map((o) => o.textContent)).toEqual(['—', '2026-10-17']);
+    fireEvent.change(from, { target: { value: 'm1' } });
+    expect((screen.getByLabelText('Custer Spar') as HTMLInputElement).value).toBe('C-9');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0].lots).toEqual(['bag 4', 'C-9', 'S-2']);
   });
 
   it('names the lots by an earlier revision’s materials, from its history', async () => {
