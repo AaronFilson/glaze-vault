@@ -1,6 +1,6 @@
 //! The SQLCipher database: opening it with its key, and its schema.
 
-use crate::crypto::Key;
+use crate::crypto::{self, Key};
 use crate::error::{Error, Result};
 use rusqlite::Connection;
 use std::path::Path;
@@ -84,7 +84,59 @@ const MIGRATIONS: &[&str] = &[
     // 7: mixes (ADR 16), a kind of record older versions do not know, so they refuse the vault
     // instead of failing on one. The tables do not change.
     "",
+    // 8: key epochs, the change log and tombstones (ADR 17). A collection's key changes by starting
+    // a new epoch, each epoch's key wrapping the one before (collection_epochs, from epoch 2), so
+    // what was stored under an older key is never encrypted again. Each revision, attachment and
+    // grant says which epoch's key it is under; today's keys are epoch 1. A revision that resolves
+    // a fork names the heads it supersedes, comma-separated. `changes` lists what this store holds
+    // in the order it came, revisions and attachments so far by when they were saved; `erased`
+    // remembers each record erased. An attachment's hash is of its nonce and ciphertext, filled in
+    // below, so a store without its key can check it.
+    "ALTER TABLE collections ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE grants ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE organization_grants ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE revisions ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE revisions ADD COLUMN supersedes TEXT;
+    ALTER TABLE attachments ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE attachments ADD COLUMN sha256 BLOB;
+    CREATE TABLE collection_epochs (
+        collection_id TEXT NOT NULL REFERENCES collections(id),
+        epoch INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        previous BLOB NOT NULL,
+        previous_batch BLOB NOT NULL,
+        previous_summary BLOB NOT NULL,
+        PRIMARY KEY (collection_id, epoch)
+    );
+    CREATE TABLE changes (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        host_seq INTEGER,
+        item TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        collection_id TEXT,
+        kind TEXT
+    );
+    CREATE INDEX changes_by_item ON changes(item_id);
+    INSERT INTO changes (item, item_id, collection_id, kind)
+        SELECT item, id, collection_id, kind FROM (
+            SELECT 'revision' AS item, id, collection_id, kind, created_at, 0 AS rank, rowid AS row FROM revisions
+            UNION ALL
+            SELECT 'attachment', id, collection_id, kind, created_at, 1, rowid FROM attachments
+        ) ORDER BY created_at, rank, row;
+    CREATE TABLE erased (
+        record_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        collection_id TEXT NOT NULL REFERENCES collections(id),
+        erased_at INTEGER NOT NULL,
+        erased_by TEXT NOT NULL
+    );",
 ];
+
+/// A step a migration needs that SQL cannot do, run in its transaction after its SQL.
+type Fill = fn(&Connection) -> Result<()>;
+
+/// Each fill, by the version its migration brings the schema to.
+const FILLS: &[(usize, Fill)] = &[(8, hash_attachments)];
 
 pub fn open(path: &Path, key: &Key) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -121,8 +173,86 @@ fn migrate(conn: &Connection) -> Result<()> {
     for (index, sql) in MIGRATIONS.iter().enumerate().skip(version) {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(sql)?;
+        for (_, fill) in FILLS.iter().filter(|(to, _)| *to == index + 1) {
+            fill(&tx)?;
+        }
         tx.pragma_update(None, "user_version", (index + 1) as i64)?;
         tx.commit()?;
     }
     Ok(())
+}
+
+/// What an attachment's `sha256` holds: the hash of its nonce and then its ciphertext.
+pub(crate) fn attachment_hash(nonce: &[u8], ciphertext: &[u8]) -> Vec<u8> {
+    crypto::sha256(&[nonce, ciphertext]).to_vec()
+}
+
+/// Hashes the attachments stored before they had hashes, one at a time: there may be many photos.
+fn hash_attachments(conn: &Connection) -> Result<()> {
+    let ids = conn
+        .prepare("SELECT id FROM attachments WHERE sha256 IS NULL")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for id in ids {
+        let (nonce, ciphertext): (Vec<u8>, Vec<u8>) = conn.query_row(
+            "SELECT nonce, ciphertext FROM attachments WHERE id = ?1",
+            [&id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        conn.execute(
+            "UPDATE attachments SET sha256 = ?1 WHERE id = ?2",
+            rusqlite::params![attachment_hash(&nonce, &ciphertext), id],
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::params;
+
+    #[test]
+    fn schema_8_lists_what_was_stored_in_order_and_hashes_attachments() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        for sql in &MIGRATIONS[..7] {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        conn.execute("INSERT INTO collections (id, created_at) VALUES ('c', 0)", [])
+            .unwrap();
+        for (id, at) in [("r5", 5), ("r1", 1)] {
+            conn.execute(
+                "INSERT INTO revisions (id, record_id, kind, number, collection_id, author_id, created_at, nonce, ciphertext)
+                 VALUES (?1, ?1, 'recipe', 1, 'c', 'a', ?2, x'00', x'01')",
+                params![id, at],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO attachments (id, record_id, kind, collection_id, media_type, size, author_id, created_at, nonce, ciphertext)
+             VALUES ('a3', 'r1', 'firing', 'c', 'image/png', 1, 'a', 3, x'0203', x'0405')",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        let mut statement = conn.prepare("SELECT item, item_id FROM changes ORDER BY seq").unwrap();
+        let changes: Vec<(String, String)> = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let expected = [("revision", "r1"), ("attachment", "a3"), ("revision", "r5")];
+        assert_eq!(changes, expected.map(|(item, id)| (item.to_owned(), id.to_owned())));
+        let hash: Vec<u8> = conn
+            .query_row("SELECT sha256 FROM attachments WHERE id = 'a3'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(hash, crypto::sha256(&[&[2, 3], &[4, 5]]));
+        let epoch: i64 = conn
+            .query_row("SELECT epoch FROM revisions WHERE id = 'r5'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(epoch, 1);
+    }
 }

@@ -65,8 +65,12 @@ struct OpenCollection {
     role: Role,
     /// Which key this person's grant holds.
     held: Held,
-    /// That key: the collection's, or one made from it.
+    /// The collection's current key epoch (ADR 17): new revisions and attachments go under its key.
+    epoch: i64,
+    /// That epoch's key: the collection's, or one made from it.
     key: Key,
+    /// The same key at each earlier epoch, newest first, for what was stored before it changed.
+    older: Vec<(i64, Key)>,
 }
 
 /// Which of a collection's keys a grant holds. Only the collection's key leads to the others.
@@ -88,6 +92,19 @@ impl OpenCollection {
             Held::Collection => Ok(&self.key),
             _ => Err(Error::NotAllowed),
         }
+    }
+
+    /// The key this person holds at an epoch. Every earlier epoch is reachable from the current
+    /// one, so only an epoch the collection has not had yet is missing.
+    fn key_at(&self, epoch: i64) -> Result<&Key> {
+        if epoch == self.epoch {
+            return Ok(&self.key);
+        }
+        self.older
+            .iter()
+            .find(|(e, _)| *e == epoch)
+            .map(|(_, key)| key)
+            .ok_or_else(|| Error::Corrupt(format!("collection {} has no key epoch {epoch}", self.id)))
     }
 }
 
@@ -155,6 +172,21 @@ pub struct Revision {
     /// This revision deletes the record. It keeps the content it had, to restore it from.
     pub deleted: bool,
     pub collection_id: Uuid,
+    /// The record's other newest revisions, when it was changed in two places from the same one
+    /// (ADR 5, 17): a fork, until someone chooses a version with [`Vault::resolve_fork`]. Only a
+    /// record's listed revision has them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forks: Vec<Fork>,
+}
+
+/// Another newest revision of a forked record.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fork {
+    pub revision_id: Uuid,
+    pub saved_at: i64,
+    /// This branch deleted the record, as on a computer that did not see the other change.
+    pub deleted: bool,
 }
 
 impl Vault {
@@ -217,7 +249,7 @@ impl Vault {
         let sealed = crypto::seal_key(
             &keys.public,
             &collection_key,
-            &grant_info(&vault_id, &collection_id, &user_id, Held::Collection),
+            &grant_info(&vault_id, &collection_id, &user_id, Held::Collection, 1),
         );
         let tx = conn.unchecked_transaction()?;
         tx.execute(
@@ -252,7 +284,9 @@ impl Vault {
                 owner: None,
                 role: Role::Admin,
                 held: Held::Collection,
+                epoch: 1,
                 key: collection_key,
+                older: Vec::new(),
             }],
             default_collection: collection_id,
             organization: None,
@@ -338,7 +372,11 @@ impl Vault {
         if plaintext.len() > MAX_RECORD_BYTES {
             return Err(Error::TooLarge);
         }
-        let sealed = crypto::encrypt(&self.draft_collection()?.key, &plaintext, &self.draft_aad()?);
+        let collection = self.draft_collection()?;
+        let sealed = SealedDraft {
+            epoch: collection.epoch,
+            sealed: crypto::encrypt(&collection.key, &plaintext, &self.draft_aad()?),
+        };
         self.set_meta(&self.draft_name(), &serde_json::to_string(&sealed)?)
     }
 
@@ -347,8 +385,9 @@ impl Vault {
         let Some(json) = self.meta(&self.draft_name())? else {
             return Ok(None);
         };
-        let sealed: crypto::Sealed = serde_json::from_str(&json)?;
-        let plaintext = crypto::decrypt(&self.draft_collection()?.key, &sealed, &self.draft_aad()?)
+        let draft: SealedDraft = serde_json::from_str(&json)?;
+        let key = self.draft_collection()?.key_at(draft.epoch)?;
+        let plaintext = crypto::decrypt(key, &draft.sealed, &self.draft_aad()?)
             .ok_or_else(|| Error::Corrupt("the saved draft does not decrypt".into()))?;
         Ok(Some(serde_json::from_slice(&plaintext)?))
     }
@@ -529,12 +568,12 @@ impl Vault {
     /// after it. Revisions are never changed, only added (docs/adr/0005-lan-host-and-replicas.md).
     /// Saving after a revision that deletes a record restores it.
     pub fn save(&mut self, kind: Kind, parent: Option<Uuid>, content: &serde_json::Value) -> Result<Revision> {
-        self.add_revision(kind, parent, None, content, false)
+        self.add_revision(kind, parent, None, content, false, &[])
     }
 
     /// Saves a new record into a collection, rather than the vault's first.
     pub fn save_in(&mut self, kind: Kind, collection: Uuid, content: &serde_json::Value) -> Result<Revision> {
-        self.add_revision(kind, None, Some(collection), content, false)
+        self.add_revision(kind, None, Some(collection), content, false, &[])
     }
 
     /// Saves several revisions at once, all or none: an import's hundreds of records in one
@@ -552,7 +591,7 @@ impl Vault {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let saved = revisions
             .iter()
-            .map(|(parent, content)| self.add_revision(kind, *parent, collection, content, false))
+            .map(|(parent, content)| self.add_revision(kind, *parent, collection, content, false, &[]))
             .collect::<Result<Vec<_>>>()
             .and_then(|saved| Ok(self.conn.execute_batch("COMMIT").map(|()| saved)?));
         if saved.is_err() {
@@ -564,43 +603,115 @@ impl Vault {
     /// Deletes a record by adding a revision after its newest that says so, with the same content.
     /// It leaves the lists for the deleted ones, where it can be restored or erased (ADR 9).
     pub fn delete(&mut self, kind: Kind, newest: Uuid) -> Result<Revision> {
-        let revision = self
-            .read_revisions(
-                "WHERE r.kind = ?1 AND r.id = ?2 AND r.deleted = 0
-                 AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)",
-                params![kind.as_str(), newest.to_string()],
-                kind,
-            )?
-            .pop()
-            .ok_or(Error::NotFound)?;
-        self.add_revision(kind, Some(newest), None, &revision.content, true)
+        let revision = self.head(kind, newest)?;
+        if revision.deleted {
+            return Err(Error::NotFound);
+        }
+        self.add_revision(kind, Some(newest), None, &revision.content, true, &[])
     }
 
     /// Erases a deleted record: every revision of it is removed from the vault, and cannot be
-    /// brought back. Backups made before still hold it. Returns how many revisions there were.
+    /// brought back. Backups made before still hold it. The vault remembers that it was erased,
+    /// and by whom, though nothing of what it held (ADR 17). Returns how many revisions there were.
     pub fn erase(&mut self, kind: Kind, record_id: Uuid) -> Result<usize> {
         let deleted = self.deleted(kind)?;
         let Some(record) = deleted.iter().find(|r| r.record_id == record_id) else {
             return Err(Error::NotDeleted);
         };
-        self.editable(&record.collection_id, kind)?;
+        let collection_id = record.collection_id;
+        self.editable(&collection_id, kind)?;
+        let (record, kind_name) = (record_id.to_string(), kind.as_str());
         let tx = self.conn.unchecked_transaction()?;
+        // The change log forgets the record's revisions and attachments; the tombstone takes their
+        // place.
+        tx.execute(
+            "DELETE FROM changes WHERE item_id IN (
+                SELECT id FROM revisions WHERE record_id = ?1 AND kind = ?2
+                UNION ALL SELECT id FROM attachments WHERE record_id = ?1 AND kind = ?2)",
+            params![record, kind_name],
+        )?;
         let erased = tx.execute(
             "DELETE FROM revisions WHERE record_id = ?1 AND kind = ?2",
-            params![record_id.to_string(), kind.as_str()],
+            params![record, kind_name],
         )?;
         tx.execute(
             "DELETE FROM attachments WHERE record_id = ?1 AND kind = ?2",
-            params![record_id.to_string(), kind.as_str()],
+            params![record, kind_name],
         )?;
+        tx.execute(
+            "INSERT INTO erased (record_id, kind, collection_id, erased_at, erased_by) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                record,
+                kind_name,
+                collection_id.to_string(),
+                now_ms(),
+                self.user_id.to_string()
+            ],
+        )?;
+        log_change(&tx, Change::Erased, &record_id, &collection_id, kind)?;
         tx.commit()?;
         // secure_delete has zeroed the freed pages; this empties the write-ahead log of them too.
         self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(erased)
     }
 
+    /// Ends a fork (ADR 17): saves a revision after `keep`, one of the record's newest, with its
+    /// content, that supersedes `others`, the rest of them. If `keep` deleted the record, the record
+    /// stays deleted. `others` must be exactly the other newest revisions, so a version that
+    /// arrived while someone chose is not dropped unseen.
+    pub fn resolve_fork(&mut self, kind: Kind, keep: Uuid, others: &[Uuid]) -> Result<Revision> {
+        let kept = self.head(kind, keep)?;
+        let listed = self
+            .newest(kind)?
+            .into_iter()
+            .find(|r| r.record_id == kept.record_id)
+            .ok_or(Error::NotFound)?;
+        let mut heads: Vec<Uuid> = listed.forks.iter().map(|f| f.revision_id).collect();
+        heads.push(listed.revision_id);
+        heads.retain(|id| *id != keep);
+        let (mut heads, mut others) = (heads, others.to_vec());
+        heads.sort();
+        others.sort();
+        others.dedup();
+        if heads.is_empty() || heads != others {
+            return Err(Error::ForkChanged);
+        }
+        self.add_revision(kind, Some(keep), None, &kept.content, kept.deleted, &others)
+    }
+
+    /// One of a record's newest revisions, by its id.
+    fn head(&self, kind: Kind, id: Uuid) -> Result<Revision> {
+        if self.superseded(kind)?.contains(&id) {
+            return Err(Error::NotFound);
+        }
+        self.read_revisions(
+            "WHERE r.kind = ?1 AND r.id = ?2 AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)",
+            params![kind.as_str(), id.to_string()],
+            kind,
+        )?
+        .pop()
+        .ok_or(Error::NotFound)
+    }
+
+    /// The revisions of a kind that a fork's resolution set aside.
+    fn superseded(&self, kind: Kind) -> Result<Vec<Uuid>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT supersedes FROM revisions WHERE kind = ?1 AND supersedes IS NOT NULL")?;
+        let lists = statement
+            .query_map(params![kind.as_str()], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        lists
+            .iter()
+            .flat_map(|list| list.split(','))
+            .filter(|id| !id.is_empty())
+            .map(parse_id)
+            .collect()
+    }
+
     /// Adds a revision after `parent`, in its collection, or starts a record in `collection` (or
-    /// the vault's first), if this person may change records there.
+    /// the vault's first), if this person may change records there. It goes under the collection's
+    /// current key epoch.
     fn add_revision(
         &mut self,
         kind: Kind,
@@ -608,6 +719,7 @@ impl Vault {
         collection: Option<Uuid>,
         content: &serde_json::Value,
         deleted: bool,
+        supersedes: &[Uuid],
     ) -> Result<Revision> {
         let plaintext = Zeroizing::new(serde_json::to_vec(content)?);
         if plaintext.len() > MAX_RECORD_BYTES {
@@ -629,12 +741,14 @@ impl Vault {
             }
         };
         let collection = self.editable(&collection_id, kind)?;
-        let collection_key = self.key_for(collection, kind).ok_or(Error::NotAllowed)?;
+        let epoch = collection.epoch;
+        let collection_key = self.key_for(collection, kind, epoch)?.ok_or(Error::NotAllowed)?;
         // A recipe also keeps its summary, for roles that read without chemistry.
         let summary_key = match kind {
-            Kind::Recipe => Some(self.summary_key_for(collection).ok_or(Error::NotAllowed)?),
+            Kind::Recipe => Some(self.summary_key_for(collection, epoch)?.ok_or(Error::NotAllowed)?),
             _ => None,
         };
+        let supersedes = (!supersedes.is_empty()).then(|| supersedes_list(supersedes));
         let revision_id = Uuid::new_v4();
         let saved_at = now_ms();
         let aad = revision_aad(
@@ -645,15 +759,18 @@ impl Vault {
             number,
             parent.as_ref(),
             deleted,
+            supersedes.as_deref(),
         );
         let sealed = crypto::encrypt(&collection_key, &plaintext, &aad);
         let summary = summary_key
             .map(|key| summaries::seal(&key, content, &aad))
             .transpose()?;
         let (summary_nonce, summary) = summary.map(|s| (s.nonce, s.ciphertext)).unzip();
-        self.conn.execute(
-            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted, summary_nonce, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        let author = self.user_id.to_string();
+        atomically(&self.conn, |conn| {
+            conn.execute(
+            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted, summary_nonce, summary, epoch, supersedes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 revision_id.to_string(),
                 record_id.to_string(),
@@ -661,15 +778,24 @@ impl Vault {
                 parent.map(|id| id.to_string()),
                 number,
                 collection_id.to_string(),
-                self.user_id.to_string(),
+                author,
                 saved_at,
                 sealed.nonce,
                 sealed.ciphertext,
                 deleted,
                 summary_nonce,
                 summary,
+                epoch,
+                supersedes,
             ],
-        )?;
+            )?;
+            log_change(conn, Change::Revision, &revision_id, &collection_id, kind)
+        })?;
+        // Saved on one branch of a fork, the record is still forked.
+        let forks = match parent {
+            Some(_) => self.forks_of(kind, &record_id, &revision_id)?,
+            None => Vec::new(),
+        };
         Ok(Revision {
             record_id,
             revision_id,
@@ -678,7 +804,38 @@ impl Vault {
             content: content.clone(),
             deleted,
             collection_id,
+            forks,
         })
+    }
+
+    /// A record's newest revisions other than `except`, from what is known of them without
+    /// opening them.
+    fn forks_of(&self, kind: Kind, record_id: &Uuid, except: &Uuid) -> Result<Vec<Fork>> {
+        let superseded = self.superseded(kind)?;
+        let mut statement = self.conn.prepare(
+            "SELECT r.id, r.created_at, r.deleted FROM revisions r
+             WHERE r.kind = ?1 AND r.record_id = ?2 AND r.id != ?3
+             AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)
+             ORDER BY r.created_at DESC, r.rowid DESC",
+        )?;
+        let rows = statement
+            .query_map(
+                params![kind.as_str(), record_id.to_string(), except.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, bool>(2)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut forks = Vec::new();
+        for (id, saved_at, deleted) in rows {
+            let revision_id = parse_id(&id)?;
+            if !superseded.contains(&revision_id) {
+                forks.push(Fork {
+                    revision_id,
+                    saved_at,
+                    deleted,
+                });
+            }
+        }
+        Ok(forks)
     }
 
     /// The newest revision of every record of a kind, newest first, leaving out deleted records.
@@ -691,21 +848,39 @@ impl Vault {
         Ok(self.newest(kind)?.into_iter().filter(|r| r.deleted).collect())
     }
 
-    /// The newest revision of every record of a kind, deleted or not, newest first.
+    /// The newest revision of every record of a kind, deleted or not, newest first, with the
+    /// record's other newest revisions if it forked.
     fn newest(&self, kind: Kind) -> Result<Vec<Revision>> {
+        let superseded = self.superseded(kind)?;
         let revisions = self.read_revisions(
             "WHERE r.kind = ?1 AND NOT EXISTS (SELECT 1 FROM revisions c WHERE c.parent_id = r.id)
              ORDER BY r.created_at DESC, r.rowid DESC",
             params![kind.as_str()],
             kind,
         )?;
-        // Two heads for one record means a fork from offline editing (ADR 5): show the newest
-        // until forks can be resolved.
+        // Two newest revisions of one record means it was changed in two places from the same one
+        // (ADR 5): a fork. The newest is listed, with the others, except that one that keeps the
+        // record goes before one that deleted it, so a delete made without seeing another change
+        // does not hide that change (ADR 17).
         let mut heads: Vec<Revision> = Vec::new();
         for revision in revisions {
-            if !heads.iter().any(|head| head.record_id == revision.record_id) {
-                heads.push(revision);
+            if superseded.contains(&revision.revision_id) {
+                continue;
             }
+            let Some(head) = heads.iter_mut().find(|head| head.record_id == revision.record_id) else {
+                heads.push(revision);
+                continue;
+            };
+            if head.deleted && !revision.deleted {
+                let mut shown = std::mem::replace(head, revision);
+                head.forks = std::mem::take(&mut shown.forks);
+                head.forks.push(Fork::of(&shown));
+            } else {
+                head.forks.push(Fork::of(&revision));
+            }
+        }
+        for head in &mut heads {
+            head.forks.sort_by_key(|fork| std::cmp::Reverse(fork.saved_at));
         }
         Ok(heads)
     }
@@ -732,24 +907,41 @@ impl Vault {
         values: impl rusqlite::Params,
         kind: Kind,
     ) -> Result<Vec<Revision>> {
+        type Row = (
+            String,
+            String,
+            Option<String>,
+            i64,
+            String,
+            i64,
+            Vec<u8>,
+            Vec<u8>,
+            bool,
+            Option<Vec<u8>>,
+            Option<Vec<u8>>,
+            i64,
+            Option<String>,
+        );
         let mut statement = self.conn.prepare(&format!(
             "SELECT r.id, r.record_id, r.parent_id, r.number, r.collection_id, r.created_at, r.nonce, r.ciphertext,
-                    r.deleted, r.summary_nonce, r.summary
+                    r.deleted, r.summary_nonce, r.summary, r.epoch, r.supersedes
              FROM revisions r {where_clause}"
         ))?;
         let rows = statement.query_map(values, |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, Vec<u8>>(6)?,
-                row.get::<_, Vec<u8>>(7)?,
-                row.get::<_, bool>(8)?,
-                row.get::<_, Option<Vec<u8>>>(9)?,
-                row.get::<_, Option<Vec<u8>>>(10)?,
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+                row.get(11)?,
+                row.get(12)?,
             ))
         })?;
         let mut revisions = Vec::new();
@@ -766,7 +958,9 @@ impl Vault {
                 deleted,
                 summary_nonce,
                 summary,
-            ) = row?;
+                epoch,
+                supersedes,
+            ): Row = row?;
             let (revision_id, record_id, collection_id) =
                 (parse_id(&id)?, parse_id(&record_id)?, parse_id(&collection_id)?);
             let parent = parent_id.as_deref().map(parse_id).transpose()?;
@@ -781,40 +975,34 @@ impl Vault {
                 number,
                 parent.as_ref(),
                 deleted,
+                supersedes.as_deref(),
             );
             // Someone who reads this collection's recipes without their chemistry gets each one's
             // summary. A revision saved before summaries were kept has none until the vault is
             // changed over, so it is not shown.
-            if kind == Kind::Recipe && collection.held == Held::Summary {
+            let content = if kind == Kind::Recipe && collection.held == Held::Summary {
                 let (Some(nonce), Some(ciphertext)) = (summary_nonce, summary) else {
                     continue;
                 };
-                let content = summaries::open(&collection.key, &crypto::Sealed { nonce, ciphertext }, &aad)
-                    .ok_or_else(|| Error::Corrupt(format!("the summary of revision {revision_id} does not decrypt")))?;
-                revisions.push(Revision {
-                    record_id,
-                    revision_id,
-                    number,
-                    saved_at,
-                    content,
-                    deleted,
-                    collection_id,
-                });
-                continue;
-            }
-            let Some(key) = self.key_for(collection, kind) else {
-                continue;
+                summaries::open(collection.key_at(epoch)?, &crypto::Sealed { nonce, ciphertext }, &aad)
+                    .ok_or_else(|| Error::Corrupt(format!("the summary of revision {revision_id} does not decrypt")))?
+            } else {
+                let Some(key) = self.key_for(collection, kind, epoch)? else {
+                    continue;
+                };
+                let plaintext = crypto::decrypt(&key, &crypto::Sealed { nonce, ciphertext }, &aad)
+                    .ok_or_else(|| Error::Corrupt(format!("revision {revision_id} does not decrypt")))?;
+                serde_json::from_slice(&plaintext)?
             };
-            let plaintext = crypto::decrypt(&key, &crypto::Sealed { nonce, ciphertext }, &aad)
-                .ok_or_else(|| Error::Corrupt(format!("revision {revision_id} does not decrypt")))?;
             revisions.push(Revision {
                 record_id,
                 revision_id,
                 number,
                 saved_at,
-                content: serde_json::from_slice(&plaintext)?,
+                content,
                 deleted,
                 collection_id,
+                forks: Vec::new(),
             });
         }
         Ok(revisions)
@@ -890,42 +1078,54 @@ impl Vault {
         if self.user().must_set_password {
             return Ok(());
         }
+        type Row = (String, String, Option<String>, String, Vec<u8>, Vec<u8>, i64, i64);
         let mut statement = self.conn.prepare(
-            "SELECT c.id, c.name, c.owner_id, g.role, g.enc, g.ciphertext
+            "SELECT c.id, c.name, c.owner_id, g.role, g.enc, g.ciphertext, g.epoch, c.epoch
              FROM grants g JOIN collections c ON c.id = g.collection_id WHERE g.user_id = ?1
              ORDER BY c.created_at, c.rowid",
         )?;
         let rows = statement
             .query_map(params![self.user_id.to_string()], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Vec<u8>>(4)?,
-                    row.get::<_, Vec<u8>>(5)?,
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
                 ))
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            .collect::<rusqlite::Result<Vec<Row>>>()?;
         drop(statement);
         let mut collections = Vec::new();
-        for (id, name, owner, role, enc, ciphertext) in rows {
+        for (id, name, owner, role, enc, ciphertext, epoch, current) in rows {
             let id = parse_id(&id)?;
             let role = parse_role(&role)?;
             let held = self.held(role);
+            // Every grant is sealed again when its collection's key changes (team::new_epoch).
+            if epoch != current {
+                return Err(Error::Corrupt(format!(
+                    "a grant on collection {id} is from an earlier key"
+                )));
+            }
             let key = crypto::open_key(
                 &self.keys,
                 &crypto::SealedBox { enc, ciphertext },
-                &grant_info(&self.keyring.vault_id, &id, &self.user_id, held),
+                &grant_info(&self.keyring.vault_id, &id, &self.user_id, held, epoch),
             )
             .ok_or_else(|| Error::Corrupt("a collection key does not open".into()))?;
+            let older = older_keys(&self.conn, &self.keyring.vault_id, &id, held, epoch, &key)?;
             collections.push(OpenCollection {
                 id,
                 name,
                 owner: owner.as_deref().map(parse_id).transpose()?,
                 role,
                 held,
+                epoch,
                 key,
+                older,
             });
         }
         if let Some(organization) = &self.organization {
@@ -958,21 +1158,29 @@ impl Vault {
     /// The key records of a kind are encrypted with in a collection, if this person may read
     /// them. A recipe's own ciphertext needs the collection's key; its summary is read with
     /// summary_key_for.
-    fn key_for(&self, collection: &OpenCollection, kind: Kind) -> Option<Key> {
-        match collection.held {
-            Held::Collection => Some(kind_key(&collection.key, kind, &collection.id, self.summaries)),
-            Held::Batch => matches!(kind, Kind::Batch | Kind::Mix).then(|| collection.key.clone()),
-            Held::Summary => (kind == Kind::Firing).then(|| collection.key.clone()),
+    fn key_for(&self, collection: &OpenCollection, kind: Kind, epoch: i64) -> Result<Option<Key>> {
+        let readable = match collection.held {
+            Held::Collection => true,
+            Held::Batch => matches!(kind, Kind::Batch | Kind::Mix),
+            Held::Summary => kind == Kind::Firing,
+        };
+        if !readable {
+            return Ok(None);
         }
+        let key = collection.key_at(epoch)?;
+        Ok(Some(match collection.held {
+            Held::Collection => kind_key(key, kind, &collection.id, self.summaries),
+            _ => key.clone(),
+        }))
     }
 
-    /// The key a collection's recipe summaries are under, if this person may read them.
-    fn summary_key_for(&self, collection: &OpenCollection) -> Option<Key> {
-        match collection.held {
-            Held::Collection => Some(summary_key(&collection.key, &collection.id)),
-            Held::Summary => Some(collection.key.clone()),
+    /// The key a collection's recipe summaries are under at an epoch, if this person may read them.
+    fn summary_key_for(&self, collection: &OpenCollection, epoch: i64) -> Result<Option<Key>> {
+        Ok(match collection.held {
+            Held::Collection => Some(summary_key(collection.key_at(epoch)?, &collection.id)),
+            Held::Summary => Some(collection.key_at(epoch)?.clone()),
             Held::Batch => None,
-        }
+        })
     }
 
     fn user(&self) -> &KeyringUser {
@@ -1059,6 +1267,20 @@ impl Vault {
         )?;
         Ok(())
     }
+}
+
+/// A draft, under its collection's key at an epoch: the epoch it was saved at, since a change of
+/// key leaves it as it was. Drafts from before epochs have none, and are at the first.
+#[derive(Serialize, Deserialize)]
+struct SealedDraft {
+    #[serde(default = "first_epoch")]
+    epoch: i64,
+    #[serde(flatten)]
+    sealed: crypto::Sealed,
+}
+
+fn first_epoch() -> i64 {
+    1
 }
 
 /// How a person proves who they are: their password, or their recovery key along with the new
@@ -1265,15 +1487,152 @@ fn draft_aad_for(vault_id: &Uuid, user_id: &str, collection_id: &Uuid) -> Vec<u8
     format!("glaze-vault v1 draft vault {vault_id} user {user_id} collection {collection_id}").into_bytes()
 }
 
+/// Runs `step` all or none, whether or not the caller has begun a transaction: a savepoint.
+pub(crate) fn atomically<T>(conn: &Connection, step: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+    conn.execute_batch("SAVEPOINT step")?;
+    match step(conn) {
+        Ok(value) => {
+            conn.execute_batch("RELEASE step")?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK TO step; RELEASE step");
+            Err(error)
+        }
+    }
+}
+
+/// What the change log lists (ADR 17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Change {
+    Revision,
+    Attachment,
+    /// A record erased: its tombstone, in place of its revisions and attachments.
+    Erased,
+}
+
+/// Adds an item to the end of this store's change log.
+pub(crate) fn log_change(conn: &Connection, change: Change, id: &Uuid, collection: &Uuid, kind: Kind) -> Result<()> {
+    let item = match change {
+        Change::Revision => "revision",
+        Change::Attachment => "attachment",
+        Change::Erased => "erased",
+    };
+    conn.execute(
+        "INSERT INTO changes (item, item_id, collection_id, kind) VALUES (?1, ?2, ?3, ?4)",
+        params![item, id.to_string(), collection.to_string(), kind.as_str()],
+    )?;
+    Ok(())
+}
+
+impl Fork {
+    fn of(revision: &Revision) -> Fork {
+        Fork {
+            revision_id: revision.revision_id,
+            saved_at: revision.saved_at,
+            deleted: revision.deleted,
+        }
+    }
+}
+
+/// How a revision keeps the revisions it supersedes: their ids in order, comma-separated.
+fn supersedes_list(ids: &[Uuid]) -> String {
+    let mut ids: Vec<String> = ids.iter().map(Uuid::to_string).collect();
+    ids.sort();
+    ids.dedup();
+    ids.join(",")
+}
+
 /// What a grant's sealed key is bound to. A grant of the batch or summary key holds it under other
 /// words, so it cannot be passed off as the collection's key.
-fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid, held: Held) -> Vec<u8> {
-    let what = match held {
+fn grant_info(vault_id: &Uuid, collection_id: &Uuid, user_id: &Uuid, held: Held, epoch: i64) -> Vec<u8> {
+    let what = held_words(held);
+    format!(
+        "glaze-vault v1 {what} vault {vault_id} collection {collection_id} user {user_id}{}",
+        epoch_words(epoch)
+    )
+    .into_bytes()
+}
+
+fn held_words(held: Held) -> &'static str {
+    match held {
         Held::Collection => "collection-key",
         Held::Batch => "batch-key",
         Held::Summary => "summary-key",
+    }
+}
+
+/// Binds a sealed key to its epoch, so a grant cannot hand over an earlier key as the current one.
+/// Keys sealed before epochs, at the first, say nothing, so they still open.
+pub(crate) fn epoch_words(epoch: i64) -> String {
+    if epoch == 1 {
+        String::new()
+    } else {
+        format!(" epoch {epoch}")
+    }
+}
+
+/// What a collection's key at `epoch` - 1 is bound to, wrapped under its key at `epoch`
+/// (collection_epochs), for each of the keys a grant may hold.
+pub(crate) fn epoch_aad(vault_id: &Uuid, collection_id: &Uuid, epoch: i64, held: Held) -> Vec<u8> {
+    let what = held_words(held);
+    format!(
+        "glaze-vault v1 {what} vault {vault_id} collection {collection_id} epoch {} under epoch {epoch}",
+        epoch - 1
+    )
+    .into_bytes()
+}
+
+/// A collection's key, as `held`, at every epoch before `epoch`, newest first: each one unwrapped
+/// with the one after it.
+pub(crate) fn older_keys(
+    conn: &Connection,
+    vault_id: &Uuid,
+    collection_id: &Uuid,
+    held: Held,
+    epoch: i64,
+    key: &Key,
+) -> Result<Vec<(i64, Key)>> {
+    let column = match held {
+        Held::Collection => "previous",
+        Held::Batch => "previous_batch",
+        Held::Summary => "previous_summary",
     };
-    format!("glaze-vault v1 {what} vault {vault_id} collection {collection_id} user {user_id}").into_bytes()
+    let mut statement = conn.prepare(&format!(
+        "SELECT epoch, {column} FROM collection_epochs WHERE collection_id = ?1 AND epoch <= ?2 ORDER BY epoch DESC"
+    ))?;
+    let wraps = statement
+        .query_map(params![collection_id.to_string(), epoch], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut older: Vec<(i64, Key)> = Vec::new();
+    let mut expected = epoch;
+    for (at, wrapped) in wraps {
+        if at != expected || at < 2 {
+            return Err(Error::Corrupt(format!(
+                "collection {collection_id} is missing key epoch {expected}"
+            )));
+        }
+        let under = older.last().map_or(key, |(_, key)| key);
+        let previous = crypto::Sealed::from_bytes(&wrapped)
+            .and_then(|sealed| crypto::decrypt(under, &sealed, &epoch_aad(vault_id, collection_id, at, held)))
+            .and_then(|plain| <[u8; 32]>::try_from(plain.as_slice()).ok())
+            .ok_or_else(|| {
+                Error::Corrupt(format!(
+                    "key epoch {} of collection {collection_id} does not open",
+                    at - 1
+                ))
+            })?;
+        older.push((at - 1, Zeroizing::new(previous)));
+        expected = at - 1;
+    }
+    if expected != 1 {
+        return Err(Error::Corrupt(format!(
+            "collection {collection_id} is missing key epoch {expected}"
+        )));
+    }
+    Ok(older)
 }
 
 /// A collection's batch sheets are encrypted with a key made from its key, which is all a batch
@@ -1308,6 +1667,7 @@ pub(crate) fn kind_key(collection_key: &Key, kind: Kind, collection_id: &Uuid, s
 
 /// Binds a revision's content to where it belongs, so ciphertext cannot be moved to another
 /// record, collection or place in the history.
+#[allow(clippy::too_many_arguments)]
 fn revision_aad(
     id: &Uuid,
     record_id: &Uuid,
@@ -1316,12 +1676,16 @@ fn revision_aad(
     number: i64,
     parent: Option<&Uuid>,
     deleted: bool,
+    supersedes: Option<&str>,
 ) -> Vec<u8> {
     let parent = parent.map(Uuid::to_string).unwrap_or_default();
     // Added only for a revision that deletes, so revisions saved before ADR 9 still open, and the
     // flag cannot be set or cleared without the key.
     let deleted = if deleted { " deleted" } else { "" };
-    format!("glaze-vault v1 revision {id} record {record_id} kind {kind} collection {collection_id} number {number} parent {parent}{deleted}")
+    // Likewise only for one that resolves a fork (ADR 17), so the revisions it sets aside cannot
+    // be changed without the key.
+    let supersedes = supersedes.map(|list| format!(" supersedes {list}")).unwrap_or_default();
+    format!("glaze-vault v1 revision {id} record {record_id} kind {kind} collection {collection_id} number {number} parent {parent}{deleted}{supersedes}")
         .into_bytes()
 }
 
@@ -1890,6 +2254,194 @@ mod tests {
             )
             .unwrap();
         assert_eq!(left, 0);
+        // A tombstone remembers it, and the change log lists that in place of its revisions.
+        let (kind, by): (String, String) = vault
+            .conn
+            .query_row(
+                "SELECT kind, erased_by FROM erased WHERE record_id = ?1",
+                params![first.record_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((kind.as_str(), by), ("recipe", vault.user_id.to_string()));
+        assert_eq!(
+            changes(&vault),
+            [
+                ("revision".to_owned(), kept.revision_id.to_string()),
+                ("erased".to_owned(), first.record_id.to_string())
+            ]
+        );
+    }
+
+    /// The change log, in order, as (item, id).
+    fn changes(vault: &Vault) -> Vec<(String, String)> {
+        let mut statement = vault
+            .conn
+            .prepare("SELECT item, item_id FROM changes ORDER BY seq")
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_change_log_lists_what_is_saved_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let recipe = vault.save(Kind::Recipe, None, &json!({ "name": "Shino" })).unwrap();
+        let firing = vault.save(Kind::Firing, None, &json!({ "cone": "10" })).unwrap();
+        let photo = vault
+            .add_attachment(Kind::Firing, firing.record_id, "image/png", b"tile")
+            .unwrap();
+        let saved = vault
+            .save_all(Kind::Material, None, &[(None, json!({ "name": "Spar" }))])
+            .unwrap();
+        // A save that fails leaves nothing in the log either.
+        assert!(
+            vault
+                .save_all(
+                    Kind::Material,
+                    None,
+                    &[(None, json!({})), (Some(Uuid::new_v4()), json!({}))]
+                )
+                .is_err()
+        );
+        let item = |item: &str, id: Uuid| (item.to_owned(), id.to_string());
+        assert_eq!(
+            changes(&vault),
+            [
+                item("revision", recipe.revision_id),
+                item("revision", firing.revision_id),
+                item("attachment", photo.id),
+                item("revision", saved[0].revision_id),
+            ]
+        );
+        let hash: Vec<u8> = vault
+            .conn
+            .query_row(
+                "SELECT sha256 FROM attachments WHERE id = ?1",
+                params![photo.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let (nonce, ciphertext): (Vec<u8>, Vec<u8>) = vault
+            .conn
+            .query_row(
+                "SELECT nonce, ciphertext FROM attachments WHERE id = ?1",
+                params![photo.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(hash, crypto::sha256(&[&nonce, &ciphertext]));
+    }
+
+    #[test]
+    fn a_fork_is_listed_with_its_other_version_until_one_is_chosen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let first = vault.save(Kind::Recipe, None, &json!({ "name": "Shino" })).unwrap();
+        // Two changes from the same revision, as on two computers.
+        let ours = vault
+            .save(Kind::Recipe, Some(first.revision_id), &json!({ "name": "Shino, ours" }))
+            .unwrap();
+        let theirs = vault
+            .save(
+                Kind::Recipe,
+                Some(first.revision_id),
+                &json!({ "name": "Shino, theirs" }),
+            )
+            .unwrap();
+        let heads = vault.heads(Kind::Recipe).unwrap();
+        assert_eq!(heads.len(), 1);
+        assert_eq!(theirs.forks.len(), 1);
+        assert_eq!(theirs.forks[0].revision_id, ours.revision_id);
+        let other = if heads[0].revision_id == ours.revision_id {
+            &theirs
+        } else {
+            &ours
+        };
+        assert_eq!(heads[0].forks.len(), 1);
+        assert_eq!(heads[0].forks[0].revision_id, other.revision_id);
+        assert!(!heads[0].forks[0].deleted);
+        assert_eq!(vault.history(Kind::Recipe, first.record_id).unwrap().len(), 3);
+
+        // The others must be all of them, and only them.
+        for others in [
+            vec![],
+            vec![first.revision_id],
+            vec![theirs.revision_id, first.revision_id],
+        ] {
+            assert!(matches!(
+                vault.resolve_fork(Kind::Recipe, ours.revision_id, &others),
+                Err(Error::ForkChanged)
+            ));
+        }
+        let chosen = vault
+            .resolve_fork(Kind::Recipe, ours.revision_id, &[theirs.revision_id])
+            .unwrap();
+        assert_eq!((chosen.number, &chosen.content), (3, &ours.content));
+        let heads = vault.heads(Kind::Recipe).unwrap();
+        assert_eq!(heads.len(), 1);
+        assert_eq!(heads[0].revision_id, chosen.revision_id);
+        assert!(heads[0].forks.is_empty());
+        // What was set aside is in the history, and is no longer one of the newest.
+        assert_eq!(vault.history(Kind::Recipe, first.record_id).unwrap().len(), 4);
+        assert!(matches!(
+            vault.delete(Kind::Recipe, theirs.revision_id),
+            Err(Error::NotFound)
+        ));
+        assert!(matches!(
+            vault.resolve_fork(Kind::Recipe, chosen.revision_id, &[]),
+            Err(Error::ForkChanged)
+        ));
+        drop(vault);
+        let vault = Vault::unlock(dir.path(), PASSWORD).unwrap();
+        assert_eq!(vault.heads(Kind::Recipe).unwrap()[0].revision_id, chosen.revision_id);
+
+        // The list of what it sets aside is bound to it.
+        vault
+            .conn
+            .execute(
+                "UPDATE revisions SET supersedes = ?1 WHERE id = ?2",
+                params![ours.revision_id.to_string(), chosen.revision_id.to_string()],
+            )
+            .unwrap();
+        assert!(matches!(vault.heads(Kind::Recipe), Err(Error::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_delete_against_an_edit_keeps_the_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let first = vault.save(Kind::Recipe, None, &json!({ "name": "Shino" })).unwrap();
+        let edited = vault
+            .save(Kind::Recipe, Some(first.revision_id), &json!({ "name": "Shino 2" }))
+            .unwrap();
+        // Deleted from the first revision, where the edit was not seen.
+        let gone = vault
+            .add_revision(Kind::Recipe, Some(first.revision_id), None, &first.content, true, &[])
+            .unwrap();
+        let heads = vault.heads(Kind::Recipe).unwrap();
+        assert_eq!(heads.len(), 1);
+        assert_eq!(heads[0].revision_id, edited.revision_id);
+        assert_eq!(heads[0].forks.len(), 1);
+        assert!(heads[0].forks[0].deleted);
+        assert!(vault.deleted(Kind::Recipe).unwrap().is_empty());
+        assert!(matches!(
+            vault.erase(Kind::Recipe, first.record_id),
+            Err(Error::NotDeleted)
+        ));
+
+        // Choosing the delete deletes it.
+        let chosen = vault
+            .resolve_fork(Kind::Recipe, gone.revision_id, &[edited.revision_id])
+            .unwrap();
+        assert!(chosen.deleted);
+        assert!(vault.heads(Kind::Recipe).unwrap().is_empty());
+        assert_eq!(vault.deleted(Kind::Recipe).unwrap()[0].revision_id, chosen.revision_id);
+        assert!(vault.deleted(Kind::Recipe).unwrap()[0].forks.is_empty());
     }
 
     #[test]

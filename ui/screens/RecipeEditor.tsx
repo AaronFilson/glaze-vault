@@ -25,6 +25,7 @@ import { isSlip, waterPer100 } from '../slip';
 import type { Editor } from '../useEditor';
 import { AnalysisPanel } from './AnalysisPanel';
 import { DeletedList, DeletedNotice } from './Deleted';
+import { ForkNotice } from './ForkNotice';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
 
 export const EMPTY_RECIPE: RecipeContent = { name: '', lines: [{ material: '', amount: '' }], notes: '' };
@@ -61,7 +62,9 @@ export function RecipeEditor({
   onDelete,
   onRestore,
   onErase,
+  onKeepVersion,
   onCompare,
+  onCompareFork,
   readOnly = false,
   canCreate = true,
   groups,
@@ -84,9 +87,13 @@ export function RecipeEditor({
   onDelete: () => void;
   onRestore: () => void;
   onErase: () => void;
+  /** Ends a fork of the record shown by keeping one of its newest revisions (ADR 17). */
+  onKeepVersion: (revisionId: string) => void;
   /** Opens Compare: from here when nothing is said, or with an earlier revision. Missing when
    * there is nothing to compare with. */
   onCompare?: (revisionNumber?: number) => void;
+  /** Opens Compare with the version shown and another newest one of a fork. */
+  onCompareFork?: (revisionId: string) => void;
   /** The person may read this recipe but not change it (a team's vault, ADR 12). */
   readOnly?: boolean;
   /** Whether the person may make recipes in any collection. */
@@ -180,6 +187,15 @@ export function RecipeEditor({
             onUse={onUseRevision}
             onBack={() => editor.setViewing(null)}
             onCompare={onCompare && (() => onCompare(viewing.number))}
+          />
+        )}
+        {current && !viewing && (
+          <ForkNotice
+            head={current}
+            name={current.content.name}
+            readOnly={readOnly}
+            onKeep={onKeepVersion}
+            onCompare={onCompareFork}
           />
         )}
         {withoutChemistry && current ? (

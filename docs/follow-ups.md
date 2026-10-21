@@ -27,8 +27,12 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Teams ([ADR 12](adr/0012-teams-on-one-computer.md))
 
-- Phase 2, the LAN host and replicas: [the plan](plans/phase-2-lan-host.md), for review before
-  any of it is built. Its stage 3 builds the item below.
+- Phase 2, the LAN host and replicas: [the plan](plans/phase-2-lan-host.md), with every default in
+  its section 8 accepted. Stage 1 (key epochs, the change log, tombstones and forks,
+  [ADR 17](adr/0017-key-epochs-change-log.md)) is built; stage 2, the directory as events and
+  shared access checks, is next. Its stage 3 builds the item below.
+- Before replicas (stage 7): the fork notice in the firing log, mix log, batch sheets, limit sets
+  and price lists, which show a forked record's newest for now; and a user guide page on forks.
 - With the LAN host ([ADR 5](adr/0005-lan-host-and-replicas.md)): sign each revision with its
   author's key, under keys the organization signs, and the audit log of who viewed, printed,
   exported or changed what ([ADR 4](adr/0004-roles-and-collections.md)).

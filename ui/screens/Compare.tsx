@@ -5,8 +5,9 @@ import { change, compareLines, compareUmf } from '../compare';
 import { describeDetails } from '../recipeFields';
 
 /** One side of a comparison: a recipe's newest revision, an earlier one by number, or the unsaved
- * changes in the editor. */
-export type Side = { recordId: string; number: number | null } | { draft: true };
+ * changes in the editor. A revision is also named by its id when the number is not enough: two
+ * newest revisions of a record that forked share one (ADR 17). */
+export type Side = { recordId: string; number: number | null; revisionId?: string } | { draft: true };
 
 /** The editor's unsaved changes, to compare with what is saved. */
 export interface Unsaved {
@@ -49,12 +50,19 @@ export function Compare({
   const contentOf = (side: Side): RecipeContent | null => {
     if (!('recordId' in side)) return unsaved?.content ?? null;
     const head = recipes.find((r) => r.recordId === side.recordId);
+    if (side.revisionId && side.revisionId !== head?.revisionId) {
+      return histories[side.recordId]?.find((r) => r.revisionId === side.revisionId)?.content ?? null;
+    }
     if (side.number === null || side.number === head?.number) return head?.content ?? null;
     return histories[side.recordId]?.find((r) => r.number === side.number)?.content ?? null;
   };
   const titleOf = (side: Side): string => {
     if (!('recordId' in side)) return 'Unsaved changes';
-    const name = recipes.find((r) => r.recordId === side.recordId)?.content.name || 'Untitled';
+    const head = recipes.find((r) => r.recordId === side.recordId);
+    const name = head?.content.name || 'Untitled';
+    if (side.revisionId && head?.forks?.some((fork) => fork.revisionId === side.revisionId)) {
+      return `${name}, other version`;
+    }
     return side.number === null ? name : `${name}, revision ${side.number}`;
   };
 
@@ -248,22 +256,31 @@ function SidePicker({
           </option>
         ))}
       </select>
-      {'recordId' in side && head && head.number > 1 && (
+      {'recordId' in side && head && (head.number > 1 || !!head.forks?.length) && (
         <>
           <label htmlFor={`${id}-revision`}>Revision</label>
           <select
             id={`${id}-revision`}
-            value={side.number ?? ''}
-            onChange={(e) =>
-              onChange({ recordId: side.recordId, number: e.target.value ? Number(e.target.value) : null })
+            value={
+              side.revisionId ??
+              (side.number === null ? '' : (history?.find((r) => r.number === side.number)?.revisionId ?? ''))
             }
+            onChange={(e) => {
+              const chosen = history?.find((r) => r.revisionId === e.target.value);
+              onChange(
+                chosen && chosen.revisionId !== head.revisionId
+                  ? { recordId: side.recordId, number: chosen.number, revisionId: chosen.revisionId }
+                  : { recordId: side.recordId, number: null }
+              );
+            }}
           >
             <option value="">Newest (revision {head.number})</option>
             {(history ?? [])
-              .filter((r) => r.number !== head.number)
+              .filter((r) => r.revisionId !== head.revisionId)
               .map((r) => (
-                <option key={r.revisionId} value={r.number}>
+                <option key={r.revisionId} value={r.revisionId}>
                   Revision {r.number} · {new Date(r.savedAt).toLocaleDateString()}
+                  {head.forks?.some((fork) => fork.revisionId === r.revisionId) ? ' (other version)' : ''}
                 </option>
               ))}
           </select>

@@ -1,6 +1,7 @@
 # 9. Deleting, and erasing for good
 
-Proposed, 2026-10-15.
+Proposed, 2026-10-15. Erasing leaves a tombstone, and a delete made elsewhere can fork a record,
+from [ADR 17](0017-key-epochs-change-log.md).
 
 ## Context
 

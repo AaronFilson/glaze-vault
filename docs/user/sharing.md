@@ -126,8 +126,9 @@ chosen on this computer.
 ## When someone leaves, or loses their password
 
 - **Remove…** takes a person out. They can no longer sign in. Every collection they could open
-  gets a new key and is encrypted again, and so does the vault, since they may have kept a copy.
-  This takes a moment. Their private collection stays, for admins, listed as *From* their name.
+  gets a new key, and so does the vault, since they may have kept a copy: what is saved from then
+  on is out of their reach. What they could already read is not encrypted again, since they may
+  have seen it already. Their private collection stays, for admins, listed as *From* their name.
 - **Reset password…** is for someone who has lost both their password and their recovery
   sheet. Give them a new one-time password; they choose their own when they next sign in, and get
   a new recovery sheet. Their old sheet stops working.
@@ -141,7 +142,7 @@ chosen on this computer.
 
 **Take admin away…** makes an admin an ordinary member again, keeping their roles on collections.
 An admin could open every collection, so the organization gets a new key and every collection a
-new one, which takes a moment, and then Glaze Vault shows the new **organization recovery
+new one, and then Glaze Vault shows the new **organization recovery
 sheet** to print and check. The old sheet stops working: put it out of use. **Remove…** on an
 admin does the same first, then removes them.
 

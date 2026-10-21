@@ -76,13 +76,28 @@ impl Vault {
         }
         let tx = self.conn.unchecked_transaction()?;
         for collection in &self.collections {
-            let key = collection.full_key()?;
-            let summary = summary_key(key, &collection.id);
+            collection.full_key()?;
+            // Each row under its collection's key at the epoch it was stored at.
+            let keys = |epoch: i64| -> Result<(&Key, Key)> {
+                let key = collection.key_at(epoch)?;
+                Ok((key, summary_key(key, &collection.id)))
+            };
             let id = collection.id.to_string();
 
-            type Row = (String, String, String, i64, Option<String>, bool, Vec<u8>, Vec<u8>);
+            type Row = (
+                String,
+                String,
+                String,
+                i64,
+                Option<String>,
+                bool,
+                Vec<u8>,
+                Vec<u8>,
+                i64,
+                Option<String>,
+            );
             let mut statement = tx.prepare(
-                "SELECT id, record_id, kind, number, parent_id, deleted, nonce, ciphertext FROM revisions
+                "SELECT id, record_id, kind, number, parent_id, deleted, nonce, ciphertext, epoch, supersedes FROM revisions
                  WHERE collection_id = ?1 AND (kind = 'firing' OR (kind = 'recipe' AND summary IS NULL))",
             )?;
             let rows = statement
@@ -96,11 +111,13 @@ impl Vault {
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<Row>>>()?;
             drop(statement);
-            for (revision, record, kind, number, parent, deleted, nonce, ciphertext) in rows {
+            for (revision, record, kind, number, parent, deleted, nonce, ciphertext, epoch, supersedes) in rows {
                 let parent = parent.as_deref().map(parse_id).transpose()?;
                 let aad = revision_aad(
                     &parse_id(&revision)?,
@@ -110,7 +127,9 @@ impl Vault {
                     number,
                     parent.as_ref(),
                     deleted,
+                    supersedes.as_deref(),
                 );
+                let (key, summary) = keys(epoch)?;
                 let plaintext = zeroize::Zeroizing::new(
                     crypto::decrypt(key, &Sealed { nonce, ciphertext }, &aad)
                         .ok_or_else(|| Error::Corrupt(format!("revision {revision} does not decrypt")))?,
@@ -132,7 +151,7 @@ impl Vault {
 
             // Photos, one at a time: there may be many.
             let mut statement = tx.prepare(
-                "SELECT id, record_id, media_type FROM attachments WHERE collection_id = ?1 AND kind = 'firing'",
+                "SELECT id, record_id, media_type, epoch FROM attachments WHERE collection_id = ?1 AND kind = 'firing'",
             )?;
             let photos = statement
                 .query_map(params![id], |row| {
@@ -140,11 +159,13 @@ impl Vault {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             drop(statement);
-            for (photo, record, media_type) in photos {
+            for (photo, record, media_type, epoch) in photos {
+                let (key, summary) = keys(epoch)?;
                 let aad = attachments::aad(
                     &parse_id(&photo)?,
                     &parse_id(&record)?,
@@ -163,8 +184,13 @@ impl Vault {
                 );
                 let sealed = crypto::encrypt(&summary, &plaintext, &aad);
                 tx.execute(
-                    "UPDATE attachments SET nonce = ?1, ciphertext = ?2 WHERE id = ?3",
-                    params![sealed.nonce, sealed.ciphertext, photo],
+                    "UPDATE attachments SET nonce = ?1, ciphertext = ?2, sha256 = ?3 WHERE id = ?4",
+                    params![
+                        &sealed.nonce,
+                        &sealed.ciphertext,
+                        crate::store::attachment_hash(&sealed.nonce, &sealed.ciphertext),
+                        photo
+                    ],
                 )?;
             }
         }
@@ -287,6 +313,7 @@ mod tests {
             1,
             None,
             false,
+            None,
         );
         assert!(crypto::decrypt(&held.key, &Sealed { nonce, ciphertext }, &aad).is_none());
     }

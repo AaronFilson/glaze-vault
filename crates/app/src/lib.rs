@@ -346,6 +346,12 @@ fn deleted_records(state: State<AppState>, kind: Kind) -> CommandResult<Vec<Revi
     with_vault(&state, |vault| vault.deleted(kind))
 }
 
+/// Ends a fork: keeps one of a record's newest revisions and sets the others aside (ADR 17).
+#[tauri::command(async)]
+fn resolve_fork(state: State<AppState>, kind: Kind, keep: Uuid, others: Vec<Uuid>) -> CommandResult<Revision> {
+    with_vault(&state, |vault| vault.resolve_fork(kind, keep, &others))
+}
+
 /// Moves records, every revision and attachment of each, to another collection: a recipe with its
 /// firings and batch sheets. All move, or none.
 #[tauri::command(async)]
@@ -950,6 +956,7 @@ pub fn run() {
             record_history,
             delete_record,
             deleted_records,
+            resolve_fork,
             erase_record,
             move_records,
             choose_photo,

@@ -1,6 +1,8 @@
 # 14. The firing log, and photos kept as attachments
 
 Proposed, 2026-10-16. Follows the research in [clay bodies](../research/clay-bodies.md).
+Re-encrypting attachments when a collection's key changes is replaced by key epochs in
+[ADR 17](0017-key-epochs-change-log.md).
 
 ## Context
 

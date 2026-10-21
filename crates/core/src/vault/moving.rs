@@ -4,9 +4,10 @@
 //! moves with its firings and batch sheets, which the page names, since the core does not look
 //! inside what it keeps.
 
-use super::{Kind, MAX_BATCH, Vault, attachments, parse_id, revision_aad, summaries};
+use super::{Change, Kind, MAX_BATCH, Vault, attachments, log_change, parse_id, revision_aad, summaries};
 use crate::crypto;
 use crate::error::{Error, Result};
+use crate::store;
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
@@ -32,37 +33,56 @@ impl Vault {
                 continue;
             }
             let (here, there) = (self.editable(&from, kind)?, self.editable(&to, kind)?);
-            let old = self.key_for(here, kind).ok_or(Error::NotAllowed)?;
-            let new = self.key_for(there, kind).ok_or(Error::NotAllowed)?;
+            // Everything goes under the new collection's current key, whatever epoch it was at.
+            let epoch = there.epoch;
+            let new = self.key_for(there, kind, epoch)?.ok_or(Error::NotAllowed)?;
             // A recipe's summary moves with it (summaries.rs).
-            let summary_keys = match kind {
-                Kind::Recipe => Some((
-                    self.summary_key_for(here).ok_or(Error::NotAllowed)?,
-                    self.summary_key_for(there).ok_or(Error::NotAllowed)?,
-                )),
+            let new_summary = match kind {
+                Kind::Recipe => Some(self.summary_key_for(there, epoch)?.ok_or(Error::NotAllowed)?),
                 _ => None,
             };
 
+            type Row = (
+                String,
+                i64,
+                Option<String>,
+                bool,
+                Vec<u8>,
+                Vec<u8>,
+                Option<Vec<u8>>,
+                Option<Vec<u8>>,
+                i64,
+                Option<String>,
+            );
             let mut statement = tx.prepare(
-                "SELECT id, number, parent_id, deleted, nonce, ciphertext, summary_nonce, summary FROM revisions
-                 WHERE record_id = ?1 AND kind = ?2",
+                "SELECT id, number, parent_id, deleted, nonce, ciphertext, summary_nonce, summary, epoch, supersedes
+                 FROM revisions WHERE record_id = ?1 AND kind = ?2 ORDER BY rowid",
             )?;
             let revisions = statement
                 .query_map(params![record_id.to_string(), kind.as_str()], |row| {
                     Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, bool>(3)?,
-                        row.get::<_, Vec<u8>>(4)?,
-                        row.get::<_, Vec<u8>>(5)?,
-                        row.get::<_, Option<Vec<u8>>>(6)?,
-                        row.get::<_, Option<Vec<u8>>>(7)?,
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
                     ))
                 })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
+                .collect::<rusqlite::Result<Vec<Row>>>()?;
             drop(statement);
-            for (id, number, parent, deleted, nonce, ciphertext, summary_nonce, summary) in revisions {
+            // The record leaves the change log where it was and goes on at its end, as moved.
+            tx.execute(
+                "DELETE FROM changes WHERE item_id IN (
+                    SELECT id FROM revisions WHERE record_id = ?1 AND kind = ?2
+                    UNION ALL SELECT id FROM attachments WHERE record_id = ?1 AND kind = ?2)",
+                params![record_id.to_string(), kind.as_str()],
+            )?;
+            for (id, number, parent, deleted, nonce, ciphertext, summary_nonce, summary, at, supersedes) in revisions {
                 let revision_id = parse_id(&id)?;
                 let parent = parent.as_deref().map(parse_id).transpose()?;
                 let aad = |collection: &Uuid| {
@@ -74,35 +94,49 @@ impl Vault {
                         number,
                         parent.as_ref(),
                         deleted,
+                        supersedes.as_deref(),
                     )
                 };
+                let old = self.key_for(here, kind, at)?.ok_or(Error::NotAllowed)?;
                 let plaintext = crypto::decrypt(&old, &crypto::Sealed { nonce, ciphertext }, &aad(&from))
                     .ok_or_else(|| Error::Corrupt(format!("revision {id} does not decrypt")))?;
                 let sealed = crypto::encrypt(&new, &plaintext, &aad(&to));
                 tx.execute(
-                    "UPDATE revisions SET collection_id = ?1, nonce = ?2, ciphertext = ?3 WHERE id = ?4",
-                    params![to.to_string(), sealed.nonce, sealed.ciphertext, id],
+                    "UPDATE revisions SET collection_id = ?1, nonce = ?2, ciphertext = ?3, epoch = ?4 WHERE id = ?5",
+                    params![to.to_string(), sealed.nonce, sealed.ciphertext, epoch, id],
                 )?;
-                if let (Some((old, new)), Some(nonce), Some(ciphertext)) = (&summary_keys, summary_nonce, summary) {
-                    let sealed =
-                        summaries::reseal(old, new, &crypto::Sealed { nonce, ciphertext }, &aad(&from), &aad(&to))?;
+                if let (Some(new_summary), Some(nonce), Some(ciphertext)) = (&new_summary, summary_nonce, summary) {
+                    let old_summary = self.summary_key_for(here, at)?.ok_or(Error::NotAllowed)?;
+                    let sealed = summaries::reseal(
+                        &old_summary,
+                        new_summary,
+                        &crypto::Sealed { nonce, ciphertext },
+                        &aad(&from),
+                        &aad(&to),
+                    )?;
                     tx.execute(
                         "UPDATE revisions SET summary_nonce = ?1, summary = ?2 WHERE id = ?3",
                         params![sealed.nonce, sealed.ciphertext, id],
                     )?;
                 }
+                log_change(&tx, Change::Revision, &revision_id, &to, kind)?;
             }
 
             // Attachments, one at a time: there may be many photos.
-            let mut statement =
-                tx.prepare("SELECT id, media_type FROM attachments WHERE record_id = ?1 AND kind = ?2")?;
+            let mut statement = tx.prepare(
+                "SELECT id, media_type, epoch FROM attachments WHERE record_id = ?1 AND kind = ?2 ORDER BY rowid",
+            )?;
             let found = statement
                 .query_map(params![record_id.to_string(), kind.as_str()], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             drop(statement);
-            for (id, media_type) in found {
+            for (id, media_type, at) in found {
                 let attachment_id = parse_id(&id)?;
                 let aad = |collection: &Uuid| {
                     attachments::aad(&attachment_id, &record_id, kind.as_str(), collection, &media_type)
@@ -112,13 +146,23 @@ impl Vault {
                     params![id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;
+                let old = self.key_for(here, kind, at)?.ok_or(Error::NotAllowed)?;
                 let plaintext = crypto::decrypt(&old, &crypto::Sealed { nonce, ciphertext }, &aad(&from))
                     .ok_or_else(|| Error::Corrupt(format!("attachment {id} does not decrypt")))?;
                 let sealed = crypto::encrypt(&new, &plaintext, &aad(&to));
                 tx.execute(
-                    "UPDATE attachments SET collection_id = ?1, nonce = ?2, ciphertext = ?3 WHERE id = ?4",
-                    params![to.to_string(), sealed.nonce, sealed.ciphertext, id],
+                    "UPDATE attachments SET collection_id = ?1, nonce = ?2, ciphertext = ?3, epoch = ?4, sha256 = ?5
+                     WHERE id = ?6",
+                    params![
+                        to.to_string(),
+                        &sealed.nonce,
+                        &sealed.ciphertext,
+                        epoch,
+                        store::attachment_hash(&sealed.nonce, &sealed.ciphertext),
+                        id
+                    ],
                 )?;
+                log_change(&tx, Change::Attachment, &attachment_id, &to, kind)?;
             }
         }
         tx.commit()?;
@@ -273,5 +317,55 @@ mod tests {
         let head = &ana.heads(Kind::Material).unwrap()[0];
         assert_eq!(head.collection_id, production);
         assert_eq!(head.content["name"], "Grolleg");
+    }
+
+    #[test]
+    fn a_record_saved_under_two_key_epochs_moves_under_the_new_collections_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut ana, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        ana.grow_into_team("Ana").unwrap();
+        let shared = ana.collections().iter().find(|c| c.owner.is_none()).unwrap().id;
+        let production = ana.create_collection("Production").unwrap().id;
+        let first = ana.save_in(Kind::Recipe, shared, &json!({ "name": "Shino" })).unwrap();
+        let firing = ana
+            .save_in(Kind::Firing, shared, &json!({ "recipe": first.record_id }))
+            .unwrap();
+        let photo = ana
+            .add_attachment(Kind::Firing, firing.record_id, "image/jpeg", b"tile")
+            .unwrap();
+        let ben = ana.add_person("Ben", ONE_TIME, &[(shared, Role::Chemist)]).unwrap();
+        ana.set_role(ben.id, shared, None).unwrap();
+        let second = ana
+            .save(Kind::Recipe, Some(first.revision_id), &json!({ "name": "Shino 2" }))
+            .unwrap();
+
+        ana.move_records(
+            &[(Kind::Recipe, first.record_id), (Kind::Firing, firing.record_id)],
+            production,
+        )
+        .unwrap();
+        let epochs: Vec<i64> = ana
+            .conn
+            .prepare("SELECT epoch FROM revisions WHERE collection_id = ?1 UNION ALL SELECT epoch FROM attachments WHERE collection_id = ?1")
+            .unwrap()
+            .query_map(params![production.to_string()], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(epochs, [1, 1, 1, 1]);
+        let history = ana.history(Kind::Recipe, first.record_id).unwrap();
+        assert_eq!(history[0].revision_id, second.revision_id);
+        assert_eq!(history.len(), 2);
+        assert_eq!(&ana.attachment(photo.id).unwrap().1[..], b"tile");
+        // The moved rows go to the end of the change log, under their new collection.
+        let moved: Vec<String> = ana
+            .conn
+            .prepare("SELECT collection_id FROM changes ORDER BY seq DESC LIMIT 4")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(moved.iter().all(|c| *c == production.to_string()));
     }
 }

@@ -6,7 +6,8 @@ log (ADR 16, `Kind::Mix` under the batch key) and takes schema 7. So this plan's
 start at 8 and its new ADRs at 17. Where it is not sure what the code or a crate does, it says so.
 
 Decisions for Aaron are in [section 8](#8-open-questions-for-aaron), each with a recommended
-default.
+default. On 2026-10-20 Aaron accepted every default. Stage 1 is built
+([ADR 17](../adr/0017-key-epochs-change-log.md)).
 
 ## Summary
 
@@ -600,7 +601,7 @@ The LAN update mirror (ADR 5, "Updates on the LAN") comes after stage 8, as a fo
 
 ## 8. Open questions for Aaron
 
-Each has a recommended default.
+Each has a recommended default. Aaron accepted all of them on 2026-10-20.
 
 1. **A blind host.** Should `hostd` hold no collection keys, so it cannot read recipes? *Default: yes.* The cost is no server-side search or export, which nothing needs.
 2. **Key epochs instead of re-encrypting on removal.** This changes ADR 3 and 12. Someone removed who kept the old key and the old ciphertext can still read what they could already read. *Default: yes, epochs.*

@@ -3,9 +3,10 @@
 //! their own table so a revision only names them. An attachment is never changed: a record stops
 //! naming it in a new revision, and erasing the record removes it.
 
-use super::{Kind, Vault, now_ms, parse_id};
+use super::{Change, Kind, Vault, log_change, now_ms, parse_id};
 use crate::crypto;
 use crate::error::{Error, Result};
+use crate::store;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use uuid::Uuid;
@@ -51,7 +52,8 @@ impl Vault {
             .ok_or(Error::NotFound)?;
         let collection_id = parse_id(&collection_id)?;
         let collection = self.editable(&collection_id, kind)?;
-        let key = self.key_for(collection, kind).ok_or(Error::NotAllowed)?;
+        let epoch = collection.epoch;
+        let key = self.key_for(collection, kind, epoch)?.ok_or(Error::NotAllowed)?;
         let attachment = Attachment {
             id: Uuid::new_v4(),
             record_id,
@@ -64,9 +66,10 @@ impl Vault {
             bytes,
             &aad(&attachment.id, &record_id, kind.as_str(), &collection_id, media_type),
         );
-        self.conn.execute(
-            "INSERT INTO attachments (id, record_id, kind, collection_id, media_type, size, author_id, created_at, nonce, ciphertext)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO attachments (id, record_id, kind, collection_id, media_type, size, author_id, created_at, nonce, ciphertext, epoch, sha256)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 attachment.id.to_string(),
                 record_id.to_string(),
@@ -78,19 +81,23 @@ impl Vault {
                 attachment.created_at,
                 sealed.nonce,
                 sealed.ciphertext,
+                epoch,
+                store::attachment_hash(&sealed.nonce, &sealed.ciphertext),
             ],
         )?;
+        log_change(&tx, Change::Attachment, &attachment.id, &collection_id, kind)?;
+        tx.commit()?;
         Ok(attachment)
     }
 
     /// An attachment and its bytes, if this person can open its record. One they cannot is not
     /// shown to exist.
     pub fn attachment(&self, id: Uuid) -> Result<(Attachment, Zeroizing<Vec<u8>>)> {
-        type Row = (String, String, String, String, i64, i64, Vec<u8>, Vec<u8>);
+        type Row = (String, String, String, String, i64, i64, Vec<u8>, Vec<u8>, i64);
         let row: Option<Row> = self
             .conn
             .query_row(
-                "SELECT record_id, kind, collection_id, media_type, size, created_at, nonce, ciphertext
+                "SELECT record_id, kind, collection_id, media_type, size, created_at, nonce, ciphertext, epoch
                  FROM attachments WHERE id = ?1",
                 params![id.to_string()],
                 |row| {
@@ -103,20 +110,17 @@ impl Vault {
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
                     ))
                 },
             )
             .optional()?;
-        let (record_id, kind, collection_id, media_type, size, created_at, nonce, ciphertext) =
+        let (record_id, kind, collection_id, media_type, size, created_at, nonce, ciphertext, epoch) =
             row.ok_or(Error::NotFound)?;
         let (record_id, collection_id) = (parse_id(&record_id)?, parse_id(&collection_id)?);
         let kind = Kind::parse(&kind).ok_or_else(|| Error::Corrupt(format!("unknown kind {kind}")))?;
-        let key = self
-            .collections
-            .iter()
-            .find(|c| c.id == collection_id)
-            .and_then(|c| self.key_for(c, kind))
-            .ok_or(Error::NotFound)?;
+        let collection = self.readable(&collection_id)?;
+        let key = self.key_for(collection, kind, epoch)?.ok_or(Error::NotFound)?;
         let bytes = crypto::decrypt(
             &key,
             &crypto::Sealed { nonce, ciphertext },
