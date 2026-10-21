@@ -1504,7 +1504,11 @@ mod tests {
         assert_eq!(names(&as_ben, Kind::Mix), ["Shino"]);
         assert_eq!(names(&ana, Kind::Mix), ["Shino"]);
         as_ben
-            .save(Kind::Mix, Some(mix.revision_id), &json!({ "name": "Shino", "lots": ["L-8"] }))
+            .save(
+                Kind::Mix,
+                Some(mix.revision_id),
+                &json!({ "name": "Shino", "lots": ["L-8"] }),
+            )
             .unwrap();
         // In their own private collection, Ben does as he likes.
         let own = private_of(&as_ben, ben.id);
