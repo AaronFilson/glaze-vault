@@ -5,7 +5,8 @@ its section 5. Builds what [ADR 4](0004-roles-and-collections.md) deferred ("eve
 signed", "the audit log") and the follow-up from [ADR 12](0012-teams-on-one-computer.md). Changes
 the plan in three places, said below: signing keys are not kept in the key file, certificates are
 not issued again when the organization key changes, and a person who joined before signing proves
-their key before an admin certifies it.
+their key before an admin certifies it. When a certificate is trusted goes by order in the change
+log, not by time, from [ADR 20](0020-sync-core.md).
 
 ## Context
 

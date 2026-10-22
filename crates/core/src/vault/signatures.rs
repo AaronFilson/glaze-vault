@@ -12,6 +12,7 @@ use crate::access::Directory;
 use crate::crypto::KeyPair;
 use crate::error::Result;
 use crate::signing::{self, As, AttachmentFacts, RevisionFacts, Signer};
+use crate::sync::Refusal;
 use rusqlite::{Connection, params};
 use serde::Serialize;
 use uuid::Uuid;
@@ -71,19 +72,18 @@ pub(super) struct RevisionRow {
     pub supersedes: Option<String>,
     pub author: Uuid,
     pub at: i64,
-    pub nonce: Vec<u8>,
-    pub ciphertext: Vec<u8>,
+    pub content_hash: Vec<u8>,
     pub summary: Option<(Vec<u8>, Vec<u8>)>,
     pub signed: Option<SignedBy>,
 }
 
 const REVISION_COLUMNS: &str = "id, record_id, kind, collection_id, epoch, number, parent_id, deleted, supersedes, \
-     author_id, created_at, nonce, ciphertext, summary_nonce, summary, signature, signer_id, signed_as";
+     author_id, created_at, content_hash, summary_nonce, summary, signature, signer_id, signed_as";
 
 impl RevisionRow {
     fn read(row: &rusqlite::Row) -> rusqlite::Result<RevisionRow> {
         let id = |text: String| Uuid::parse_str(&text).unwrap_or_default();
-        let summary = match (row.get::<_, Option<Vec<u8>>>(13)?, row.get::<_, Option<Vec<u8>>>(14)?) {
+        let summary = match (row.get::<_, Option<Vec<u8>>>(12)?, row.get::<_, Option<Vec<u8>>>(13)?) {
             (Some(nonce), Some(summary)) => Some((nonce, summary)),
             _ => None,
         };
@@ -99,10 +99,9 @@ impl RevisionRow {
             supersedes: row.get(8)?,
             author: id(row.get(9)?),
             at: row.get(10)?,
-            nonce: row.get(11)?,
-            ciphertext: row.get(12)?,
+            content_hash: row.get::<_, Option<Vec<u8>>>(11)?.unwrap_or_default(),
             summary,
-            signed: signed_by(row.get(15)?, row.get(16)?, row.get(17)?),
+            signed: signed_by(row.get(14)?, row.get(15)?, row.get(16)?),
         })
     }
 
@@ -120,8 +119,7 @@ impl RevisionRow {
             supersedes: self.supersedes.as_deref(),
             author: &self.author,
             at: self.at,
-            nonce: &self.nonce,
-            ciphertext: &self.ciphertext,
+            content_hash: &self.content_hash,
             summary: self.summary.as_ref().map(|(n, s)| (n.as_slice(), s.as_slice())),
         }
     }
@@ -187,7 +185,7 @@ fn signed_by(signature: Option<Vec<u8>>, signer: Option<String>, role: Option<St
 }
 
 /// Signs a revision or attachment's facts as `role`.
-pub(super) fn sign(signer: &Signer, role: As, payload: impl FnOnce(As, &Uuid) -> Vec<u8>) -> SignedBy {
+pub(crate) fn sign(signer: &Signer, role: As, payload: impl FnOnce(As, &Uuid) -> Vec<u8>) -> SignedBy {
     SignedBy {
         signature: signer.sign(&payload(role, &signer.person)),
         signer: signer.person,
@@ -267,24 +265,37 @@ struct Certificate {
     signature: Vec<u8>,
     proof: Option<Vec<u8>>,
     revoked: bool,
+    /// Where it came in this store's change log: unknown ones after everything.
+    place: i64,
 }
 
 /// The certificates and organization keys a store holds: what signatures are checked against.
-pub(super) struct Trust {
+pub(crate) struct Trust {
     vault: Uuid,
     certificates: Vec<Certificate>,
-    /// Each organization signing key, and when it was the organization's.
+    /// Each organization signing key, and from where to where in the change log it was the
+    /// organization's.
     organization_keys: Vec<(Vec<u8>, i64, Option<i64>)>,
 }
 
 impl Trust {
     pub fn load(conn: &Connection, vault: Uuid) -> Result<Trust> {
-        type Row = (String, Vec<u8>, Vec<u8>, i64, Vec<u8>, Vec<u8>, Option<Vec<u8>>, bool);
+        type Row = (
+            String,
+            Vec<u8>,
+            Vec<u8>,
+            i64,
+            Vec<u8>,
+            Vec<u8>,
+            Option<Vec<u8>>,
+            bool,
+            Option<i64>,
+        );
         let rows = conn
             .prepare(
                 "SELECT person_id, signing_key, encryption_key, issued_at, issuer_key, signature, proof,
-                        revoked_at IS NOT NULL
-                 FROM certificates ORDER BY issued_at, rowid",
+                        revoked_at IS NOT NULL, place
+                 FROM certificates ORDER BY place, rowid",
             )?
             .query_map([], |row| {
                 Ok((
@@ -296,13 +307,14 @@ impl Trust {
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<Row>>>()?;
         let certificates = rows
             .into_iter()
             .map(
-                |(person, signing_key, encryption_key, issued_at, issuer_key, signature, proof, revoked)| {
+                |(person, signing_key, encryption_key, issued_at, issuer_key, signature, proof, revoked, place)| {
                     Ok(Certificate {
                         person: parse_id(&person)?,
                         signing_key,
@@ -312,13 +324,20 @@ impl Trust {
                         signature,
                         proof,
                         revoked,
+                        place: place.unwrap_or(i64::MAX),
                     })
                 },
             )
             .collect::<Result<_>>()?;
         let organization_keys = conn
-            .prepare("SELECT signing_key, added_at, retired_at FROM organization_keys ORDER BY added_at")?
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .prepare("SELECT signing_key, place, retired_place FROM organization_keys ORDER BY place")?
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get::<_, Option<i64>>(1)?.unwrap_or(i64::MAX),
+                    row.get(2)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(Trust {
             vault,
@@ -337,7 +356,8 @@ impl Trust {
         )
     }
 
-    /// Whether a certificate was issued by whoever could vouch for keys when it was issued.
+    /// Whether a certificate was issued by whoever could vouch for keys when it came: by when in
+    /// the change log, since computers' clocks differ (ADR 20).
     fn trusted(&self, certificate: &Certificate) -> bool {
         if !signing::verify(
             &certificate.issuer_key,
@@ -346,7 +366,7 @@ impl Trust {
         ) {
             return false;
         }
-        let at = certificate.issued_at;
+        let at = certificate.place;
         let current =
             |(_, added, retired): &&(Vec<u8>, i64, Option<i64>)| *added <= at && retired.is_none_or(|r| at < r);
         match self.organization_keys.iter().find(current) {
@@ -367,6 +387,31 @@ impl Trust {
             return None;
         }
         Some(theirs.iter().any(|c| self.trusted(c)))
+    }
+
+    /// What a host asks of an item it is sent (ADR 20): signed by a key certified as the
+    /// signer's, by a certificate not revoked.
+    pub fn check_now(&self, signed: &SignedBy, payload: &[u8]) -> std::result::Result<(), Refusal> {
+        let theirs: Vec<&Certificate> = self.certificates.iter().filter(|c| c.person == signed.signer).collect();
+        let Some(key) = theirs
+            .iter()
+            .map(|c| &c.signing_key)
+            .find(|key| signing::verify(key, payload, &signed.signature))
+        else {
+            return Err(if theirs.is_empty() {
+                Refusal::UnknownSigner
+            } else {
+                Refusal::BadSignature
+            });
+        };
+        if theirs
+            .iter()
+            .any(|c| c.signing_key == *key && !c.revoked && self.trusted(c))
+        {
+            Ok(())
+        } else {
+            Err(Refusal::UnknownSigner)
+        }
     }
 
     /// Checks a signature over `payload` against the signer's certified keys.
@@ -604,14 +649,15 @@ impl Vault {
 }
 
 impl Vault {
-    /// Signs again, as the person moving it, a revision encrypted again for another collection.
-    pub(super) fn sign_moved_revision(&self, tx: &Connection, id: &Uuid) -> Result<()> {
+    /// Signs again a revision encrypted again: as the person moving it to another collection, or
+    /// as its author, sealing it again under a newer key before it reaches the host (replica.rs).
+    pub(super) fn sign_stored_revision(&self, tx: &Connection, id: &Uuid, role: As) -> Result<()> {
         let row = tx.query_row(
             &format!("SELECT {REVISION_COLUMNS} FROM revisions WHERE id = ?1"),
             params![id.to_string()],
             RevisionRow::read,
         )?;
-        let signed = sign(&self.signer, As::Mover, |role, signer| {
+        let signed = sign(&self.signer, role, |role, signer| {
             signing::revision_payload(&row.facts(&self.keyring.vault_id), role, signer)
         });
         tx.execute(
@@ -626,14 +672,14 @@ impl Vault {
         Ok(())
     }
 
-    /// Signs again, as the person moving it, an attachment encrypted again for another collection.
-    pub(super) fn sign_moved_attachment(&self, tx: &Connection, id: &Uuid) -> Result<()> {
+    /// Signs again an attachment encrypted again, as sign_stored_revision does a revision.
+    pub(super) fn sign_stored_attachment(&self, tx: &Connection, id: &Uuid, role: As) -> Result<()> {
         let row = tx.query_row(
             &format!("SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?1"),
             params![id.to_string()],
             AttachmentRow::read,
         )?;
-        let signed = sign(&self.signer, As::Mover, |role, signer| {
+        let signed = sign(&self.signer, role, |role, signer| {
             signing::attachment_payload(&row.facts(&self.keyring.vault_id), role, signer)
         });
         tx.execute(
@@ -874,6 +920,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!((signer, role.as_str()), (ana_id.to_string(), "mover"));
+    }
+
+    #[test]
+    fn trust_goes_by_the_order_things_came_not_by_clocks() {
+        let (dir, mut ana, shared) = team();
+        let ben = add_ben(dir.path(), &mut ana, shared);
+        // An admin whose clock is far behind certifies a key: its time is before the organization
+        // key's, but it came after it, so it is trusted.
+        let stranger = KeyPair::generate();
+        let key = signing::public(&signing::person_key(&stranger));
+        let organization = signing::organization_key(ana.organization.as_ref().unwrap());
+        let vault_id = ana.keyring.vault_id;
+        let payload = signing::certificate_payload(&vault_id, &ben, &key, &stranger.public, 1);
+        let body = Body::CertificateIssued {
+            certificate: Uuid::new_v4(),
+            person: ben,
+            signing_key: key.clone(),
+            encryption_key: stranger.public.clone(),
+            issued_at: 1,
+            issuer_key: signing::public(&organization),
+            signature: signing::sign(&organization, &payload),
+            proof: None,
+        };
+        events::record(&ana.conn, &ana.signer, body).unwrap();
+        assert_eq!(ana.trust().unwrap().certified(ben, &key), Some(true));
+
+        // A vault from before kept no places: they are filled in from its events, the same.
+        let places = |vault: &Vault| -> Vec<(Option<i64>, Option<i64>)> {
+            vault
+                .conn
+                .prepare(
+                    "SELECT place, NULL FROM certificates UNION ALL
+                     SELECT place, retired_place FROM organization_keys ORDER BY 1",
+                )
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let before = places(&ana);
+        ana.conn
+            .execute_batch(
+                "UPDATE certificates SET place = NULL;
+                 UPDATE organization_keys SET place = NULL, retired_place = NULL;",
+            )
+            .unwrap();
+        crate::store::place_trust(&ana.conn).unwrap();
+        assert_eq!(places(&ana), before);
     }
 
     #[test]

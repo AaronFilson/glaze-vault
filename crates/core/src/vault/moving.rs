@@ -8,6 +8,7 @@ use super::events::{self, Body};
 use super::{Change, Kind, MAX_BATCH, Vault, attachments, log_change, parse_id, revision_aad, summaries};
 use crate::crypto;
 use crate::error::{Error, Result};
+use crate::signing::As;
 use crate::store;
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
@@ -76,18 +77,7 @@ impl Vault {
                 })?
                 .collect::<rusqlite::Result<Vec<Row>>>()?;
             drop(statement);
-            // The move is an event (ADR 18): the record leaves the change log where it was and
-            // goes on after it, as moved.
-            events::record(
-                &tx,
-                &self.signer,
-                Body::Moved {
-                    record: record_id,
-                    kind,
-                    from,
-                    to,
-                },
-            )?;
+            let mut moved_revisions = Vec::new();
             for (id, number, parent, deleted, nonce, ciphertext, summary_nonce, summary, at, supersedes) in revisions {
                 let revision_id = parse_id(&id)?;
                 let parent = parent.as_deref().map(parse_id).transpose()?;
@@ -108,8 +98,16 @@ impl Vault {
                     .ok_or_else(|| Error::Corrupt(format!("revision {id} does not decrypt")))?;
                 let sealed = crypto::encrypt(&new, &plaintext, &aad(&to));
                 tx.execute(
-                    "UPDATE revisions SET collection_id = ?1, nonce = ?2, ciphertext = ?3, epoch = ?4 WHERE id = ?5",
-                    params![to.to_string(), sealed.nonce, sealed.ciphertext, epoch, id],
+                    "UPDATE revisions SET collection_id = ?1, nonce = ?2, ciphertext = ?3, epoch = ?4, content_hash = ?5
+                     WHERE id = ?6",
+                    params![
+                        to.to_string(),
+                        &sealed.nonce,
+                        &sealed.ciphertext,
+                        epoch,
+                        store::content_hash(&sealed.nonce, &sealed.ciphertext),
+                        id
+                    ],
                 )?;
                 if let (Some(new_summary), Some(nonce), Some(ciphertext)) = (&new_summary, summary_nonce, summary) {
                     let old_summary = self.summary_key_for(here, at)?.ok_or(Error::NotAllowed)?;
@@ -125,8 +123,8 @@ impl Vault {
                         params![sealed.nonce, sealed.ciphertext, id],
                     )?;
                 }
-                self.sign_moved_revision(&tx, &revision_id)?;
-                log_change(&tx, Change::Revision, &revision_id, &to, kind)?;
+                self.sign_stored_revision(&tx, &revision_id, As::Mover)?;
+                moved_revisions.push(revision_id);
             }
 
             // Attachments, one at a time: there may be many photos.
@@ -143,6 +141,7 @@ impl Vault {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             drop(statement);
+            let mut moved_attachments = Vec::new();
             for (id, media_type, at) in found {
                 let attachment_id = parse_id(&id)?;
                 let aad = |collection: &Uuid| {
@@ -169,7 +168,26 @@ impl Vault {
                         id
                     ],
                 )?;
-                self.sign_moved_attachment(&tx, &attachment_id)?;
+                self.sign_stored_attachment(&tx, &attachment_id, As::Mover)?;
+                moved_attachments.push(attachment_id);
+            }
+
+            // The move is an event (ADR 18): the record leaves the change log where it was, and its
+            // rows, encrypted again for where it went, follow the event.
+            events::record(
+                &tx,
+                &self.signer,
+                Body::Moved {
+                    record: record_id,
+                    kind,
+                    from,
+                    to,
+                },
+            )?;
+            for revision_id in moved_revisions {
+                log_change(&tx, Change::Revision, &revision_id, &to, kind)?;
+            }
+            for attachment_id in moved_attachments {
                 log_change(&tx, Change::Attachment, &attachment_id, &to, kind)?;
             }
         }

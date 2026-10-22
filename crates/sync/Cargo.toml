@@ -1,0 +1,20 @@
+[package]
+name = "glaze-vault-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+ciborium = "0.2.2"
+glaze-vault-core = { path = "../core" }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+
+[dev-dependencies]
+# Argon2id at its cheapest, so the tests make many vaults quickly. Never in a release build.
+glaze-vault-core = { path = "../core", features = ["test-kdf"] }
+serde_json = "1.0.154"
+tempfile = "3.27.0"

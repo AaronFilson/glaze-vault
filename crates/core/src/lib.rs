@@ -11,12 +11,15 @@ mod keyring;
 mod recovery;
 mod signing;
 mod store;
+pub mod sync;
 mod vault;
 
 pub use access::Role;
 pub use backup::EXTENSION as BACKUP_EXTENSION;
 pub use error::Error;
+pub use keyring::PersonEntry;
 pub use recovery::RecoveryKey;
+pub use vault::HostStore;
 pub use vault::{
     Attachment, AuditEntry, AuditLog, BackupInfo, Capabilities, Collection, Credential, CustomRole, Fork, Grant, Kind,
     LastBackup, MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS, Note, Person, Revision, SetAside, Settings, SignatureCheck,

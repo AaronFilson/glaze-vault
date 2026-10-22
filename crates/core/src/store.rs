@@ -2,7 +2,7 @@
 
 use crate::crypto::{self, Key};
 use crate::error::{Error, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use std::path::Path;
 use zeroize::Zeroizing;
 
@@ -201,13 +201,57 @@ const MIGRATIONS: &[&str] = &[
         signature BLOB,
         host_seq INTEGER
     );",
+    // 11: the sync model (ADR 20). A revision keeps the hash of its nonce and ciphertext, filled in
+    // below, which its signature covers, so a copy without its ciphertext, for someone who reads
+    // only its summary, still checks. On a host, `devices` are the computers certified to sync
+    // with it, and on every store `key_entries` keep the latest of each person's key file entry,
+    // to reach their computers. On a replica, `sync_state` keeps a cursor and the key held for
+    // each scope, and `refused` the items the host would not take. A collection's name and the
+    // event that makes it belong to the collection's part of the change log, so whoever comes to
+    // read it gets them when they catch up on it. Whether a certificate is trusted goes by where it
+    // and the organization's keys came in the change log (`place`), not by computers' clocks,
+    // filled in below from the events that made them.
+    "ALTER TABLE revisions ADD COLUMN content_hash BLOB;
+    ALTER TABLE certificates ADD COLUMN place INTEGER;
+    ALTER TABLE organization_keys ADD COLUMN place INTEGER;
+    ALTER TABLE organization_keys ADD COLUMN retired_place INTEGER;
+    CREATE TABLE devices (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        signing_key BLOB NOT NULL,
+        people TEXT NOT NULL,
+        issued_at INTEGER NOT NULL,
+        issuer_key BLOB NOT NULL,
+        signature BLOB NOT NULL,
+        revoked_at INTEGER
+    );
+    CREATE TABLE key_entries (
+        person_id TEXT PRIMARY KEY,
+        entry TEXT NOT NULL,
+        at INTEGER NOT NULL,
+        signer_id TEXT NOT NULL,
+        signature BLOB NOT NULL
+    );
+    CREATE TABLE sync_state (
+        scope TEXT PRIMARY KEY,
+        cursor INTEGER NOT NULL,
+        held TEXT
+    );
+    CREATE TABLE refused (
+        item_id TEXT PRIMARY KEY,
+        refusal TEXT NOT NULL,
+        at INTEGER NOT NULL
+    );
+    UPDATE changes SET collection_id = (SELECT e.collection_id FROM events e WHERE e.id = changes.item_id)
+        WHERE item = 'event' AND item_id IN (
+            SELECT id FROM events WHERE type IN ('collection-created', 'collection-renamed'));",
 ];
 
 /// A step a migration needs that SQL cannot do, run in its transaction after its SQL.
 type Fill = fn(&Connection) -> Result<()>;
 
 /// Each fill, by the version its migration brings the schema to.
-const FILLS: &[(usize, Fill)] = &[(8, hash_attachments)];
+const FILLS: &[(usize, Fill)] = &[(8, hash_attachments), (11, hash_revisions), (11, place_trust)];
 
 pub fn open(path: &Path, key: &Key) -> Result<Connection> {
     let conn = Connection::open(path)?;
@@ -256,6 +300,70 @@ fn migrate(conn: &Connection) -> Result<()> {
 /// What an attachment's `sha256` holds: the hash of its nonce and then its ciphertext.
 pub(crate) fn attachment_hash(nonce: &[u8], ciphertext: &[u8]) -> Vec<u8> {
     crypto::sha256(&[nonce, ciphertext]).to_vec()
+}
+
+/// What a revision's `content_hash` holds: the hash of its nonce and then its ciphertext.
+pub(crate) fn content_hash(nonce: &[u8], ciphertext: &[u8]) -> Vec<u8> {
+    crypto::sha256(&[nonce, ciphertext]).to_vec()
+}
+
+/// Hashes the revisions stored before they kept their hashes.
+fn hash_revisions(conn: &Connection) -> Result<()> {
+    conn.create_scalar_function(
+        "glaze_vault_content_hash",
+        2,
+        rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| Ok(content_hash(&context.get::<Vec<u8>>(0)?, &context.get::<Vec<u8>>(1)?)),
+    )?;
+    conn.execute(
+        "UPDATE revisions SET content_hash = glaze_vault_content_hash(nonce, ciphertext) WHERE content_hash IS NULL",
+        [],
+    )?;
+    conn.remove_function("glaze_vault_content_hash", 2)?;
+    Ok(())
+}
+
+/// Where each certificate and organization key came in the change log, and where the key after
+/// each, or going back to one person, retired it, from the events that did.
+pub(crate) fn place_trust(conn: &Connection) -> Result<()> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    conn.execute(
+        "UPDATE certificates SET place = (
+            SELECT min(c.seq) FROM events e JOIN changes c ON c.item_id = e.id
+            WHERE e.type = 'certificate-issued' AND json_extract(e.body, '$.certificate') = certificates.id)",
+        [],
+    )?;
+    let events = conn
+        .prepare(
+            "SELECT e.type, e.body, min(c.seq) AS place FROM events e JOIN changes c ON c.item_id = e.id
+             WHERE e.type IN ('organization-key-added', 'team-disbanded') GROUP BY e.id ORDER BY place",
+        )?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (kind, body, place) in events {
+        conn.execute(
+            "UPDATE organization_keys SET retired_place = ?1 WHERE place IS NOT NULL AND retired_place IS NULL",
+            params![place],
+        )?;
+        if kind == "organization-key-added" {
+            let body: serde_json::Value = serde_json::from_str(&body)?;
+            let key = body["signingKey"]
+                .as_str()
+                .and_then(|text| STANDARD.decode(text).ok())
+                .ok_or_else(|| Error::Corrupt("an organization key event has no key".into()))?;
+            conn.execute(
+                "UPDATE organization_keys SET place = ?1 WHERE signing_key = ?2",
+                params![place, key],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Hashes the attachments stored before they had hashes, one at a time: there may be many photos.

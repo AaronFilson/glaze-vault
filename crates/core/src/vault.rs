@@ -6,7 +6,10 @@
 mod attachments;
 mod audit;
 mod events;
+mod host;
+mod items;
 mod moving;
+mod replica;
 mod roles;
 mod signatures;
 mod summaries;
@@ -15,6 +18,7 @@ mod team;
 pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
 pub use audit::{AuditEntry, AuditLog, Note};
 pub(crate) use events::Body;
+pub use host::HostStore;
 pub use roles::{Capabilities, CustomRole};
 pub use signatures::{SignatureCheck, Signed, SignedAs};
 pub use team::{Collection, Grant, Person};
@@ -666,6 +670,20 @@ impl Vault {
             return Err(Error::NotDeleted);
         };
         let collection = record.collection_id;
+        // On a replica the host checks that every newest revision deletes the record, so it must
+        // have them (ADR 20).
+        if self.is_replica() {
+            let waiting: i64 = self.conn.query_row(
+                "SELECT count(*) FROM changes WHERE host_seq IS NULL AND item_id IN (
+                    SELECT id FROM revisions WHERE record_id = ?1 AND kind = ?2
+                    UNION ALL SELECT id FROM attachments WHERE record_id = ?1 AND kind = ?2)",
+                params![record_id.to_string(), kind.as_str()],
+                |row| row.get(0),
+            )?;
+            if waiting > 0 {
+                return Err(Error::NotSynced);
+            }
+        }
         let erased: i64 = self.conn.query_row(
             "SELECT count(*) FROM revisions WHERE record_id = ?1 AND kind = ?2",
             params![record_id.to_string(), kind.as_str()],
@@ -798,6 +816,7 @@ impl Vault {
             .map(|key| summaries::seal(&key, content, &aad))
             .transpose()?;
         let (summary_nonce, summary) = summary.map(|s| (s.nonce, s.ciphertext)).unzip();
+        let content_hash = store::content_hash(&sealed.nonce, &sealed.ciphertext);
         let signed = self.sign_as_author(|role, signer| {
             let facts = signing::RevisionFacts {
                 vault: &self.keyring.vault_id,
@@ -812,8 +831,7 @@ impl Vault {
                 supersedes: supersedes.as_deref(),
                 author: &self.user_id,
                 at: saved_at,
-                nonce: &sealed.nonce,
-                ciphertext: &sealed.ciphertext,
+                content_hash: &content_hash,
                 summary: summary_nonce.as_deref().zip(summary.as_deref()),
             };
             signing::revision_payload(&facts, role, signer)
@@ -828,8 +846,8 @@ impl Vault {
         };
         atomically(&self.conn, |conn| {
             conn.execute(
-            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted, summary_nonce, summary, epoch, supersedes, signature, signer_id, signed_as)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT INTO revisions (id, record_id, kind, parent_id, number, collection_id, author_id, created_at, nonce, ciphertext, deleted, summary_nonce, summary, epoch, supersedes, signature, signer_id, signed_as, content_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 revision_id.to_string(),
                 record_id.to_string(),
@@ -849,6 +867,7 @@ impl Vault {
                 signed.signature,
                 signed.signer.to_string(),
                 signed.role.code(),
+                content_hash,
             ],
             )?;
             log_change(conn, Change::Revision, &revision_id, &collection_id, kind)?;
@@ -1161,6 +1180,7 @@ impl Vault {
     fn load_collections(&mut self) -> Result<()> {
         self.directory = Directory::load(&self.conn)?;
         self.collections.clear();
+        let catching_up = self.is_replica();
         if self.user().must_set_password {
             return Ok(());
         }
@@ -1190,8 +1210,13 @@ impl Vault {
             let id = parse_id(&id)?;
             let role = parse_role(&role)?;
             let held = self.held(role);
-            // Every grant is sealed again when its collection's key changes (team::new_epoch).
+            // Every grant is sealed again when its collection's key changes (team::new_epoch). A
+            // replica may have the new grant before the new key's event, which comes with the
+            // collection's items (ADR 20): the collection stays closed until it has both.
             if epoch != current {
+                if catching_up {
+                    continue;
+                }
                 return Err(Error::Corrupt(format!(
                     "a grant on collection {id} is from an earlier key"
                 )));
@@ -1202,7 +1227,10 @@ impl Vault {
                 &grant_info(&self.keyring.vault_id, &id, &self.user_id, held, epoch),
             )
             .ok_or_else(|| Error::Corrupt("a collection key does not open".into()))?;
-            let older = older_keys(&self.conn, &self.keyring.vault_id, &id, held, epoch, &key)?;
+            let older = match older_keys(&self.conn, &self.keyring.vault_id, &id, held, epoch, &key) {
+                Err(_) if catching_up => continue,
+                older => older?,
+            };
             collections.push(OpenCollection {
                 id,
                 name,
@@ -1215,7 +1243,7 @@ impl Vault {
             });
         }
         if let Some(organization) = &self.organization {
-            for collection in team::organization_collections(&self.conn, &self.keyring, organization)? {
+            for collection in team::organization_collections(&self.conn, &self.keyring, organization, catching_up)? {
                 match collections.iter_mut().find(|c| c.id == collection.id) {
                     // An admin's own grant may hold only a batch or summary key.
                     Some(granted) => *granted = collection,
@@ -2357,11 +2385,14 @@ mod tests {
     }
 
     /// The change log's entries for collections, in order, as (item, id): what is saved, and the
-    /// events about records, without the directory's.
+    /// events about records, without the directory's or the collection's own making.
     fn changes(vault: &Vault) -> Vec<(String, String)> {
         let mut statement = vault
             .conn
-            .prepare("SELECT item, item_id FROM changes WHERE collection_id IS NOT NULL ORDER BY seq")
+            .prepare(
+                "SELECT item, item_id FROM changes WHERE collection_id IS NOT NULL
+                 AND item_id NOT IN (SELECT id FROM events WHERE type = 'collection-created') ORDER BY seq",
+            )
             .unwrap();
         statement
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))

@@ -119,8 +119,9 @@ pub(crate) struct RevisionFacts<'a> {
     pub supersedes: Option<&'a str>,
     pub author: &'a Uuid,
     pub at: i64,
-    pub nonce: &'a [u8],
-    pub ciphertext: &'a [u8],
+    /// The hash of its nonce and ciphertext (store::content_hash), which a copy without them
+    /// still has.
+    pub content_hash: &'a [u8],
     pub summary: Option<(&'a [u8], &'a [u8])>,
 }
 
@@ -142,7 +143,7 @@ pub(crate) fn revision_payload(facts: &RevisionFacts, signed_as: As, signer: &Uu
         f.supersedes.unwrap_or("-"),
         f.author,
         f.at,
-        hex_hash(&[f.nonce, f.ciphertext]),
+        hex::encode(f.content_hash),
         or_dash(f.summary.map(|(nonce, summary)| hex_hash(&[nonce, summary]))),
     )
     .into_bytes()
@@ -220,6 +221,36 @@ pub(crate) fn certificate_payload(
         "glaze-vault v1 person-certificate vault {vault} person {person} signing {} encryption {} issued {issued_at}",
         hex::encode(signing_key),
         hex::encode(encryption_key)
+    )
+    .into_bytes()
+}
+
+/// What the organization signs to certify a computer: its key, and the people who sign in at it.
+pub(crate) fn device_payload(
+    vault: &Uuid,
+    device: &Uuid,
+    name: &str,
+    signing_key: &[u8],
+    people: &[Uuid],
+    issued_at: i64,
+) -> Vec<u8> {
+    let mut people: Vec<String> = people.iter().map(Uuid::to_string).collect();
+    people.sort();
+    format!(
+        "glaze-vault v1 device-certificate vault {vault} device {device} name {} key {} people {} issued {issued_at}",
+        hex_hash(&[name.as_bytes()]),
+        hex::encode(signing_key),
+        people.join(",")
+    )
+    .into_bytes()
+}
+
+/// What signs a person's key file entry on its way to their computers: who it is, when, and its
+/// JSON as signed.
+pub(crate) fn entry_payload(vault: &Uuid, person: &Uuid, at: i64, entry: &str) -> Vec<u8> {
+    format!(
+        "glaze-vault v1 key-entry vault {vault} person {person} at {at} entry {}",
+        hex_hash(&[entry.as_bytes()])
     )
     .into_bytes()
 }
