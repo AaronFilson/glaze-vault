@@ -114,7 +114,7 @@ jobs:
           GLAZE_PASSWORD: smoke test password
         run: bash .github/host-service.sh
 
-, to try on each system. Releases are built by release.yml.
+  # Unsigned installers for every push, to try on each system. Releases are built by release.yml.
   bundle:
     name: Installers (${{ matrix.name }})
     strategy:
