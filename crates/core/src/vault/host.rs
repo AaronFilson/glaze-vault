@@ -38,6 +38,9 @@ const PAGE: i64 = 500;
 struct HostFile {
     vault_id: Uuid,
     database_key: SealedBox,
+    /// The port to listen on, if not the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
 }
 
 fn host_info(vault_id: &Uuid) -> Vec<u8> {
@@ -51,6 +54,9 @@ pub struct HostStore {
     dir: PathBuf,
     conn: Connection,
     vault: Uuid,
+    /// The seed of its TLS key.
+    identity: Zeroizing<[u8; 32]>,
+    port: Option<u16>,
 }
 
 /// A computer the host syncs with, from its certificate.
@@ -141,6 +147,7 @@ impl Vault {
         let file = HostFile {
             vault_id,
             database_key: crypto::seal_key(&host.public, &database_key, &host_info(&vault_id)),
+            port: None,
         };
         fs::write(dir.join(HOST_FILE), serde_json::to_vec_pretty(&file)?)?;
         write_secret(&dir.join(HOST_KEY), &host.secret)?;
@@ -157,8 +164,10 @@ impl Vault {
         people: &[Uuid],
     ) -> Result<DeviceCertificate> {
         let organization = signing::organization_key(self.admin()?);
-        for person in people {
-            self.keyring.user(person)?;
+        // By the directory, not the key file: an admin's own computer holds only its people's.
+        let directory = Directory::load(&self.conn)?;
+        if people.iter().any(|p| directory.person(*p).is_none()) {
+            return Err(Error::NoSuchPerson);
         }
         let issued_at = now_ms();
         let payload = signing::device_payload(&self.keyring.vault_id, &device, name, signing_key, people, issued_at);
@@ -278,11 +287,61 @@ impl HostStore {
             dir: dir.to_owned(),
             conn,
             vault: file.vault_id,
+            identity: Zeroizing::new(signing::host_key(&host).to_bytes()),
+            port: file.port,
         })
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    pub fn vault_id(&self) -> Uuid {
+        self.vault
+    }
+
+    /// The seed of the host's Ed25519 key, which it shows over TLS.
+    pub fn identity_seed(&self) -> &Zeroizing<[u8; 32]> {
+        &self.identity
+    }
+
+    /// The host's public key, which computers pin.
+    pub fn identity(&self) -> Vec<u8> {
+        signing::public(&ed25519_dalek::SigningKey::from_bytes(&self.identity))
+    }
+
+    /// The port `host.json` names, if any.
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    /// The organization's current signing key, by which a computer knows its own vault's host
+    /// on the network (plan section 4.4).
+    pub fn organization_key(&self) -> Result<Vec<u8>> {
+        Directory::load(&self.conn)?
+            .organization_keys
+            .pop()
+            .ok_or_else(|| Error::Corrupt("the host has no organization key".into()))
+    }
+
+    /// The computer with this signing key, if one was ever added, revoked or not.
+    pub fn device_with_key(&self, signing_key: &[u8]) -> Result<Option<Uuid>> {
+        let id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM devices WHERE signing_key = ?1",
+                params![signing_key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        id.map(|id| parse_id(&id)).transpose()
+    }
+
+    /// Whether one of a computer's people is an admin now, so it may pair others.
+    pub fn is_admin_device(&self, device: Uuid) -> Result<bool> {
+        let device = self.device(device)?;
+        let directory = Directory::load(&self.conn)?;
+        Ok(!device.revoked && device.people.iter().any(|p| directory.is_admin(*p)))
     }
 
     /// Lets a computer sync, from its certificate, which the organization's current key signed.
@@ -381,6 +440,7 @@ impl HostStore {
             device: certificate,
             organization: serde_json::from_str(&self.meta("organization")?)?,
             entries,
+            host_key: self.identity(),
         })
     }
 

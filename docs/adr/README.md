@@ -25,3 +25,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0018](0018-directory-events.md)         | The directory as events, and shared access checks                      | 2026-10-21 |
 | [0019](0019-signatures-and-audit-log.md) | Signed revisions, key certificates and the audit log                   | 2026-10-21 |
 | [0020](0020-sync-core.md)                | The sync core: a blind host, replicas, and what they send each other   | 2026-10-21 |
+| [0021](0021-transport-and-pairing.md)    | The transport and pairing: pinned keys over TLS, a code, and hostd     | 2026-10-21 |

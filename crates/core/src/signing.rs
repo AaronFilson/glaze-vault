@@ -25,6 +25,11 @@ pub(crate) fn organization_key(organization: &KeyPair) -> SigningKey {
     derived(organization, b"glaze-vault v1 organization signing-key")
 }
 
+/// The LAN host's TLS identity, from its X25519 secret (plan section 4.2).
+pub(crate) fn host_key(host: &KeyPair) -> SigningKey {
+    derived(host, b"glaze-vault v1 host signing-key")
+}
+
 fn derived(keys: &KeyPair, info: &[u8]) -> SigningKey {
     let mut seed = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(None, &keys.secret)

@@ -300,6 +300,9 @@ pub struct JoinPackage {
     pub organization: OrganizationEntry,
     /// Each person's key file entry, as signed.
     pub entries: Vec<EntryItem>,
+    /// The host's Ed25519 key, which the computer pins.
+    #[serde(default, with = "serde_bytes")]
+    pub host_key: Vec<u8>,
 }
 
 /// A computer's own signing key, made when it joins, and kept in its replica.
@@ -314,6 +317,11 @@ impl DeviceKey {
             id: Uuid::new_v4(),
             seed: Zeroizing::new(crate::crypto::random()),
         }
+    }
+
+    /// The key's seed, for the computer's TLS identity.
+    pub fn seed(&self) -> &Zeroizing<[u8; 32]> {
+        &self.seed
     }
 
     pub fn public(&self) -> Vec<u8> {

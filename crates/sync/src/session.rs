@@ -15,24 +15,24 @@ const PUSH_BYTES: usize = 4 * 1024 * 1024;
 /// How many pushes one sync makes at most: more waits for the next sync.
 const MAX_PUSHES: usize = 8;
 
-/// The host's side, for a computer the transport has already told it is `device`.
-pub struct HostSession<'a> {
-    host: &'a mut HostStore,
+/// The host's side, for a computer the transport has already told it is `device`. The store is
+/// passed with each message, so a server can share it between connections.
+pub struct HostSession {
     device: Uuid,
     greeted: bool,
 }
 
-impl<'a> HostSession<'a> {
-    pub fn new(host: &'a mut HostStore, device: Uuid) -> HostSession<'a> {
-        HostSession {
-            host,
-            device,
-            greeted: false,
-        }
+impl HostSession {
+    pub fn new(device: Uuid) -> HostSession {
+        HostSession { device, greeted: false }
+    }
+
+    pub fn device(&self) -> Uuid {
+        self.device
     }
 
     /// The answer to a computer's message; none when it says goodbye.
-    pub fn handle(&mut self, message: ClientMsg) -> Result<Option<HostMsg>> {
+    pub fn handle(&mut self, host: &mut HostStore, message: ClientMsg) -> Result<Option<HostMsg>> {
         let refused = |reason: &str| {
             Ok(Some(HostMsg::Refused {
                 reason: reason.to_owned(),
@@ -51,16 +51,17 @@ impl<'a> HostSession<'a> {
                     return refused("the computer is not the one it said it was");
                 }
                 self.greeted = true;
-                Ok(Some(HostMsg::Welcome(self.host.hello(self.device, &levels)?)))
+                Ok(Some(HostMsg::Welcome(host.hello(self.device, &levels)?)))
             }
             _ if !self.greeted => refused("say hello first"),
-            ClientMsg::Pull { cursors, max_bytes } => Ok(Some(HostMsg::Batch(self.host.pull(
+            ClientMsg::Pull { cursors, max_bytes } => Ok(Some(HostMsg::Batch(host.pull(
                 self.device,
                 &cursors,
                 max_bytes as usize,
             )?))),
-            ClientMsg::Push { items } => Ok(Some(HostMsg::PushResult(self.host.accept(self.device, items)?))),
+            ClientMsg::Push { items } => Ok(Some(HostMsg::PushResult(host.accept(self.device, items)?))),
             ClientMsg::Bye => Ok(None),
+            _ => refused("pairing is for the network server"),
         }
     }
 }
@@ -168,7 +169,7 @@ impl ClientSession {
 /// and back, as the transport will carry it: for tests, and for the host computer's own app.
 pub fn sync_in_process(vault: &mut Vault, host: &mut HostStore) -> Result<Report> {
     let device = vault.device()?;
-    let mut host_side = HostSession::new(host, device);
+    let mut host_side = HostSession::new(device);
     let (mut client, mut message) = ClientSession::start(vault)?;
     let (mut to_host, mut to_client) = (Frames::default(), Frames::default());
     loop {
@@ -176,7 +177,7 @@ pub fn sync_in_process(vault: &mut Vault, host: &mut HostStore) -> Result<Report
         let received: ClientMsg = to_host
             .read()?
             .ok_or_else(|| Error::Protocol("a frame cut short".into()))?;
-        let Some(answer) = host_side.handle(received)? else {
+        let Some(answer) = host_side.handle(host, received)? else {
             return Ok(client.report().clone());
         };
         to_client.push(&frame(&answer)?);

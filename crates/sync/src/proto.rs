@@ -2,7 +2,7 @@
 //! as CBOR, which is compact for bytes and lets fields be added later (plan section 3.8).
 
 use crate::{Error, Result};
-use glaze_vault_core::sync::{Batch, Item, Level, PushResult, Scope, Welcome};
+use glaze_vault_core::sync::{Batch, DeviceCertificate, Item, JoinPackage, Level, PushResult, Scope, Welcome};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -32,6 +32,27 @@ pub enum ClientMsg {
         items: Vec<Item>,
     },
     Bye,
+    /// An admin's computer asks for a pairing code (plan section 4.3).
+    StartPairing,
+    /// The admin's computer waits for a new computer to use the code.
+    AwaitPairing,
+    /// The admin lets the new computer join, for the people its certificate names.
+    ApproveDevice {
+        certificate: DeviceCertificate,
+    },
+    /// A new computer's first SPAKE2 message, from the code.
+    Pair {
+        #[serde(with = "serde_bytes")]
+        spake: Vec<u8>,
+    },
+    /// The new computer's proof that it has the code, bound to this TLS session, and who it is.
+    /// Its signing key is the one it shows over TLS.
+    PairConfirm {
+        #[serde(with = "serde_bytes")]
+        mac: Vec<u8>,
+        device: Uuid,
+        name: String,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -40,6 +61,31 @@ pub enum HostMsg {
     Welcome(Welcome),
     Batch(Batch),
     PushResult(PushResult),
+    /// The pairing code to read out, and until when it works (ms since the epoch).
+    PairingCode {
+        code: String,
+        expires_at: i64,
+    },
+    /// A computer used the code: its name and key, for the admin to check and approve.
+    PairingFinished {
+        device: Uuid,
+        name: String,
+        #[serde(with = "serde_bytes")]
+        signing_key: Vec<u8>,
+    },
+    Approved,
+    /// The host's SPAKE2 message.
+    PairChallenge {
+        #[serde(with = "serde_bytes")]
+        spake: Vec<u8>,
+    },
+    /// The host's proof that it has the code too.
+    PairConfirmed {
+        #[serde(with = "serde_bytes")]
+        mac: Vec<u8>,
+    },
+    /// What the new computer needs to join, once the admin approved it.
+    Joined(Box<JoinPackage>),
     /// The host will not go on, and why.
     Refused {
         reason: String,
