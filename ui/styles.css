@@ -1121,3 +1121,10 @@ input.short {
   font-weight: 600;
   margin-bottom: 0.25rem;
 }
+
+.pairing-code {
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.1em;
+  margin: 0.5rem 0;
+}

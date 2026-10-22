@@ -50,7 +50,12 @@ saved recipes.
 
 ## The network
 
-Glaze Vault's only network connection is the check for updates, which asks GitHub for the
-newest version number: nothing from your vault is sent. You can turn it off in
+A vault that is not [served on your network](hosting.md) makes one connection only: the check
+for updates. A vault that is served is reached only on your own network, over an encrypted
+connection to a computer it was paired with; the service that serves it holds no key to the
+recipes, so it cannot read them, or show them to anyone.
+
+The check for updates asks GitHub for the newest version number: nothing from your vault is
+sent. You can turn it off in
 [Settings](settings.md#updates). Updates are checked against Glaze Vault's own signing key
 before they install, so a changed or older download is refused.

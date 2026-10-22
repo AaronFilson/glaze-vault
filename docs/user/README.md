@@ -23,7 +23,8 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 9. [Printing](printing.md): a recipe, or a batch sheet for weighing out
 10. [Backups and export](backups.md): keeping a safe copy, moving to a new computer
 11. [Importing](importing.md): recipes and materials from other programs and spreadsheets
-12. [Sharing a vault with others](sharing.md): people, roles and collections
+12. [Sharing a vault with others](sharing.md): people, roles and collections, and
+    [serving it on your network](hosting.md)
 13. [Settings](settings.md): locking by itself, your password, updates
 14. [Who did what](audit-log.md): who saved each revision, and the audit log
 15. [How your recipes are protected](security.md)

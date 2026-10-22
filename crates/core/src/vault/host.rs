@@ -15,8 +15,8 @@ use crate::keyring::PersonEntry;
 use crate::signing::{self, As};
 use crate::store;
 use crate::sync::{
-    Batch, DeviceCertificate, EntryItem, Item, JoinPackage, Level, OrganizationEntry, Pulled, PushResult, Refusal,
-    Scope, Welcome,
+    Batch, DeviceCertificate, DeviceInfo, EntryItem, Item, JoinPackage, Level, OrganizationEntry, Pulled, PushResult,
+    Refusal, Scope, Welcome,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -371,6 +371,32 @@ impl HostStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// Every computer added, revoked ones too, oldest first.
+    pub fn devices(&self) -> Result<Vec<DeviceInfo>> {
+        self.conn
+            .prepare("SELECT id, name, people, issued_at, revoked_at IS NOT NULL FROM devices ORDER BY issued_at")?
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, bool>(4)?,
+                ))
+            })?
+            .map(|row| {
+                let (id, name, people, issued_at, revoked) = row?;
+                Ok(DeviceInfo {
+                    id: parse_id(&id)?,
+                    name,
+                    people: serde_json::from_str(&people)?,
+                    issued_at,
+                    revoked,
+                })
+            })
+            .collect()
     }
 
     fn device(&self, id: Uuid) -> Result<Device> {

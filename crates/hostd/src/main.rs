@@ -1,54 +1,47 @@
-//! The LAN host's daemon (docs/adr/0021-transport-and-pairing.md). For now it runs in the
-//! foreground only: `hostd run <host-dir>`. Installing it as a service is stage 6 of the plan.
+//! The LAN host's daemon (docs/adr/0021-transport-and-pairing.md, 0022-host-mode.md).
+//!
+//!   hostd run <host-dir> [--port N] [--port-file FILE] [--name NAME] [--no-mdns]
+//!   hostd install --from <staging-dir> [--port N] [--name NAME]     elevated
+//!   hostd uninstall [--keep-data]                                   elevated
+//!   hostd status
+//!
+//! `run` serves in the foreground. `install` moves a host's store, made by the app, into the
+//! system's data folder and runs this same binary there as a service from boot.
 
-use glaze_vault_core::HostStore;
-use glaze_vault_sync::net::{self, DEFAULT_PORT, Server};
+mod log_to;
+mod serve;
+mod service;
+
+use serve::Options;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: hostd run <host-dir> [--port N] [--name NAME] [--no-mdns]";
+const USAGE: &str = "usage: hostd run <host-dir> [--port N] [--port-file FILE] [--name NAME] [--no-mdns]
+       hostd install --from <staging-dir> [--port N] [--name NAME]
+       hostd uninstall [--keep-data]
+       hostd status";
 
-/// Writes the log to standard error.
-struct Stderr;
+/// The name the host is advertised by when none is given.
+pub const DEFAULT_NAME: &str = "Glaze Vault host";
 
-impl log::Log for Stderr {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
-    }
-
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            eprintln!("{} {}", record.level(), record.args());
-        }
-    }
-
-    fn flush(&self) {}
+fn port(text: Option<String>) -> Result<u16, String> {
+    let text = text.ok_or(USAGE)?;
+    text.parse().map_err(|_| format!("not a port: {text}"))
 }
 
-struct Options {
-    dir: PathBuf,
-    port: Option<u16>,
-    name: Option<String>,
-    mdns: bool,
-}
-
-fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
-    if args.next().as_deref() != Some("run") {
-        return Err(USAGE.into());
-    }
-    let dir = PathBuf::from(args.next().ok_or(USAGE)?);
+/// `run`'s options, after the folder.
+pub fn run_options(dir: PathBuf, mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
         dir,
         port: None,
+        port_file: None,
         name: None,
         mdns: true,
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--port" => {
-                let port = args.next().ok_or(USAGE)?;
-                options.port = Some(port.parse().map_err(|_| format!("not a port: {port}"))?);
-            }
+            "--port" => options.port = Some(port(args.next())?),
+            "--port-file" => options.port_file = Some(PathBuf::from(args.next().ok_or(USAGE)?)),
             "--name" => options.name = Some(args.next().ok_or(USAGE)?),
             "--no-mdns" => options.mdns = false,
             _ => return Err(USAGE.into()),
@@ -57,59 +50,60 @@ fn options(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     Ok(options)
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    let _ = log::set_logger(&Stderr).map(|()| log::set_max_level(log::LevelFilter::Info));
-    let options = match options(std::env::args().skip(1)) {
-        Ok(options) => options,
-        Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::from(2);
+fn main() -> ExitCode {
+    let mut args = std::env::args().skip(1);
+    let command = args.next().unwrap_or_default();
+    let done = match command.as_str() {
+        "run" => {
+            log_to::stderr();
+            args.next()
+                .ok_or_else(|| USAGE.to_owned())
+                .and_then(|dir| run_options(PathBuf::from(dir), args))
+                .and_then(|options| {
+                    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+                    runtime.block_on(serve::serve(options, async {
+                        let _ = tokio::signal::ctrl_c().await;
+                    }))
+                })
         }
+        "service" => service::run_as_service(args.collect()),
+        "install" => {
+            let mut from = None;
+            let (mut port_arg, mut name) = (None, None);
+            let mut bad = false;
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--from" => from = args.next().map(PathBuf::from),
+                    "--port" => port_arg = Some(args.next()),
+                    "--name" => name = args.next(),
+                    _ => bad = true,
+                }
+            }
+            match (from, bad) {
+                (Some(from), false) => port_arg.map(port).transpose().and_then(|port| {
+                    service::install(
+                        &from,
+                        port.unwrap_or(glaze_vault_sync::net::DEFAULT_PORT),
+                        name.as_deref().unwrap_or(DEFAULT_NAME),
+                    )
+                }),
+                _ => Err(USAGE.into()),
+            }
+        }
+        "uninstall" => match args.next().as_deref() {
+            None => service::uninstall(false),
+            Some("--keep-data") => service::uninstall(true),
+            Some(_) => Err(USAGE.into()),
+        },
+        "status" => service::status().map(|status| println!("{status}")),
+        _ => Err(USAGE.into()),
     };
-    match run(options).await {
+    match done {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
+            eprintln!("{message}");
             log::error!("{message}");
             ExitCode::FAILURE
-        }
-    }
-}
-
-async fn run(options: Options) -> Result<(), String> {
-    let host = HostStore::open(&options.dir).map_err(|e| format!("the host's store does not open: {e}"))?;
-    let port = options.port.or(host.port()).unwrap_or(DEFAULT_PORT);
-    let organization_key = host.organization_key().map_err(|e| e.to_string())?;
-    log::info!(
-        "vault {}, host key {}",
-        host.vault_id(),
-        net::fingerprint(&host.identity())
-    );
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
-        .await
-        .map_err(|e| format!("port {port}: {e}"))?;
-    log::info!("listening on port {port}");
-    let _advertised = if options.mdns {
-        let name = options.name.unwrap_or_else(|| "Glaze Vault host".into());
-        match net::advertise(&name, port, &organization_key) {
-            Ok(advertised) => {
-                log::info!("advertising \"{name}\" by mDNS");
-                Some(advertised)
-            }
-            Err(e) => {
-                log::warn!("not advertised by mDNS: {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let server = Server::new(host);
-    tokio::select! {
-        served = net::serve(listener, server) => served.map_err(|e| e.to_string()),
-        _ = tokio::signal::ctrl_c() => {
-            log::info!("stopping");
-            Ok(())
         }
     }
 }

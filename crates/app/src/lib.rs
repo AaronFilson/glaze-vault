@@ -2,6 +2,8 @@
 //! (docs/adr/0001-tauri-rust-react.md). File dialogs open from here, not from the page, so the
 //! page never chooses where files are written.
 
+mod network;
+
 use glaze_vault_core::{
     Attachment, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error, Grant, Kind,
     LastBackup, MAX_ATTACHMENT_BYTES, Note, Person, Revision, Role, SetAside, Settings, Vault,
@@ -927,6 +929,7 @@ pub fn run() {
                 Some(dir) => PathBuf::from(dir),
                 None => app.path().app_local_data_dir()?.join("vault"),
             };
+            app.manage(network::Network::default());
             app.manage(AppState {
                 dir,
                 vault: Mutex::new(None),
@@ -994,6 +997,15 @@ pub fn run() {
             set_preferences,
             check_for_update,
             install_update,
+            network::network_status,
+            network::sync_now,
+            network::start_hosting,
+            network::stop_hosting,
+            network::start_pairing,
+            network::wait_for_pairing,
+            network::approve_pairing,
+            network::cancel_pairing,
+            network::devices,
             #[cfg(debug_assertions)]
             dev_screen,
             #[cfg(debug_assertions)]

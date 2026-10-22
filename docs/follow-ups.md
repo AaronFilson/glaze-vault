@@ -33,10 +33,13 @@ Work decided on but not done yet, with the reason it waits.
   checks ([ADR 18](adr/0018-directory-events.md)); and signed revisions, key certificates and the
   audit log ([ADR 19](adr/0019-signatures-and-audit-log.md)); and the sync core, a blind host and
   replicas tested without a network ([ADR 20](adr/0020-sync-core.md)); and the transport, pairing
-  and `hostd` in the foreground ([ADR 21](adr/0021-transport-and-pairing.md)). Stage 6, host mode
-  in the app, is next.
-- Left from the transport: the organization certifying the host key at conversion (stage 6); the
-  offline secret from pairing (stage 8).
+  and `hostd` in the foreground ([ADR 21](adr/0021-transport-and-pairing.md)); and host mode in the
+  app ([ADR 22](adr/0022-host-mode.md)). Stage 7, client mode, is next.
+- Left from the transport and host mode: the organization certifying the host key at conversion;
+  the offline secret from pairing (stage 8); hostd under a user of its own on macOS
+  (`_glazevault`) and `host.key` under DPAPI on Windows; MSI updates on a computer that serves
+  (only the NSIS installer stops the service); trying the Windows service and updates on a real
+  install; `SMAppService` once macOS 12 support is dropped.
 - Left from the sync core, for the stages that need them: the host keeping and signing the audit
   log (the computers' logs stay on them for now); a new organization recovery sheet or key reaching
   every computer's key file; resetting someone, or making or taking an admin, from a computer that

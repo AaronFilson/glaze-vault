@@ -9,7 +9,7 @@ mod pairing;
 mod server;
 mod tls;
 
-pub use client::{AdminPairing, Finished, pair, sync};
+pub use client::{AdminPairing, Finished, devices, pair, sync};
 pub use conn::Conn;
 pub use discover::{Advertised, Found, SERVICE, advertise, browse, vault_tag};
 pub use pairing::{CODE_LIFETIME, fingerprint};
