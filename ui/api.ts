@@ -250,6 +250,45 @@ function filled<Content>(revision: Revision<Content>): Revision<Content> {
   return { ...revision, content: { ...content, lines: content.lines ?? [], notes: content.notes ?? '' } as Content };
 }
 
+/** Whether this vault syncs with a LAN host, and whether it can serve as one
+ * (docs/adr/0022-host-mode.md). */
+export interface NetworkStatus {
+  replica: boolean;
+  /** The host is on this computer. */
+  hostHere: boolean;
+  hostAddress: string | null;
+  /** hostd is installed beside the app. */
+  canHost: boolean;
+  defaultPort: number;
+}
+
+export interface SyncReport {
+  pulled: number;
+  accepted: number;
+  refused: number;
+}
+
+export interface PairingCode {
+  code: string;
+  expiresAt: number;
+}
+
+/** A computer that used a pairing code, for the admin to compare with what it shows. */
+export interface PairingComputer {
+  device: string;
+  name: string;
+  fingerprint: string;
+}
+
+/** A computer that syncs with the host. */
+export interface Device {
+  id: string;
+  name: string;
+  people: string[];
+  issuedAt: number;
+  revoked: boolean;
+}
+
 export const api = {
   status: () => invoke<VaultStatus>('vault_status'),
   /** Makes the vault, leaves it unlocked, and returns the 24 recovery words. */
@@ -336,6 +375,17 @@ export const api = {
   /** Tells the audit log what the page did. Failing to does not stop the page. */
   note: (note: Note) => invoke<void>('note', { note }),
   /** The audit log, newest first: `limit` entries, or all. For an admin. */
+  networkStatus: () => invoke<NetworkStatus>('network_status'),
+  syncNow: () => invoke<SyncReport>('sync_now'),
+  /** Serves the vault from this computer; the system asks for an administrator. */
+  startHosting: (port: number | null, name: string) => invoke<SyncReport>('start_hosting', { port, name }),
+  /** Stops serving; unless `anyway`, only after a last sync works. */
+  stopHosting: (anyway: boolean) => invoke<void>('stop_hosting', { anyway }),
+  startPairing: () => invoke<PairingCode>('start_pairing'),
+  waitForPairing: () => invoke<PairingComputer>('wait_for_pairing'),
+  approvePairing: (people: string[]) => invoke<void>('approve_pairing', { people }),
+  cancelPairing: () => invoke<void>('cancel_pairing'),
+  devices: () => invoke<Device[]>('devices'),
   auditLog: (limit: number | null) => invoke<AuditLog>('audit_log', { limit }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),

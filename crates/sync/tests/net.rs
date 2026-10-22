@@ -206,3 +206,43 @@ async fn the_host_refuses_a_key_it_does_not_know_and_computers_refuse_a_host_the
     assert!(raw(&lan.address, Some(wrong_pin)).await.is_err());
     assert!(raw(&lan.address, Some(lan.ana.host_key().unwrap())).await.is_ok());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_host_computers_own_vault_syncs_with_the_host_it_became_and_lists_its_computers() {
+    let (dir, staging) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+    vault.grow_into_team("Ana").unwrap();
+    let shared = vault.collections().iter().find(|c| c.owner.is_none()).unwrap().id;
+    vault
+        .save_in(
+            Kind::Recipe,
+            shared,
+            &json!({ "name": "Shino", "lines": [], "notes": "" }),
+        )
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let host = vault.convert_to_host(&staging.path().join("host"), &address).unwrap();
+    tokio::spawn(net::serve(listener, Server::new(host)));
+
+    let report = net::sync(&mut vault, &address).await.unwrap();
+    assert_eq!(report.accepted, 0);
+    let head = vault.heads(Kind::Recipe).unwrap().remove(0);
+    vault
+        .save(
+            Kind::Recipe,
+            Some(head.revision_id),
+            &json!({ "name": "Shino 2", "lines": [], "notes": "" }),
+        )
+        .unwrap();
+    assert_eq!(net::sync(&mut vault, &address).await.unwrap().accepted, 1);
+    assert_eq!(vault.heads(Kind::Recipe).unwrap().len(), 1);
+
+    let devices = net::devices(&vault, &address).await.unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].name, "The host computer");
+
+    vault.stop_syncing().unwrap();
+    assert!(net::sync(&mut vault, &address).await.is_err());
+    assert_eq!(vault.heads(Kind::Recipe).unwrap().len(), 1);
+}

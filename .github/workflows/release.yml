@@ -134,6 +134,10 @@ jobs:
         shell: pwsh
         run: '"OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append'
 
+      - name: Build hostd for the installers
+        shell: bash
+        run: node .github/sidecar.cjs ${{ matrix.args }}
+
       - uses: tauri-apps/tauri-action@v1
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -150,4 +154,4 @@ jobs:
           # For copies that do not say how they were installed: the NSIS installer, which installs
           # for the current user and so needs no administrator.
           updaterJsonPreferNsis: true
-          args: --config ${{ github.workspace }}/release-config.json ${{ matrix.args }}
+          args: --config ${{ github.workspace }}/release-config.json --config ${{ github.workspace }}/crates/app/tauri.sidecar.conf.json ${{ matrix.args }}

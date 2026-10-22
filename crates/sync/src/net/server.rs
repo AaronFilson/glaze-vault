@@ -152,6 +152,16 @@ impl Server {
                 ClientMsg::StartPairing => self.start_pairing(session.as_ref()),
                 ClientMsg::AwaitPairing => self.await_pairing(session.as_ref()).await,
                 ClientMsg::ApproveDevice { certificate } => self.approve(session.as_ref(), &certificate),
+                ClientMsg::ListDevices => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer lists computers"),
+                    Some(_) => {
+                        let devices = self.host().devices();
+                        match devices {
+                            Ok(devices) => HostMsg::Devices(devices),
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
                 message => {
                     let Some(session) = session.as_mut() else {
                         conn.send(&refused("this computer is not paired with the host")).await?;

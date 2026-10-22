@@ -2,7 +2,9 @@
 //! as CBOR, which is compact for bytes and lets fields be added later (plan section 3.8).
 
 use crate::{Error, Result};
-use glaze_vault_core::sync::{Batch, DeviceCertificate, Item, JoinPackage, Level, PushResult, Scope, Welcome};
+use glaze_vault_core::sync::{
+    Batch, DeviceCertificate, DeviceInfo, Item, JoinPackage, Level, PushResult, Scope, Welcome,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -40,6 +42,8 @@ pub enum ClientMsg {
     ApproveDevice {
         certificate: DeviceCertificate,
     },
+    /// An admin's computer asks which computers sync.
+    ListDevices,
     /// A new computer's first SPAKE2 message, from the code.
     Pair {
         #[serde(with = "serde_bytes")]
@@ -74,6 +78,7 @@ pub enum HostMsg {
         signing_key: Vec<u8>,
     },
     Approved,
+    Devices(Vec<DeviceInfo>),
     /// The host's SPAKE2 message.
     PairChallenge {
         #[serde(with = "serde_bytes")]

@@ -279,6 +279,17 @@ pub struct DeviceCertificate {
     pub signature: Vec<u8>,
 }
 
+/// A computer the host syncs with, as an admin sees it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub people: Vec<Uuid>,
+    pub issued_at: i64,
+    pub revoked: bool,
+}
+
 /// The organization part of the key file that every computer keeps: its public key, and its
 /// private key under its recovery key.
 #[derive(Clone, Serialize, Deserialize)]

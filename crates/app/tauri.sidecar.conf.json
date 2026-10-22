@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/hostd"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/hooks.nsh"
+      }
+    }
+  }
+}

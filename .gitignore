@@ -132,3 +132,6 @@ dist
 # Rust and Tauri
 target/
 crates/app/gen/
+
+# hostd built for the installers (.github/sidecar.cjs)
+crates/app/binaries/

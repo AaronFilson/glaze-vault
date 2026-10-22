@@ -8,7 +8,7 @@ use crate::proto::{ClientMsg, HostMsg};
 use crate::session::{ClientSession, Report};
 use crate::{Error, Result};
 use glaze_vault_core::Vault;
-use glaze_vault_core::sync::DeviceKey;
+use glaze_vault_core::sync::{DeviceInfo, DeviceKey};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,6 +71,30 @@ pub async fn sync(vault: &mut Vault, address: &str) -> Result<Report> {
             return Ok(report);
         }
         message = session.handle(vault, conn.recv().await?)?;
+    }
+}
+
+/// The computers that sync with the host, for an admin's computer.
+pub async fn devices(vault: &Vault, address: &str) -> Result<Vec<DeviceInfo>> {
+    let mut conn = greeted(vault, address).await?;
+    conn.send(&ClientMsg::ListDevices).await?;
+    let answer = conn.recv().await?;
+    let _ = conn.send(&ClientMsg::Bye).await;
+    conn.close().await;
+    match answer {
+        HostMsg::Devices(devices) => Ok(devices),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// A replica's connection, past hello.
+async fn greeted(vault: &Vault, address: &str) -> Result<Conn<Stream>> {
+    let mut conn = connect_replica(vault, address).await?;
+    let (_, hello) = ClientSession::start(vault)?;
+    conn.send(&hello).await?;
+    match conn.recv().await? {
+        HostMsg::Welcome(_) => Ok(conn),
+        other => Err(unexpected(other)),
     }
 }
 
@@ -151,13 +175,7 @@ pub struct AdminPairing {
 
 impl AdminPairing {
     pub async fn start(vault: &Vault, address: &str) -> Result<AdminPairing> {
-        let mut conn = connect_replica(vault, address).await?;
-        let (_, hello) = ClientSession::start(vault)?;
-        conn.send(&hello).await?;
-        match conn.recv().await? {
-            HostMsg::Welcome(_) => {}
-            other => return Err(unexpected(other)),
-        }
+        let mut conn = greeted(vault, address).await?;
         conn.send(&ClientMsg::StartPairing).await?;
         match conn.recv().await? {
             HostMsg::PairingCode { code, expires_at } => Ok(AdminPairing { conn, code, expires_at }),

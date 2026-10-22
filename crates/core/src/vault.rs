@@ -7,6 +7,7 @@ mod attachments;
 mod audit;
 mod events;
 mod host;
+mod hosting;
 mod items;
 mod moving;
 mod replica;

@@ -185,6 +185,20 @@ export function Recipes({
       .catch((e) => setError(errorText(e)));
   };
 
+  // A vault that syncs with a host syncs every half minute while open, and shows what came
+  // (docs/adr/0022-host-mode.md). Stage 7 of the LAN plan moves this into the app's core.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        if (!(await api.networkStatus()).replica) return;
+        if ((await api.syncNow()).pulled) reloadAccess();
+      } catch {
+        // The host is out of reach for now; the next try may work.
+      }
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     (async () => {
       const [now, heads, ownMaterials, gone, goneMaterials, settings, last, draft, batchSheets, allFirings, limits, priceLists, allMixes] =

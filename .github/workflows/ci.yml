@@ -81,7 +81,40 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm run e2e; else npm run e2e; fi
 
-  # Unsigned installers for every push, to try on each system. Releases are built by release.yml.
+  # Installs hostd as a real service on each system, syncs with it, and removes it
+  # (docs/adr/0022-host-mode.md): what `tauri dev` and the tests cannot reach.
+  host-service:
+    name: Host service (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: host-service
+
+      # Bash on Windows finds Git's Perl first, which lacks modules OpenSSL's build needs.
+      - name: Use Strawberry Perl for OpenSSL
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append'
+
+      - name: Build hostd and the dev client
+        run: cargo build --locked -p glaze-vault-hostd --bins --examples
+
+      - name: Install, sync, uninstall
+        shell: bash
+        env:
+          GLAZE_PASSWORD: smoke test password
+        run: bash .github/host-service.sh
+
+, to try on each system. Releases are built by release.yml.
   bundle:
     name: Installers (${{ matrix.name }})
     strategy:
@@ -132,12 +165,16 @@ jobs:
         shell: pwsh
         run: '"OPENSSL_SRC_PERL=C:\Strawberry\perl\bin\perl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append'
 
+      - name: Build hostd for the installers
+        shell: bash
+        run: node .github/sidecar.cjs ${{ matrix.args }}
+
       # On failure, the end of the output also goes into an annotation (.github/annotate.cjs).
       - name: Build installers
         shell: bash
         run: |
           set -o pipefail
-          npx tauri build --ci ${{ matrix.args }} 2>&1 | tee build.log || {
+          npx tauri build --ci --config crates/app/tauri.sidecar.conf.json ${{ matrix.args }} 2>&1 | tee build.log || {
             node .github/annotate.cjs build.log "tauri build failed"
             exit 1
           }

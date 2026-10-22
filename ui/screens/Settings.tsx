@@ -17,6 +17,7 @@ import type { Firing } from '../firing';
 import { ImportError, readImport, type ImportPlan } from '../importFormats';
 import { editableCollections, may } from '../team';
 import { AuditLog } from './AuditLog';
+import { Network } from './Network';
 import { NewPassword } from './NewPassword';
 import { ManagedPeople, People, ShareVault } from './Team';
 
@@ -141,6 +142,11 @@ export function Settings({
           version={status.version}
           partly={[recipes, materials, firings].some((list) => exportable<{ collectionId?: string }>(list).length < list.length)}
         />
+      )}
+      {admin && team && (
+        <Section title="Network">
+          <Network people={status.people} onChanged={onTeamChanged} />
+        </Section>
       )}
       {admin && access && (
         <Section title="Audit log">
