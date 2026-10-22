@@ -1,6 +1,7 @@
 // Builds hostd for the installers, as Tauri's sidecar (crates/app/tauri.sidecar.conf.json): a
 // release build, at crates/app/binaries/hostd-<target triple>, which Tauri puts beside the app.
-// `node .github/sidecar.cjs [--target <triple>]`; universal-apple-darwin is both Macs, joined.
+// `node .github/sidecar.cjs [--target <triple>]`; universal-apple-darwin is both Macs, joined,
+// and each on its own too, since Tauri builds the app once for each before joining them.
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -22,7 +23,9 @@ const build = (triple) => {
 
 const dest = path.join(out, `hostd-${target}${exe}`);
 if (target === 'universal-apple-darwin') {
-  const parts = ['aarch64-apple-darwin', 'x86_64-apple-darwin'].map(build);
+  const triples = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+  const parts = triples.map(build);
+  triples.forEach((triple, i) => fs.copyFileSync(parts[i], path.join(out, `hostd-${triple}`)));
   execFileSync('lipo', ['-create', '-output', dest, ...parts], { stdio: 'inherit' });
 } else {
   fs.copyFileSync(build(target), dest);
