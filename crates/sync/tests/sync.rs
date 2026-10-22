@@ -121,30 +121,33 @@ fn messages_cross_in_frames_split_anywhere() {
 fn a_host_talks_only_to_the_computer_the_transport_vouched_for() {
     let mut t = team(&[("Ben", Role::Formulator)]);
     let ben = t.computers[1].device().unwrap();
-    let mut session = HostSession::new(&mut t.host, ben);
+    let mut session = HostSession::new(ben);
     let pull = ClientMsg::Pull {
         cursors: Vec::new(),
         max_bytes: 1000,
     };
-    assert!(matches!(session.handle(pull).unwrap(), Some(HostMsg::Refused { .. })));
+    assert!(matches!(
+        session.handle(&mut t.host, pull).unwrap(),
+        Some(HostMsg::Refused { .. })
+    ));
     let hello = |protocol, device| ClientMsg::Hello {
         protocol,
         device,
         levels: Vec::new(),
     };
     assert!(matches!(
-        session.handle(hello(PROTOCOL + 1, ben)).unwrap(),
+        session.handle(&mut t.host, hello(PROTOCOL + 1, ben)).unwrap(),
         Some(HostMsg::Refused { .. })
     ));
     assert!(matches!(
-        session.handle(hello(PROTOCOL, Uuid::new_v4())).unwrap(),
+        session.handle(&mut t.host, hello(PROTOCOL, Uuid::new_v4())).unwrap(),
         Some(HostMsg::Refused { .. })
     ));
     assert!(matches!(
-        session.handle(hello(PROTOCOL, ben)).unwrap(),
+        session.handle(&mut t.host, hello(PROTOCOL, ben)).unwrap(),
         Some(HostMsg::Welcome(_))
     ));
-    assert!(session.handle(ClientMsg::Bye).unwrap().is_none());
+    assert!(session.handle(&mut t.host, ClientMsg::Bye).unwrap().is_none());
 }
 
 #[test]

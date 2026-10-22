@@ -74,6 +74,7 @@ impl Vault {
             ("device", device.id.to_string()),
             ("device_key", hex::encode(*device.seed)),
             ("device_certificate", certificate),
+            ("host_key", hex::encode(&package.host_key)),
         ] {
             tx.execute("INSERT INTO meta (name, value) VALUES (?1, ?2)", params![name, value])?;
         }
@@ -82,6 +83,25 @@ impl Vault {
         }
         tx.commit()?;
         keyring.write(&dir.join(KEYRING_FILE))
+    }
+
+    /// This computer's own key, which it shows the host over TLS.
+    pub fn device_key(&self) -> Result<DeviceKey> {
+        let seed = self.meta("device_key")?.ok_or(Error::NotAllowed)?;
+        let seed: [u8; 32] = hex::decode(seed)
+            .ok()
+            .and_then(|seed| seed.try_into().ok())
+            .ok_or_else(|| Error::Corrupt("the computer's key is not valid".into()))?;
+        Ok(DeviceKey {
+            id: self.device()?,
+            seed: zeroize::Zeroizing::new(seed),
+        })
+    }
+
+    /// The host's key, pinned when this computer joined.
+    pub fn host_key(&self) -> Result<Vec<u8>> {
+        let key = self.meta("host_key")?.ok_or(Error::NotAllowed)?;
+        hex::decode(key).map_err(|_| Error::Corrupt("the host's key is not valid".into()))
     }
 
     pub fn is_replica(&self) -> bool {

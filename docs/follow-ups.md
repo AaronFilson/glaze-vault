@@ -32,8 +32,11 @@ Work decided on but not done yet, with the reason it waits.
   forks ([ADR 17](adr/0017-key-epochs-change-log.md)); the directory as events and shared access
   checks ([ADR 18](adr/0018-directory-events.md)); and signed revisions, key certificates and the
   audit log ([ADR 19](adr/0019-signatures-and-audit-log.md)); and the sync core, a blind host and
-  replicas tested without a network ([ADR 20](adr/0020-sync-core.md)). Stage 5, the transport,
-  pairing and `hostd` in the foreground, is next.
+  replicas tested without a network ([ADR 20](adr/0020-sync-core.md)); and the transport, pairing
+  and `hostd` in the foreground ([ADR 21](adr/0021-transport-and-pairing.md)). Stage 6, host mode
+  in the app, is next.
+- Left from the transport: the organization certifying the host key at conversion (stage 6); the
+  offline secret from pairing (stage 8).
 - Left from the sync core, for the stages that need them: the host keeping and signing the audit
   log (the computers' logs stay on them for now); a new organization recovery sheet or key reaching
   every computer's key file; resetting someone, or making or taking an admin, from a computer that
