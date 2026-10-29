@@ -234,6 +234,14 @@ function customLabel(role: CustomRole): string {
   return `${role.name}: ${kinds.length ? `changes ${kinds.join(', ')}` : 'reads'}${also.length ? `, ${also.join(', ')}` : ''}`;
 }
 
+/** Every role but an admin's, with the admin's own ones, for choosing one. */
+export function roleChoices(custom: CustomRole[]): { role: Role; label: string }[] {
+  return [
+    ...ROLES.filter((r): r is { role: Role; label: string } => r.role !== ''),
+    ...custom.map((r) => ({ role: `role:${r.id}` as Role, label: customLabel(r) }))
+  ];
+}
+
 /** Settings for a team's admin: people, what each may do in each collection, and collections. */
 export function People({
   access,

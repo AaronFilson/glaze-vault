@@ -134,4 +134,25 @@ describe('the network section', () => {
       expect(calls).toContainEqual(['set_offline_policy', { policy: { nagDays: 14, limitDays: 30, byRole: [] } }])
     );
   });
+
+  it('sets a stricter rule for a role', async () => {
+    const calls: [string, unknown][] = [];
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'network_status') return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917' });
+      if (command === 'offline_policy') return { nagDays: 14, limitDays: null, byRole: [] };
+      if (command === 'custom_roles') return [];
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    fireEvent.change(await screen.findByLabelText('A stricter rule for a role'), { target: { value: 'tester' } });
+    fireEvent.change(screen.getByLabelText('Remind Tester: logs firings after'), { target: { value: '7' } });
+    fireEvent.change(screen.getByLabelText('Stop Tester: logs firings after'), { target: { value: '21' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save the rule' }));
+    await waitFor(() =>
+      expect(calls).toContainEqual([
+        'set_offline_policy',
+        { policy: { nagDays: 14, limitDays: null, byRole: [{ role: 'tester', nagDays: 7, limitDays: 21 }] } }
+      ])
+    );
+  });
 });

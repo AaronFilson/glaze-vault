@@ -7,10 +7,13 @@ import {
   type PairingCode,
   type PairingComputer,
   type OfflinePolicy,
+  type Role,
   type Person,
   type Revoked,
   type SyncStatus
 } from '../api';
+
+import { roleChoices } from './Team';
 
 const when = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -420,10 +423,16 @@ function Devices({ people, own }: { people: Person[]; own: string | null }) {
 }
 
 /** The rule for computers away from the host, for an admin. */
+type RoleRow = { role: Role; nag: string; limit: string };
+
+const days = (text: string) => (text.trim() ? Number(text) : null);
+
 function OfflineRule() {
   const [policy, setPolicy] = useState<OfflinePolicy | null>(null);
   const [nag, setNag] = useState('');
   const [limit, setLimit] = useState('');
+  const [byRole, setByRole] = useState<RoleRow[]>([]);
+  const [choices, setChoices] = useState<{ role: Role; label: string }[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
@@ -432,15 +441,24 @@ function OfflineRule() {
       setPolicy(p);
       setNag(String(p.nagDays));
       setLimit(p.limitDays === null ? '' : String(p.limitDays));
+      setByRole(p.byRole.map((r) => ({ role: r.role, nag: String(r.nagDays), limit: r.limitDays === null ? '' : String(r.limitDays) })));
     }, () => {});
+    api.customRoles().then((custom) => setChoices(roleChoices(custom ?? [])), () => setChoices(roleChoices([])));
   }, []);
   if (!policy) return null;
+  const labelOf = (role: Role) => choices.find((c) => c.role === role)?.label ?? role;
+  const unused = choices.filter((c) => !byRole.some((r) => r.role === c.role));
+  const change = (at: number, row: Partial<RoleRow>) => setByRole(byRole.map((r, i) => (i === at ? { ...r, ...row } : r)));
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     setError('');
     setMessage('');
     try {
-      await api.setOfflinePolicy({ ...policy, nagDays: Number(nag), limitDays: limit.trim() ? Number(limit) : null });
+      await api.setOfflinePolicy({
+        nagDays: Number(nag),
+        limitDays: days(limit),
+        byRole: byRole.map((r) => ({ role: r.role, nagDays: Number(r.nag), limitDays: days(r.limit) }))
+      });
       setMessage('Saved. Each computer applies it as it syncs.');
     } catch (e) {
       setError(errorText(e));
@@ -465,9 +483,72 @@ function OfflineRule() {
             onChange={(e) => setLimit(e.target.value)}
           />
         </div>
+        {byRole.length > 0 && (
+          <table className="lines">
+            <caption>Stricter rules for some roles</caption>
+            <thead>
+              <tr>
+                <th scope="col">Role</th>
+                <th scope="col">Remind after</th>
+                <th scope="col">Stop after</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {byRole.map((row, at) => (
+                <tr key={row.role}>
+                  <td>{labelOf(row.role)}</td>
+                  <td>
+                    <input
+                      aria-label={`Remind ${labelOf(row.role)} after`}
+                      className="short"
+                      inputMode="numeric"
+                      value={row.nag}
+                      onChange={(e) => change(at, { nag: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      aria-label={`Stop ${labelOf(row.role)} after`}
+                      className="short"
+                      inputMode="numeric"
+                      placeholder="never"
+                      value={row.limit}
+                      onChange={(e) => change(at, { limit: e.target.value })}
+                    />
+                  </td>
+                  <td>
+                    <button type="button" onClick={() => setByRole(byRole.filter((_, i) => i !== at))}>
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {unused.length > 0 && (
+          <div className="row">
+            <select
+              aria-label="A stricter rule for a role"
+              value=""
+              onChange={(e) =>
+                e.target.value && setByRole([...byRole, { role: e.target.value as Role, nag, limit }])
+              }
+            >
+              <option value="">A stricter rule for a role…</option>
+              {unused.map((c) => (
+                <option key={c.role} value={c.role}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <p className="hint">
-          It is a rule in the app, not a lock: someone with the computer and their password could get round it. An
-          extension code lets a computer that is away take changes for a while.
+          Someone with more than one role has the strictest of their rules. It is a rule in the app, not a lock:
+          someone with the computer and their password could get round it. An extension code lets a computer that is
+          away take changes for a while.
         </p>
         <div className="row">
           <button type="submit">Save the rule</button>
