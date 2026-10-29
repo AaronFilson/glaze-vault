@@ -1220,7 +1220,15 @@ impl HostStore {
     pub fn back_up(&mut self, backups: &Path) -> Result<PathBuf> {
         self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         fs::create_dir_all(backups)?;
-        let folder = backups.join(format!("{BACKUP_PREFIX}{}", now_ms()));
+        // Named by when, so they sort oldest first; two in one millisecond get a number after.
+        let at = now_ms();
+        let folder = (0..)
+            .map(|n| match n {
+                0 => backups.join(format!("{BACKUP_PREFIX}{at}")),
+                n => backups.join(format!("{BACKUP_PREFIX}{at}-{n}")),
+            })
+            .find(|folder| !folder.exists())
+            .expect("a free name");
         let partial = folder.with_extension("partial");
         fs::create_dir_all(&partial)?;
         fs::copy(self.dir.join(DATABASE_FILE), partial.join(DATABASE_FILE))?;
