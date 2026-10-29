@@ -48,13 +48,24 @@ fn network_error(error: impl std::fmt::Display) -> CommandError {
     CommandError::new("network", error.to_string())
 }
 
-/// Runs network work to its end on a thread of its own, outside the command's runtime, on the
-/// app's runtime for connections that outlive one command (a pairing).
-/// The work is made on that thread, so what it borrows need only be Send.
+/// Runs network work to its end on a thread of its own, outside the command's runtime, on a
+/// runtime kept for the network, for connections that outlive one command (a pairing). Not the
+/// app's: commands waiting for the vault this work holds could take all its workers, and then
+/// nothing would drive the connection. The work is made on that thread, so what it borrows need
+/// only be Send.
 fn on_network<T: Send, F: Future<Output = T>>(work: impl FnOnce() -> F + Send) -> T {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    let runtime = RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("network")
+            .enable_all()
+            .build()
+            .expect("a runtime for the network")
+    });
     std::thread::scope(|scope| {
         scope
-            .spawn(|| tauri::async_runtime::block_on(work()))
+            .spawn(|| runtime.block_on(work()))
             .join()
             .expect("the network thread")
     })

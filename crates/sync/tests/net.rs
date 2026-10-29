@@ -469,3 +469,23 @@ async fn an_admins_computer_saves_a_backup_of_the_host_and_puts_one_back() {
     );
     assert!(net::restore_host_from_file(&ben, &lan.address, &file).await.is_err());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_vault_converted_to_a_host_syncs_with_it_at_once() {
+    let vault_dir = tempfile::tempdir().unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let mut vault = Vault::create(vault_dir.path(), PASSWORD).unwrap().0;
+    vault.grow_into_team("Ana").unwrap();
+    let shared = vault.collections().iter().find(|c| c.owner.is_none()).unwrap().id;
+    vault
+        .add_person("Ben", ONE_TIME, &[(shared, Role::Formulator)])
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let host = vault.convert_to_host(staging.path(), &address).unwrap();
+    tokio::spawn(net::serve(listener, Server::new(host)));
+    vault.create_collection("Glazes").unwrap();
+    assert!(vault.directory_waiting().unwrap());
+    let synced = tokio::time::timeout(std::time::Duration::from_secs(20), net::sync(&mut vault, &address)).await;
+    assert!(synced.expect("the first sync hangs").is_ok());
+}
