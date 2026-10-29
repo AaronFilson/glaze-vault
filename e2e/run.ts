@@ -38,6 +38,9 @@ const run = lan
  * the job's log. */
 const annotate = (text: string) => {
   if (!process.env.GITHUB_ACTIONS) return;
+  // What the script did and the page's problems first, as the screen can fill the room there is.
+  const at = ['\nProblems:\n', '\nLast script:\n'].map((m) => text.indexOf(m)).filter((i) => i >= 0);
+  if (at.length) text = text.slice(Math.min(...at)).trim() + '\n\n' + text.slice(0, Math.min(...at));
   const escaped = text.slice(0, 6000).replaceAll('%', '%25').replaceAll('\r', '').replaceAll('\n', '%0A');
   console.log(`::error title=End-to-end tests::${escaped}`);
 };
