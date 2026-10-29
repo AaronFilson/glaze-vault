@@ -322,3 +322,39 @@ fn each_sync_asks_who_is_changing_what() {
         Err(glaze_vault_core::Error::CheckedOut(_))
     ));
 }
+
+#[test]
+fn someone_who_first_signs_in_on_a_computer_that_joined_sees_what_they_were_given() {
+    let (vault_dir, host_dir, ben_dir) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let (mut ana, _) = Vault::create(vault_dir.path(), PASSWORD).unwrap();
+    ana.save(
+        Kind::Recipe,
+        None,
+        &json!({ "name": "Shino", "lines": [], "notes": "" }),
+    )
+    .unwrap();
+    ana.grow_into_team("Ana").unwrap();
+    let shared = ana.collections().iter().find(|c| c.owner.is_none()).unwrap().id;
+    let ben = ana.add_person("Ben", ONE_TIME, &[]).unwrap().id;
+    ana.set_role(ben, shared, Some(Role::Formulator)).unwrap();
+    let mut host = ana.convert_to_host(host_dir.path(), "127.0.0.1:1").unwrap();
+    let device = DeviceKey::generate();
+    let certificate = ana
+        .certify_device(device.id, "laptop", &device.public(), &[ben])
+        .unwrap();
+    host.add_device(&certificate).unwrap();
+    Vault::join(ben_dir.path(), &host.join_package(device.id).unwrap(), &device).unwrap();
+    let mut laptop = Vault::unlock_as(ben_dir.path(), Some(ben), ONE_TIME).unwrap();
+    laptop.set_own_password(OWN).unwrap();
+    sync_in_process(&mut laptop, &mut host).unwrap();
+    assert_eq!(
+        laptop.heads(Kind::Recipe).unwrap().len(),
+        1,
+        "collections: {:?}",
+        laptop.collections().len()
+    );
+}

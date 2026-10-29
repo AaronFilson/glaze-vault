@@ -684,6 +684,20 @@ fn take_entry(conn: &Connection, keyring: &mut Keyring, database_key: &crypto::K
         .parsed()
         .ok_or_else(|| Error::Corrupt(format!("the key file entry of {} does not read", item.person)))?;
     let vault_id = keyring.vault_id;
+    // An entry changed here that has not reached the host yet, such as a password chosen at a
+    // first sign-in, stays: it is pushed after this pull, and the host keeps the newer.
+    if let Some(user) = keyring.users.iter().find(|u| u.id == entry.id) {
+        let known: Option<String> = conn
+            .query_row(
+                "SELECT entry FROM key_entries WHERE person_id = ?1",
+                params![entry.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if known.is_some_and(|known| known != serde_json::to_string(&PersonEntry::of(user)).unwrap_or_default()) {
+            return Ok(());
+        }
+    }
     let sealed = match keyring.users.iter().find(|u| u.id == entry.id) {
         Some(user) if user.public_key == entry.public_key => user.database_key.clone(),
         _ => crypto::seal_key(
