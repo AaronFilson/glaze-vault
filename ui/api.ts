@@ -484,6 +484,11 @@ export const api = {
   /** For an admin: a code another computer types to take changes for `days` more. */
   extensionCode: (device: string, days: number) => invoke<string>('extension_code', { device, days }),
   revokeDevice: (device: string, lost: boolean) => invoke<Revoked>('revoke_device', { device, lost }),
+  /** On a computer that syncs: photos only when opened, rather than all (the plan's question 9). */
+  photosOnDemand: () => invoke<boolean>('photos_on_demand'),
+  setPhotosOnDemand: (on: boolean) => invoke<void>('set_photos_on_demand', { on }),
+  /** Fetches a photo that has not come yet at the next sync, first. */
+  wantPhoto: (id: string) => invoke<void>('want_photo', { id }),
   /** For an admin on a computer that syncs (docs/adr/0025-host-backups-from-the-app.md). */
   hostBackups: () => invoke<HostBackup[]>('host_backups'),
   restoreHostBackup: (name: string) => invoke<void>('restore_host_backup', { name }),

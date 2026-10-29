@@ -65,6 +65,7 @@ export function Network({
           : `This vault syncs with the host at ${status.hostAddress}.`}
       </p>
       <SyncNow onPulled={onChanged} />
+      {!status.hostHere && <PhotosOnDemand />}
       {admin && <Pairing people={people} />}
       {admin && <Devices people={people} own={status.device} />}
       {admin && <OfflineRule />}
@@ -671,6 +672,39 @@ function HostBackups() {
         </p>
       )}
     </section>
+  );
+}
+
+/** Photos all, or only when opened, on a computer short of room (the plan's question 9). */
+function PhotosOnDemand() {
+  const [on, setOn] = useState<boolean | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    api.photosOnDemand().then(setOn, () => {});
+  }, []);
+  if (on === null) return null;
+  const change = async (value: boolean) => {
+    setError('');
+    try {
+      await api.setPhotosOnDemand(value);
+      setOn(value);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+  return (
+    <div>
+      <label className="check">
+        <input type="checkbox" checked={on} onChange={(e) => void change(e.target.checked)} />
+        Bring photos only when someone opens them
+      </label>
+      <p className="hint">For a computer short of room. Otherwise every photo comes as the computer syncs.</p>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

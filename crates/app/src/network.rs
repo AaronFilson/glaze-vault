@@ -142,6 +142,27 @@ pub fn sync_status(syncing: State<Arc<Syncing>>) -> SyncStatus {
     syncing.status()
 }
 
+/// Whether this computer fetches photos only when someone opens them (the plan's question 9).
+#[tauri::command(async)]
+pub fn photos_on_demand(state: State<AppState>) -> CommandResult<bool> {
+    crate::with_vault(&state, |vault| Ok(vault.is_replica() && vault.photos_on_demand()?))
+}
+
+#[tauri::command(async)]
+pub fn set_photos_on_demand(state: State<AppState>, syncing: State<Arc<Syncing>>, on: bool) -> CommandResult<()> {
+    crate::with_vault(&state, |vault| vault.set_photos_on_demand(on))?;
+    syncing.poke();
+    Ok(())
+}
+
+/// Fetches a photo someone opened that has not come from the host yet, before any other.
+#[tauri::command(async)]
+pub fn want_photo(state: State<AppState>, syncing: State<Arc<Syncing>>, id: Uuid) -> CommandResult<()> {
+    crate::with_vault(&state, |vault| vault.want_photo(id))?;
+    syncing.poke();
+    Ok(())
+}
+
 /// Runs a change to people, roles or collections (the plan's question 5). On a computer that
 /// syncs with a host, it needs the host: this computer holds the directory there, so no other
 /// changes it meanwhile, catches up, makes the change, and sends it before letting go.

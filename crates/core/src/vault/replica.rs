@@ -590,17 +590,56 @@ const CHECKOUTS_HOLD_MS: i64 = 2 * 60 * 1000;
 impl Vault {
     /// The attachments pulled without their bytes, newest first, with how much of each has come.
     pub fn missing_bytes(&self) -> Result<Vec<(Uuid, u64)>> {
-        let ids = self
+        let mut ids = self
             .conn
             .prepare("SELECT id FROM attachments WHERE length(ciphertext) = 0 ORDER BY created_at DESC")?
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        // Those someone opened first; with photos on demand, only those.
+        let wanted = self.wanted_photos()?;
+        ids.sort_by_key(|id| !wanted.contains(id));
+        if self.photos_on_demand()? {
+            ids.retain(|id| wanted.contains(id));
+        }
         ids.iter()
             .map(|id| {
                 let id = parse_id(id)?;
                 Ok((id, items::staged_length(&self.conn, &id)?.0))
             })
             .collect()
+    }
+
+    /// Whether this computer fetches photos only when someone opens them (the plan's question 9),
+    /// rather than all of them, which is the default: for a laptop short of room.
+    pub fn photos_on_demand(&self) -> Result<bool> {
+        Ok(self.meta(PHOTOS_ON_DEMAND)?.as_deref() == Some("1"))
+    }
+
+    pub fn set_photos_on_demand(&mut self, on: bool) -> Result<()> {
+        self.set_meta(PHOTOS_ON_DEMAND, if on { "1" } else { "0" })
+    }
+
+    fn wanted_photos(&self) -> Result<Vec<String>> {
+        Ok(self
+            .meta(PHOTOS_WANTED)?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default())
+    }
+
+    /// Fetches this photo at the next sync, before any other: someone opened it.
+    pub fn want_photo(&mut self, id: Uuid) -> Result<()> {
+        let missing: Vec<String> = self
+            .conn
+            .prepare("SELECT id FROM attachments WHERE length(ciphertext) = 0")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut wanted = self.wanted_photos()?;
+        wanted.retain(|w| missing.contains(w));
+        let id = id.to_string();
+        if missing.contains(&id) && !wanted.contains(&id) {
+            wanted.push(id);
+        }
+        self.set_meta(PHOTOS_WANTED, &serde_json::to_string(&wanted)?)
     }
 
     /// Keeps a piece of an attachment's bytes from the host. Once they have all come they are
@@ -776,6 +815,10 @@ fn take_entry(conn: &Connection, keyring: &mut Keyring, database_key: &crypto::K
     }
     put_entry(conn, item, false)
 }
+
+/// Where a replica keeps whether it fetches photos only when opened, and which were (meta).
+const PHOTOS_ON_DEMAND: &str = "photos_on_demand";
+const PHOTOS_WANTED: &str = "photos_wanted";
 
 #[cfg(test)]
 mod tests {
@@ -1334,6 +1377,34 @@ mod tests {
         sync(&mut t.computers[0], &mut t.host);
         assert_eq!(head(&t.computers[0], t.recipe).content["name"], "Ben's");
         assert_eq!(head(&t.computers[1], t.recipe).content["name"], "Ben's");
+    }
+
+    #[test]
+    fn with_photos_on_demand_a_computer_fetches_only_those_opened() {
+        let mut t = team();
+        t.computers[0].set_photos_on_demand(true).unwrap();
+        let first = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/jpeg", b"first")
+            .unwrap();
+        let second = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/jpeg", b"second")
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+        sync(&mut t.computers[0], &mut t.host);
+        assert!(matches!(t.computers[0].attachment(first.id), Err(Error::NotFetched)));
+        assert!(matches!(t.computers[0].attachment(second.id), Err(Error::NotFetched)));
+        assert!(t.computers[0].missing_bytes().unwrap().is_empty());
+
+        t.computers[0].want_photo(first.id).unwrap();
+        assert_eq!(t.computers[0].missing_bytes().unwrap(), vec![(first.id, 0)]);
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(&t.computers[0].attachment(first.id).unwrap().1[..], b"first");
+        assert!(matches!(t.computers[0].attachment(second.id), Err(Error::NotFetched)));
+
+        // All of them again, the one opened first.
+        t.computers[0].set_photos_on_demand(false).unwrap();
+        t.computers[0].want_photo(second.id).unwrap();
+        assert_eq!(t.computers[0].missing_bytes().unwrap()[0].0, second.id);
     }
 
     #[test]

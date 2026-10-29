@@ -841,8 +841,8 @@ export function Fold({ open, children }: { open: boolean; children: React.ReactN
 }
 
 /** Pictures for the photos, opened from the vault as they are needed and let go when done. A
- * photo whose bytes have not come from the host yet has an empty picture, tried again when a
- * sync brings photos. */
+ * photo whose bytes have not come from the host yet has an empty picture, is asked for, and is
+ * tried again when a sync brings photos. */
 function usePhotoUrls(photos: Photo[]): Record<string, string> {
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [fetched, setFetched] = useState(0);
@@ -878,7 +878,11 @@ function usePhotoUrls(photos: Photo[]): Record<string, string> {
         })
         .catch((e) => {
           delete made.current[photo.id];
-          if (mounted.current && errorCode(e) === 'not-fetched') setUrls((now) => ({ ...now, [photo.id]: '' }));
+          if (mounted.current && errorCode(e) === 'not-fetched') {
+            setUrls((now) => ({ ...now, [photo.id]: '' }));
+            // Someone is looking at it: it comes first, or at all with photos on demand.
+            api.wantPhoto(photo.id).catch(() => {});
+          }
         });
     }
   }, [photos.map((p) => p.id).join(), fetched]);

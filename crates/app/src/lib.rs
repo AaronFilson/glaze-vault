@@ -68,7 +68,7 @@ fn update_error(error: tauri_plugin_updater::Error) -> CommandError {
 type CommandResult<T> = Result<T, CommandError>;
 
 /// Runs `action` on the unlocked vault.
-fn with_vault<T>(state: &AppState, action: impl FnOnce(&mut Vault) -> Result<T, Error>) -> CommandResult<T> {
+pub(crate) fn with_vault<T>(state: &AppState, action: impl FnOnce(&mut Vault) -> Result<T, Error>) -> CommandResult<T> {
     let mut vault = state.vault.lock().unwrap();
     Ok(action(vault.as_mut().ok_or_else(locked)?)?)
 }
@@ -1029,6 +1029,9 @@ pub fn run() {
             network::extension_code,
             network::revoke_device,
             network::host_backups,
+            network::photos_on_demand,
+            network::set_photos_on_demand,
+            network::want_photo,
             network::restore_host_backup,
             network::save_host_backup,
             network::restore_host_from_file,
