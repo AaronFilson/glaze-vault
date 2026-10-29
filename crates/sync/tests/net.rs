@@ -419,13 +419,21 @@ async fn an_admins_computer_saves_a_backup_of_the_host_and_puts_one_back() {
     let file = kept.path().join("studio.gvhost");
     let made = net::download_host_backup(&lan.ana, &lan.address, &file).await.unwrap();
     assert_eq!(lan.ana.check_host_backup(&file).unwrap(), made);
-    // Nothing is left behind on the host.
+    // Nothing is left behind on the host, once it sees the connection end.
     let host_dir = lan.dirs[1].path();
-    let left = std::fs::read_dir(host_dir)
-        .unwrap()
-        .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "gvhost"))
-        .count();
-    assert_eq!(left, 0);
+    let left = || {
+        std::fs::read_dir(host_dir)
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "gvhost"))
+            .count()
+    };
+    for _ in 0..50 {
+        if left() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(left(), 0);
 
     // Sent back, it becomes one of the host's backups, and hostd is asked to restore it.
     net::restore_host_from_file(&lan.ana, &lan.address, &file)
