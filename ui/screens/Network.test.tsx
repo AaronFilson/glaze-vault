@@ -47,8 +47,10 @@ describe('the network section', () => {
       if (command === 'network_status') return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917' });
       if (command === 'start_pairing') return { code: '4821-0937', expiresAt: Date.now() + 600_000 };
       if (command === 'wait_for_pairing') return { device: 'd1', name: "Ben's laptop", fingerprint: '428b-ec49-9b19-3bd5' };
+      // Ben was added since this sign-in began, so the lock screen's list lacks him.
+      if (command === 'team') return { people: PEOPLE, grants: [] };
     });
-    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    render(<Network people={PEOPLE.slice(0, 1)} admin onChanged={() => {}} onLeft={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Pair a computer…' }));
     expect(await screen.findByText(/428b-ec49-9b19-3bd5/)).toBeTruthy();
     const approve = screen.getByRole('button', { name: 'Approve' });

@@ -159,6 +159,7 @@ function Pairing({ people }: { people: Person[] }) {
   const [code, setCode] = useState<PairingCode | null>(null);
   const [computer, setComputer] = useState<PairingComputer | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
+  const [team, setTeam] = useState<Person[]>(people);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -171,6 +172,8 @@ function Pairing({ people }: { people: Person[] }) {
       const code = await api.startPairing();
       setCode(code);
       const computer = await api.waitForPairing();
+      // The team as it is now: someone may have been added since this sign-in began.
+      setTeam(await api.team().then((team) => team?.people ?? people, () => people));
       setComputer(computer);
     } catch (e) {
       setCode(null);
@@ -231,7 +234,7 @@ function Pairing({ people }: { people: Person[] }) {
             <strong>{computer.name}</strong> used the code. Check that it shows the same key: <code>{computer.fingerprint}</code>
           </p>
           <p>Who will use this computer? Only they can sign in at it, and it holds only what they can see.</p>
-          {people.map((person) => (
+          {team.map((person) => (
             <label key={person.id} className="check">
               <input
                 type="checkbox"
