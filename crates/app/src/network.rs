@@ -26,6 +26,10 @@ use uuid::Uuid;
 pub struct Network {
     /// A pairing this admin started, and the computer that used its code, once one has.
     pairing: Mutex<Option<(AdminPairing, Option<Finished>)>>,
+    /// Counts pairings started and cancelled, so a wait for one that was cancelled, or replaced,
+    /// stops and does not put it back.
+    pairings: std::sync::atomic::AtomicU64,
+    cancelled: tokio::sync::Notify,
     /// hostd as a child process, in development with GLAZE_VAULT_HOST_NO_SERVICE.
     child: Mutex<Option<Child>>,
     /// The key this computer made to join a vault, shown to the admin as a fingerprint.
@@ -322,6 +326,7 @@ pub fn start_pairing(state: State<AppState>, network: State<Network>) -> Command
         code: pairing.code.clone(),
         expires_at: pairing.expires_at,
     };
+    network.cancel();
     *network.pairing.lock().unwrap() = Some((pairing, None));
     Ok(code)
 }
@@ -341,7 +346,17 @@ pub fn wait_for_pairing(network: State<Network>) -> CommandResult<PairingCompute
     let Some((mut pairing, _)) = taken else {
         return Err(network_error("No pairing is open."));
     };
-    let finished = on_network(|| async { pairing.wait().await }).map_err(network_error)?;
+    let started = network.pairings.load(std::sync::atomic::Ordering::SeqCst);
+    let cancelled = network.cancelled.notified();
+    let finished = on_network(|| async {
+        tokio::select! {
+            finished = pairing.wait() => finished.map_err(network_error),
+            () = cancelled => Err(network_error("The pairing was cancelled.")),
+        }
+    })?;
+    if network.pairings.load(std::sync::atomic::Ordering::SeqCst) != started {
+        return Err(network_error("The pairing was cancelled."));
+    }
     let computer = PairingComputer {
         device: finished.device,
         name: finished.name.clone(),
@@ -365,7 +380,16 @@ pub fn approve_pairing(state: State<AppState>, network: State<Network>, people: 
 
 #[tauri::command(async)]
 pub fn cancel_pairing(network: State<Network>) {
+    network.cancel();
     *network.pairing.lock().unwrap() = None;
+}
+
+impl Network {
+    /// Ends a wait for a pairing, if one is running.
+    fn cancel(&self) {
+        self.pairings.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.cancelled.notify_waiters();
+    }
 }
 
 /// The computers that sync with the host, for an admin.
@@ -521,7 +545,13 @@ pub fn join_vault(
         name => name.to_owned(),
     };
     let dir = state.dir.clone();
-    let joined = on_network(|| async { net::pair(&address, code.trim(), &name, &dir, &device).await });
+    let cancelled = network.cancelled.notified();
+    let joined = on_network(|| async {
+        tokio::select! {
+            joined = net::pair(&address, code.trim(), &name, &dir, &device) => joined,
+            () = cancelled => Err(glaze_vault_sync::Error::Pairing("joining was cancelled".into())),
+        }
+    });
     if let Err(e) = joined {
         // The same key again, so the fingerprint the admin may have noted still holds.
         *network.joining.lock().unwrap() = Some(device);
@@ -531,6 +561,12 @@ pub fn join_vault(
         });
     }
     Ok(())
+}
+
+/// Stops waiting for the admin to approve this computer.
+#[tauri::command(async)]
+pub fn cancel_join(network: State<Network>) {
+    network.cancel();
 }
 
 /// Takes this computer out of the vault: its copy is written over and removed. What it has not

@@ -207,13 +207,33 @@ impl Vault {
         for scope in welcome.reset.iter().chain(&welcome.dropped) {
             if let Scope::Collection(collection) = scope {
                 let collection = collection.to_string();
-                tx.execute("DELETE FROM changes WHERE collection_id = ?1", params![collection])?;
-                for table in ["revisions", "attachments"] {
+                // Pulled again from the start; what was saved here and has not reached the host
+                // stays, to be sealed again and sent, unless this computer may no longer read it.
+                // With the revisions those build on, which the pull brings again anyway.
+                let keep = if welcome.reset.contains(scope) {
+                    "AND id NOT IN (WITH RECURSIVE kept(id) AS (
+                         SELECT item_id FROM changes WHERE collection_id = ?1 AND host_seq IS NULL
+                         UNION SELECT r.parent_id FROM revisions r JOIN kept ON r.id = kept.id
+                         WHERE r.parent_id IS NOT NULL)
+                     SELECT id FROM kept)"
+                } else {
+                    ""
+                };
+                for table in ["attachments", "revisions"] {
                     tx.execute(
-                        &format!("DELETE FROM {table} WHERE collection_id = ?1"),
+                        &format!("DELETE FROM {table} WHERE collection_id = ?1 {keep}"),
                         params![collection],
                     )?;
                 }
+                let keep_changes = if keep.is_empty() {
+                    ""
+                } else {
+                    "AND host_seq IS NOT NULL"
+                };
+                tx.execute(
+                    &format!("DELETE FROM changes WHERE collection_id = ?1 {keep_changes}"),
+                    params![collection],
+                )?;
                 tx.execute("DELETE FROM sync_state WHERE scope = ?1", params![collection])?;
             }
         }
@@ -801,6 +821,21 @@ fn take_entry(conn: &Connection, keyring: &mut Keyring, database_key: &crypto::K
     let entry = item
         .parsed()
         .ok_or_else(|| Error::Corrupt(format!("the key file entry of {} does not read", item.person)))?;
+    // Only an entry with the keys the directory, whose events are each checked, gives the person:
+    // a host that was tampered with cannot put other keys in this computer's key file.
+    let public_key: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT public_key FROM people WHERE id = ?1",
+            params![item.person.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if entry.id != item.person || public_key.as_ref() != Some(&entry.public_key) {
+        return Err(Error::Corrupt(format!(
+            "the key file entry of {} does not match the directory",
+            item.person
+        )));
+    }
     let vault_id = keyring.vault_id;
     // An entry changed here that has not reached the host yet, such as a password chosen at a
     // first sign-in, stays: it is pushed after this pull, and the host keeps the newer.
@@ -1393,6 +1428,32 @@ mod tests {
         sync(&mut t.computers[0], &mut t.host);
         assert_eq!(head(&t.computers[0], t.recipe).content["name"], "Ben's");
         assert_eq!(head(&t.computers[1], t.recipe).content["name"], "Ben's");
+    }
+
+    #[test]
+    fn a_collection_pulled_again_keeps_what_was_saved_here_and_not_sent() {
+        let mut t = team();
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let saved = t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "Offline", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        // As when the host says what Ben holds there changed.
+        let device = t.computers[1].device().unwrap();
+        let (_, levels) = t.computers[1].sync_state().unwrap();
+        let mut welcome = t.host.hello(device, &levels).unwrap();
+        welcome.reset.push(Scope::Collection(t.shared));
+        t.computers[1].apply_welcome(&welcome).unwrap();
+        assert_eq!(t.computers[1].waiting().unwrap(), 1);
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(
+            result.accepted.iter().any(|(id, _)| *id == saved.revision_id),
+            "{result:?}"
+        );
+        assert_eq!(head(&t.computers[1], t.recipe).content["name"], "Offline");
     }
 
     #[test]

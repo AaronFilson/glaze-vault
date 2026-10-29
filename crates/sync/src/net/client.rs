@@ -103,7 +103,7 @@ async fn sync_once(vault: &mut Vault, address: &str) -> Result<Report> {
             conn.close().await;
             return Ok(report);
         }
-        message = session.handle(vault, conn.recv().await?)?;
+        message = session.handle(vault, answer(&mut conn).await?)?;
     }
 }
 
@@ -116,17 +116,11 @@ pub trait SharedVault {
 /// Syncs a vault shared with the rest of the app, as `sync` does. If another vault is opened
 /// meanwhile, the sync stops.
 pub async fn sync_shared(vault: &impl SharedVault, address: &str) -> Result<Report> {
-    let (device, pin, id, waiting) =
-        vault.with(|v| Ok((v.device_key()?, v.host_key()?, v.device()?, v.directory_waiting()?)))?;
-    let held = match waiting {
-        true => hold(&device, pin.clone(), address).await.ok(),
-        false => None,
-    };
-    let report = sync_shared_once(vault, address, device, pin, id).await;
-    if let Some(held) = held {
-        held.release().await;
-    }
-    report
+    // It never holds the directory: waiting for the vault while holding it would stall an admin's
+    // change that holds the vault and waits for the directory. Directory changes still waiting
+    // go with the next sync that holds it, as an admin's next change does.
+    let (device, pin, id) = vault.with(|v| Ok((v.device_key()?, v.host_key()?, v.device()?)))?;
+    sync_shared_once(vault, address, device, pin, id).await
 }
 
 async fn sync_shared_once(

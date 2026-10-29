@@ -361,6 +361,11 @@ impl HostStore {
     }
 
     /// Whether one of a computer's people is an admin now, so it may pair others.
+    /// Whether a computer is paired and not revoked.
+    pub fn is_active_device(&self, device: Uuid) -> Result<bool> {
+        Ok(!self.device(device)?.revoked)
+    }
+
     pub fn is_admin_device(&self, device: Uuid) -> Result<bool> {
         let device = self.device(device)?;
         let directory = Directory::load(&self.conn)?;
@@ -874,10 +879,24 @@ impl HostStore {
                 if let Err(error) = directory.check(actor, &event.body) {
                     return Ok(Err(refusal_for(error)));
                 }
-                if let Body::Erased { record, kind, .. } = &event.body
-                    && !all_heads_deleted(conn, record, *kind)?
+                if let Body::Erased {
+                    record,
+                    kind,
+                    collection,
+                } = &event.body
                 {
-                    return Ok(Err(Refusal::ChangedElsewhere));
+                    // The collection it names, which the check allowed, must be the record's own.
+                    let elsewhere: bool = conn.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM revisions WHERE record_id = ?1 AND kind = ?2 AND collection_id != ?3)",
+                        params![record.to_string(), kind.as_str(), collection.to_string()],
+                        |row| row.get(0),
+                    )?;
+                    if elsewhere {
+                        return Ok(Err(Refusal::NotAllowed));
+                    }
+                    if !all_heads_deleted(conn, record, *kind)? {
+                        return Ok(Err(Refusal::ChangedElsewhere));
+                    }
                 }
                 events::apply(conn, &event)?;
                 self.numbered(conn, &event.id).map(Ok)
@@ -1291,11 +1310,21 @@ impl HostStore {
                 return Err(Error::NotABackup);
             }
         }
+        // Copied beside the store first, so a copy that fails leaves the store as it was.
+        HostStore::check_backup(dir, backup)?;
+        let staged = |file: &str| dir.join(format!("{file}.restoring"));
+        for file in [DATABASE_FILE, HOST_FILE] {
+            if let Err(e) = fs::copy(backup.join(file), staged(file)) {
+                let _ = fs::remove_file(staged(DATABASE_FILE));
+                let _ = fs::remove_file(staged(HOST_FILE));
+                return Err(e.into());
+            }
+        }
         for stale in ["-wal", "-shm"] {
             let _ = fs::remove_file(dir.join(format!("{DATABASE_FILE}{stale}")));
         }
-        fs::copy(backup.join(DATABASE_FILE), dir.join(DATABASE_FILE))?;
-        fs::copy(backup.join(HOST_FILE), dir.join(HOST_FILE))?;
+        fs::rename(staged(DATABASE_FILE), dir.join(DATABASE_FILE))?;
+        fs::rename(staged(HOST_FILE), dir.join(HOST_FILE))?;
         let host = HostStore::open(dir)?;
         host.conn.execute(
             "INSERT INTO meta (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = excluded.value",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   api,
   errorText,
@@ -101,6 +101,8 @@ function StartHosting({ status, onStarted }: { status: NetworkStatus; onStarted:
       onStarted();
     } catch (e) {
       setError(errorText(e));
+      // It may have started serving and only its first sync failed: show how it stands now.
+      onStarted();
     } finally {
       setBusy(false);
     }
@@ -172,19 +174,33 @@ function Pairing({ people }: { people: Person[] }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
+  // Which pairing is current: what a cancelled or replaced one brings later is ignored.
+  const attempt = useRef(0);
+  useEffect(
+    () => () => {
+      attempt.current++;
+      void api.cancelPairing().catch(() => {});
+    },
+    []
+  );
   const start = async () => {
+    const mine = ++attempt.current;
     setError('');
     setMessage('');
     setComputer(null);
     setChosen([]);
     try {
       const code = await api.startPairing();
+      if (mine !== attempt.current) return;
       setCode(code);
       const computer = await api.waitForPairing();
       // The team as it is now: someone may have been added since this sign-in began.
-      setTeam(await api.team().then((team) => team?.people ?? people, () => people));
+      const now = await api.team().then((team) => team?.people ?? people, () => people);
+      if (mine !== attempt.current) return;
+      setTeam(now);
       setComputer(computer);
     } catch (e) {
+      if (mine !== attempt.current) return;
       setCode(null);
       setError(errorText(e));
     }
@@ -202,6 +218,7 @@ function Pairing({ people }: { people: Person[] }) {
     }
   };
   const cancel = () => {
+    attempt.current++;
     void api.cancelPairing();
     setCode(null);
     setComputer(null);
@@ -342,6 +359,12 @@ function Devices({ people, own }: { people: Person[]; own: string | null }) {
                     Lost or stolen…
                   </button>
                 </span>
+              )}
+              {/* Again, if securing its people did not finish, or it was retired and then lost. */}
+              {d.revoked && d.id !== own && (
+                <button type="button" className="link danger" onClick={() => start(d, 'lost')}>
+                  Lost or stolen…
+                </button>
               )}
             </li>
           ))}

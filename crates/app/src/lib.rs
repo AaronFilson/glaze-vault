@@ -1032,6 +1032,7 @@ pub fn run() {
             network::photos_on_demand,
             network::set_photos_on_demand,
             network::want_photo,
+            network::cancel_join,
             network::restore_host_backup,
             network::save_host_backup,
             network::restore_host_from_file,

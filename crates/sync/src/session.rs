@@ -63,7 +63,7 @@ impl HostSession {
             ClientMsg::Pull { cursors, max_bytes } => Ok(Some(HostMsg::Batch(host.pull(
                 self.device,
                 &cursors,
-                max_bytes as usize,
+                max_bytes.min(PULL_BYTES) as usize,
             )?))),
             ClientMsg::Push { items } => Ok(Some(HostMsg::PushResult(host.accept(self.device, items)?))),
             ClientMsg::GetChunk { id, offset } => Ok(Some(HostMsg::Chunk(host.chunk(self.device, id, offset)?))),

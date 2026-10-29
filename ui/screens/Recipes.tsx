@@ -74,6 +74,18 @@ export type LockReason = 'manual' | 'idle' | 'idle-with-draft' | 'switched' | 'l
 
 /** The open vault: the recipe list and editor, materials, settings, printing, and the notices
  * above them. */
+/** An open firing or mix moved to the newest revision a sync brought, unless it has unsaved
+ * edits, as `useEditor`'s `follow` does for recipes and materials. */
+function followed<Content, Open extends { current: Revision<Content> | null; draft: Content }>(
+  open: Open | null,
+  heads: Revision<Content>[]
+): Open | null {
+  if (!open?.current || JSON.stringify(open.draft) !== JSON.stringify(open.current.content)) return open;
+  const head = heads.find((h) => h.recordId === open.current?.recordId);
+  if (!head || head.revisionId === open.current.revisionId) return open;
+  return { ...open, current: head, draft: head.content };
+}
+
 export function Recipes({
   status,
   update,
@@ -186,6 +198,8 @@ export function Recipes({
         setSheets(batchSheets);
         setFirings(allFirings);
         setMixes(allMixes);
+        setFiring((open) => followed(open, allFirings));
+        setMix((open) => followed(open, allMixes));
         setOwnLimits(limits);
       })
       .catch((e) => setError(errorText(e)));

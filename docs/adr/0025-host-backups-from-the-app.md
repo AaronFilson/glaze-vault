@@ -30,9 +30,12 @@ computer without their key file entry. No new schema.
 - **The directory, guarded**: over the network, the host refuses an event that changes people,
   roles or collections (all but certificates, organization keys, erasures and moves) from a
   computer that does not hold the directory, with `DirectoryNotHeld`, and the rest of its group
-  with it. The replica keeps them waiting rather than setting them aside, and a sync with such
-  changes waiting holds the directory for itself first. The app's admin changes hold it already
-  (ADR 23), and sync while they do (`sync_holding`).
+  with it. The replica keeps them waiting rather than setting them aside, and a sync on its own
+  (`net::sync`) with such changes waiting holds the directory for itself first. The app's admin
+  changes hold it already (ADR 23), and sync while they do (`sync_holding`). The background sync
+  never holds it: it waits for the vault between messages, and an admin's change holds the vault
+  while it waits for the directory, so the two would stall each other. What waits goes with the
+  admin's next change. Only a computer not revoked holds the directory.
 - **Rules by role**: Settings, Network lists a stricter rule for any role, built-in or an admin's,
   under the vault-wide one.
 - **Photos on demand**: a computer that syncs can bring photos only when someone opens them.

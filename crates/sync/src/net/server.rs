@@ -192,6 +192,15 @@ impl Server {
         self.changed.send_replace(());
     }
 
+    /// As `set_stage`, only if the pairing open is still the one with `code`: a computer trying
+    /// an old code does not finish or end one an admin started since.
+    fn set_stage_of(&self, code: &str, stage: Stage) {
+        if let Some(pairing) = self.pairing().as_mut().filter(|p| p.code == code) {
+            pairing.stage = stage;
+        }
+        self.changed.send_replace(());
+    }
+
     /// Waits until `ready` gives an answer from the pairing, or it runs out.
     async fn wait<T>(&self, ready: impl Fn(&mut Option<Pairing>) -> Option<T>, ran_out: T) -> T {
         loop {
@@ -236,16 +245,16 @@ impl Server {
                 ClientMsg::Pair { spake: theirs } => match self.claim() {
                     Ok(code) => {
                         let (ours, message) = pairing::start_host(&code);
-                        spake = Some((ours, theirs));
+                        spake = Some((ours, theirs, code));
                         HostMsg::PairChallenge { spake: message }
                     }
                     Err(reason) => refused(reason),
                 },
                 ClientMsg::PairConfirm { mac, device, name } => {
-                    let Some((ours, theirs)) = spake.take() else {
+                    let Some((ours, theirs, code)) = spake.take() else {
                         break Err(Error::Protocol("a confirmation before pairing".into()));
                     };
-                    let answer = self.confirm(ours, &theirs, &exporter, &mac, device, name, &key);
+                    let answer = self.confirm(&code, ours, &theirs, &exporter, &mac, device, name, &key);
                     let joining = matches!(answer, HostMsg::PairConfirmed { .. });
                     conn.send(&answer).await?;
                     if joining {
@@ -262,7 +271,10 @@ impl Server {
                     break self.watch(&mut conn).await;
                 }
                 ClientMsg::LockDirectory => {
-                    if session.is_none() {
+                    let active = session
+                        .as_ref()
+                        .is_some_and(|s| self.host().is_active_device(s.device()).unwrap_or(false));
+                    if !active {
                         refused("this computer is not paired with the host")
                     } else {
                         match timeout(DIRECTORY_WAIT, self.directory.clone().lock_owned()).await {
@@ -394,10 +406,11 @@ impl Server {
                 break Ok(());
             }
         };
-        if spake.is_some() {
-            self.set_stage(Stage::Failed(
-                "the computer went away before it confirmed the code".into(),
-            ));
+        if let Some((_, _, code)) = &spake {
+            self.set_stage_of(
+                code,
+                Stage::Failed("the computer went away before it confirmed the code".into()),
+            );
         }
         conn.close().await;
         outcome
@@ -448,6 +461,7 @@ impl Server {
     #[allow(clippy::too_many_arguments)]
     fn confirm(
         &self,
+        code: &str,
         ours: spake2::Spake2<spake2::Ed25519Group>,
         theirs: &[u8],
         exporter: &[u8; 32],
@@ -459,28 +473,31 @@ impl Server {
         let shared = match pairing::finish(ours, theirs) {
             Ok(shared) => shared,
             Err(e) => {
-                self.set_stage(Stage::Failed(e.to_string()));
+                self.set_stage_of(code, Stage::Failed(e.to_string()));
                 return refused(e.to_string());
             }
         };
         if !pairing::confirms(&shared, exporter, false, mac) {
             // One attempt: a wrong code ends the pairing, so a code cannot be guessed online.
-            self.set_stage(Stage::Failed("the code was wrong".into()));
+            self.set_stage_of(code, Stage::Failed("the code was wrong".into()));
             return refused("the code was wrong: the admin must start again");
         }
         match self.host().device_with_key(key) {
             Ok(None) => {}
             _ => {
-                self.set_stage(Stage::Failed("the computer is paired already".into()));
+                self.set_stage_of(code, Stage::Failed("the computer is paired already".into()));
                 return refused("this computer is paired already");
             }
         }
-        self.set_stage(Stage::Finished {
-            device,
-            name,
-            key: key.to_vec(),
-            secret: pairing::offline_secret(&shared),
-        });
+        self.set_stage_of(
+            code,
+            Stage::Finished {
+                device,
+                name,
+                key: key.to_vec(),
+                secret: pairing::offline_secret(&shared),
+            },
+        );
         HostMsg::PairConfirmed {
             mac: pairing::confirmation(&shared, exporter, true),
         }

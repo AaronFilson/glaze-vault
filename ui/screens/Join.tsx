@@ -116,9 +116,15 @@ export function Join({ onJoined, onBack }: { onJoined: () => void; onBack: () =>
         <button type="submit" className="primary" disabled={!joining || !address.trim() || !code.trim() || waiting}>
           {waiting ? 'Joining…' : 'Join'}
         </button>
-        <button type="button" className="link" disabled={waiting} onClick={onBack}>
-          Back
-        </button>
+        {waiting ? (
+          <button type="button" className="link" onClick={() => void api.cancelJoin().catch(() => {})}>
+            Stop waiting
+          </button>
+        ) : (
+          <button type="button" className="link" onClick={onBack}>
+            Back
+          </button>
+        )}
       </form>
     </main>
   );

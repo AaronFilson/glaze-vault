@@ -462,6 +462,8 @@ export const api = {
   waitForPairing: () => invoke<PairingComputer>('wait_for_pairing'),
   approvePairing: (people: string[]) => invoke<void>('approve_pairing', { people }),
   cancelPairing: () => invoke<void>('cancel_pairing'),
+  /** Stops waiting for the admin to approve this computer. */
+  cancelJoin: () => invoke<void>('cancel_join'),
   devices: () => invoke<Device[]>('devices'),
   syncStatus: () => invoke<SyncStatus>('sync_status'),
   /** The hosts that answer on this network within a few seconds. */
