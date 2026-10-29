@@ -11,7 +11,7 @@ mod tls;
 
 pub use client::{
     AdminPairing, DirectoryHeld, Finished, SharedVault, Watching, check_out, devices, extension_code, hold_directory,
-    pair, release, revoke_device, sync, sync_shared, watch,
+    pair, release, revoke_device, sync, sync_holding, sync_shared, watch,
 };
 pub use conn::Conn;
 pub use discover::{Advertised, Found, SERVICE, advertise, browse, vault_tag};

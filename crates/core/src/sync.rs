@@ -251,6 +251,9 @@ pub enum Refusal {
     ParentUnknown,
     /// An attachment whose bytes have not all reached the host: send them, then it again.
     BytesMissing,
+    /// A change to people, roles or collections from a computer that does not hold the
+    /// directory: hold it, then send it again.
+    DirectoryNotHeld,
     /// Something about it does not hold together.
     Invalid {
         reason: String,

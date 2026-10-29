@@ -65,6 +65,18 @@ enum Stage {
     Failed(String),
 }
 
+/// The directory, held by one connection: let go when it ends.
+struct Holding {
+    server: Arc<Server>,
+    _lock: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        self.server.host().set_directory_holder(None);
+    }
+}
+
 fn refused(reason: impl Into<String>) -> HostMsg {
     HostMsg::Refused { reason: reason.into() }
 }
@@ -76,7 +88,9 @@ fn now_ms() -> i64 {
 }
 
 impl Server {
-    pub fn new(host: HostStore) -> Arc<Server> {
+    pub fn new(mut host: HostStore) -> Arc<Server> {
+        // Over the network, directory changes come only from the computer holding it.
+        host.guard_directory();
         let identity = Zeroizing::new(**host.identity_seed());
         Arc::new(Server {
             host: Mutex::new(host),
@@ -177,7 +191,12 @@ impl Server {
                     } else {
                         match timeout(DIRECTORY_WAIT, self.directory.clone().lock_owned()).await {
                             Ok(held) => {
-                                _directory = Some(held);
+                                let device = session.as_ref().map(HostSession::device);
+                                self.host().set_directory_holder(device);
+                                _directory = Some(Holding {
+                                    server: self.clone(),
+                                    _lock: held,
+                                });
                                 HostMsg::DirectoryLocked
                             }
                             Err(_) => refused("someone else is changing the team: try again in a moment"),

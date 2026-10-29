@@ -215,6 +215,19 @@ pub(crate) struct Renamed {
 }
 
 impl Body {
+    /// Whether it changes people, roles or collections, which a computer that syncs does only
+    /// while it holds the directory at the host (ADR 23). Erasing and moving records, and the
+    /// certificates and organization keys that signing in brings, are not.
+    pub(crate) fn needs_directory(&self) -> bool {
+        !matches!(
+            self,
+            Body::CertificateIssued { .. }
+                | Body::OrganizationKeyAdded { .. }
+                | Body::Erased { .. }
+                | Body::Moved { .. }
+        )
+    }
+
     /// The event's type, as its JSON names it.
     fn name(&self) -> &'static str {
         match self {

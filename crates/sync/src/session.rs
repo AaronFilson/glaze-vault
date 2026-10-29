@@ -206,7 +206,7 @@ impl ClientSession {
                     result
                         .refused
                         .iter()
-                        .filter(|(_, why)| *why != Refusal::BytesMissing)
+                        .filter(|(_, why)| !matches!(why, Refusal::BytesMissing | Refusal::DirectoryNotHeld))
                         .cloned(),
                 );
                 if result.accepted.is_empty() || self.pushes >= MAX_PUSHES {

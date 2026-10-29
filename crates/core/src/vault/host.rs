@@ -62,6 +62,9 @@ pub struct HostStore {
     /// Who is changing what, kept only while the host runs: a checkout is advisory, and one lost
     /// when the host restarts is taken again at the next save.
     checkouts: Vec<Checkout>,
+    /// Over the network, the computer holding the directory, if any; directory changes from any
+    /// other are refused. None until `guard_directory`: in one process there is nothing to clash.
+    directory_holder: Option<Option<Uuid>>,
 }
 
 /// A computer the host syncs with, from its certificate.
@@ -296,6 +299,7 @@ impl HostStore {
             identity: Zeroizing::new(signing::host_key(&host).to_bytes()),
             port: file.port,
             checkouts: Vec::new(),
+            directory_holder: None,
         })
     }
 
@@ -675,7 +679,8 @@ impl HostStore {
                 Some((id, refusal)) => {
                     self.conn.execute_batch("ROLLBACK TO items; RELEASE items")?;
                     for item in group {
-                        let why = if item.id() == id {
+                        // The rest wait with it if it is only to be sent again.
+                        let why = if item.id() == id || refusal == Refusal::DirectoryNotHeld {
                             refusal.clone()
                         } else {
                             invalid("it was made with a change that was refused")
@@ -840,6 +845,10 @@ impl HostStore {
                     Err(refusal) => return Ok(Err(refusal)),
                 };
                 let signed = event.signed.clone().expect("event_of signs");
+                if self.directory_holder.is_some_and(|holder| holder != Some(device.id)) && event.body.needs_directory()
+                {
+                    return Ok(Err(Refusal::DirectoryNotHeld));
+                }
                 let Some(actor) = event.actor else {
                     return Ok(Err(Refusal::NotAllowed));
                 };
@@ -1055,6 +1064,17 @@ impl HostStore {
 
     /// Checks a record out to a person at a computer, who may change it, unless someone else has
     /// it and `take_over` is not asked; returns the checkouts the computer sees after.
+    /// Refuses changes to people, roles or collections from computers that do not hold the
+    /// directory, from now on; the network server calls it.
+    pub fn guard_directory(&mut self) {
+        self.directory_holder.get_or_insert(None);
+    }
+
+    /// The computer that holds the directory now, or none.
+    pub fn set_directory_holder(&mut self, device: Option<Uuid>) {
+        self.directory_holder = Some(device);
+    }
+
     pub fn check_out(&mut self, device: Uuid, person: Uuid, record: Uuid, take_over: bool) -> Result<Vec<Checkout>> {
         let found = self.device(device)?;
         if found.revoked {

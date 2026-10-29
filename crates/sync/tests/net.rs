@@ -115,6 +115,30 @@ async fn a_computer_syncs_over_tls_with_the_host_it_pinned() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_directory_change_goes_only_while_its_computer_holds_the_directory() {
+    let mut lan = lan().await;
+    net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    lan.ana.create_collection("Glazes").unwrap();
+    // Another connection holds the directory, as another computer would.
+    let held = net::hold_directory(&lan.ana, &lan.address).await.unwrap();
+    let other = Uuid::new_v4();
+    lan.server.host().set_directory_holder(Some(other));
+    let report = net::sync_holding(&mut lan.ana, &lan.address, &held).await.unwrap();
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
+    assert!(lan.ana.directory_waiting().unwrap());
+    held.release().await;
+    // A sync holds it for the change, and lets it go after.
+    let report = net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    assert!(report.accepted > 0);
+    assert!(!lan.ana.directory_waiting().unwrap());
+    net::hold_directory(&lan.ana, &lan.address)
+        .await
+        .unwrap()
+        .release()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_admin_pairs_a_new_computer_with_a_code() {
     let mut lan = lan().await;
     net::sync(&mut lan.ana, &lan.address).await.unwrap();

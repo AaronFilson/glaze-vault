@@ -332,6 +332,23 @@ impl Vault {
         Ok(pending)
     }
 
+    /// Whether changes to people, roles or collections made here wait for the host: a sync sends
+    /// them only while this computer holds the directory.
+    pub fn directory_waiting(&self) -> Result<bool> {
+        let bodies = self
+            .conn
+            .prepare(
+                "SELECT e.body FROM changes c JOIN events e ON e.id = c.item_id
+                 WHERE c.host_seq IS NULL AND c.item = 'event' AND c.item_id NOT IN (SELECT item_id FROM refused)",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(bodies
+            .iter()
+            .filter_map(|b| serde_json::from_str::<Body>(b).ok())
+            .any(|b| b.needs_directory()))
+    }
+
     /// The key file entries changed on this computer since the host last had them, signed by this
     /// person: their own, or anyone's for an admin.
     fn changed_entries(&self) -> Result<Vec<EntryItem>> {
@@ -387,8 +404,8 @@ impl Vault {
         for (id, refusal) in &result.refused {
             let id_text = id.to_string();
             match refusal {
-                // Sealed again, or its bytes sent, before the next push.
-                Refusal::StaleEpoch { .. } | Refusal::BytesMissing => {}
+                // Sealed again, its bytes sent, or the directory held, before the next push.
+                Refusal::StaleEpoch { .. } | Refusal::BytesMissing | Refusal::DirectoryNotHeld => {}
                 Refusal::Erased => {
                     tx.execute("DELETE FROM changes WHERE item_id = ?1", params![id_text])?;
                     tx.execute("DELETE FROM attachments WHERE id = ?1", params![id_text])?;
@@ -1266,6 +1283,30 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn a_directory_change_waits_until_its_computer_holds_the_directory() {
+        let mut t = team();
+        t.host.guard_directory();
+        t.computers[0].create_collection("Glazes").unwrap();
+        assert!(t.computers[0].directory_waiting().unwrap());
+        // Another computer holds it: the collection waits, not set aside.
+        let device = t.computers[1].device().unwrap();
+        t.host.set_directory_holder(Some(device));
+        let result = sync(&mut t.computers[0], &mut t.host);
+        assert!(
+            result.refused.iter().all(|(_, why)| *why == Refusal::DirectoryNotHeld),
+            "{:?}",
+            result.refused
+        );
+        assert!(t.computers[0].directory_waiting().unwrap());
+        let ana = t.computers[0].device().unwrap();
+        t.host.set_directory_holder(Some(ana));
+        let result = sync(&mut t.computers[0], &mut t.host);
+        assert!(result.refused.is_empty(), "{:?}", result.refused);
+        assert!(!t.computers[0].directory_waiting().unwrap());
+        assert_eq!(t.computers[0].waiting().unwrap(), 0);
     }
 
     #[test]

@@ -73,8 +73,27 @@ fn unexpected(message: HostMsg) -> Error {
     }
 }
 
-/// Syncs a replica with its host at `address`, as sync_in_process does in one process.
+/// Syncs a replica with its host at `address`, as sync_in_process does in one process. Changes
+/// to people, roles or collections made here go only while this computer holds the directory,
+/// so it holds it for the sync if there are any.
 pub async fn sync(vault: &mut Vault, address: &str) -> Result<Report> {
+    let held = match vault.directory_waiting()? {
+        true => hold_directory(vault, address).await.ok(),
+        false => None,
+    };
+    let report = sync_once(vault, address).await;
+    if let Some(held) = held {
+        held.release().await;
+    }
+    report
+}
+
+/// Syncs while this computer holds the directory already.
+pub async fn sync_holding(vault: &mut Vault, address: &str, _held: &DirectoryHeld) -> Result<Report> {
+    sync_once(vault, address).await
+}
+
+async fn sync_once(vault: &mut Vault, address: &str) -> Result<Report> {
     let mut conn = connect_replica(vault, address).await?;
     let (mut session, mut message) = ClientSession::start(vault)?;
     loop {
@@ -97,7 +116,26 @@ pub trait SharedVault {
 /// Syncs a vault shared with the rest of the app, as `sync` does. If another vault is opened
 /// meanwhile, the sync stops.
 pub async fn sync_shared(vault: &impl SharedVault, address: &str) -> Result<Report> {
-    let (device, pin, id) = vault.with(|v| Ok((v.device_key()?, v.host_key()?, v.device()?)))?;
+    let (device, pin, id, waiting) =
+        vault.with(|v| Ok((v.device_key()?, v.host_key()?, v.device()?, v.directory_waiting()?)))?;
+    let held = match waiting {
+        true => hold(&device, pin.clone(), address).await.ok(),
+        false => None,
+    };
+    let report = sync_shared_once(vault, address, device, pin, id).await;
+    if let Some(held) = held {
+        held.release().await;
+    }
+    report
+}
+
+async fn sync_shared_once(
+    vault: &impl SharedVault,
+    address: &str,
+    device: DeviceKey,
+    pin: Vec<u8>,
+    id: Uuid,
+) -> Result<Report> {
     let mut conn = connect_pinned(&device, pin, address).await?;
     let (mut session, mut message) = vault.with(|v| ClientSession::start(v))?;
     loop {
@@ -146,7 +184,11 @@ pub struct DirectoryHeld {
 
 /// Waits until no other computer is changing the directory, and holds it.
 pub async fn hold_directory(vault: &Vault, address: &str) -> Result<DirectoryHeld> {
-    let mut conn = connect_replica(vault, address).await?;
+    hold(&vault.device_key()?, vault.host_key()?, address).await
+}
+
+async fn hold(device: &DeviceKey, pin: Vec<u8>, address: &str) -> Result<DirectoryHeld> {
+    let mut conn = connect_pinned(device, pin, address).await?;
     conn.send(&ClientMsg::LockDirectory).await?;
     match answer(&mut conn).await? {
         HostMsg::DirectoryLocked => Ok(DirectoryHeld { conn }),

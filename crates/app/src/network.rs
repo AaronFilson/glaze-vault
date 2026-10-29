@@ -160,14 +160,15 @@ pub(crate) fn with_host<T: Send>(
             Err(glaze_vault_sync::Error::Protocol(reason)) => return Err(network_error(reason)),
             Err(_) => return Err(Error::NeedsHost.into()),
         };
-        if net::sync(vault, &address).await.is_err() {
+        if net::sync_holding(vault, &address, &held).await.is_err() {
             held.release().await;
             return Err(Error::NeedsHost.into());
         }
         let done = action(vault).map_err(CommandError::from);
         if done.is_ok() {
-            // If this fails the change waits here, and goes with the next sync.
-            let _ = net::sync(vault, &address).await;
+            // If this fails the change waits here, and goes with the next sync, which holds the
+            // directory again to send it.
+            let _ = net::sync_holding(vault, &address, &held).await;
         }
         held.release().await;
         done
