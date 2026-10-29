@@ -686,7 +686,12 @@ fn save_export(
 }
 
 /// Asks for a file to open.
-fn open_dialog(window: &WebviewWindow, title: &str, kind: &str, extensions: &[&str]) -> CommandResult<Option<PathBuf>> {
+pub(crate) fn open_dialog(
+    window: &WebviewWindow,
+    title: &str,
+    kind: &str,
+    extensions: &[&str],
+) -> CommandResult<Option<PathBuf>> {
     if let Some(path) = dev_picked() {
         return Ok(Some(path));
     }
@@ -718,7 +723,7 @@ fn dev_pick(path: String) {
     *DEV_PICK.lock().unwrap() = Some(PathBuf::from(path));
 }
 
-fn save_dialog(
+pub(crate) fn save_dialog(
     window: &WebviewWindow,
     suggested_name: &str,
     kind: &str,
@@ -1023,6 +1028,10 @@ pub fn run() {
             network::set_offline_policy,
             network::extension_code,
             network::revoke_device,
+            network::host_backups,
+            network::restore_host_backup,
+            network::save_host_backup,
+            network::restore_host_from_file,
             #[cfg(debug_assertions)]
             dev_screen,
             #[cfg(debug_assertions)]

@@ -2,6 +2,7 @@
 //! as CBOR, which is compact for bytes and lets fields be added later (plan section 3.8).
 
 use crate::{Error, Result};
+use glaze_vault_core::HostBackup;
 use glaze_vault_core::sync::{
     Batch, Checkout, Chunk, DeviceCertificate, DeviceInfo, Item, JoinPackage, Level, PushResult, Scope, Welcome,
 };
@@ -79,6 +80,26 @@ pub enum ClientMsg {
         device: Uuid,
         lost: bool,
     },
+    /// An admin's computer asks which backups hostd keeps (docs/adr/0025-host-backups-from-the-app.md).
+    ListBackups,
+    /// An admin's computer has hostd put one of them back: it restarts to.
+    RestoreBackup {
+        name: String,
+    },
+    /// An admin's computer asks for a backup of the store now, as one file, to keep elsewhere.
+    RequestBackup,
+    /// A piece of that file from `offset`.
+    GetBackupChunk {
+        offset: u64,
+    },
+    /// A piece of a backup file an admin's computer kept, to put back, from `offset`.
+    PutBackupChunk {
+        offset: u64,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    /// Puts back the backup file just sent.
+    RestoreSent,
     /// A new computer's first SPAKE2 message, from the code.
     Pair {
         #[serde(with = "serde_bytes")]
@@ -127,6 +148,19 @@ pub enum HostMsg {
     Devices(Vec<DeviceInfo>),
     ExtensionCode {
         code: String,
+    },
+    Backups(Vec<HostBackup>),
+    /// hostd stops to put the backup back, and starts again in a few seconds.
+    Restoring,
+    /// A backup file is ready to fetch, this long.
+    BackupReady {
+        bytes: u64,
+        made_at: i64,
+    },
+    /// A piece of it; empty past its end.
+    BackupChunk {
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
     },
     /// The host's SPAKE2 message.
     PairChallenge {

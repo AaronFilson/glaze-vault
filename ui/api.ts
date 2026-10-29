@@ -333,6 +333,13 @@ export interface Device {
 }
 
 /** The vault's rule for computers that go without reaching the host (docs/adr/0024-offline-limits-and-revocation.md). */
+/** One of the backups hostd keeps on the host computer. */
+export interface HostBackup {
+  name: string;
+  madeAt: number;
+  bytes: number;
+}
+
 export interface OfflinePolicy {
   nagDays: number;
   /** Null: changes never stop. */
@@ -477,6 +484,12 @@ export const api = {
   /** For an admin: a code another computer types to take changes for `days` more. */
   extensionCode: (device: string, days: number) => invoke<string>('extension_code', { device, days }),
   revokeDevice: (device: string, lost: boolean) => invoke<Revoked>('revoke_device', { device, lost }),
+  /** For an admin on a computer that syncs (docs/adr/0025-host-backups-from-the-app.md). */
+  hostBackups: () => invoke<HostBackup[]>('host_backups'),
+  restoreHostBackup: (name: string) => invoke<void>('restore_host_backup', { name }),
+  /** Null if the person cancelled; otherwise when the backup was made. */
+  saveHostBackup: (suggestedName: string) => invoke<number | null>('save_host_backup', { suggestedName }),
+  restoreHostFromFile: () => invoke<number | null>('restore_host_from_file'),
   auditLog: (limit: number | null) => invoke<AuditLog>('audit_log', { limit }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),

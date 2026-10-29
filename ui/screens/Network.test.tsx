@@ -155,4 +155,19 @@ describe('the network section', () => {
       ])
     );
   });
+
+  it("lists the host's backups and puts one back after asking", async () => {
+    const calls: [string, unknown][] = [];
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'network_status') return status({ replica: true, hostAddress: '192.168.1.20:47917' });
+      if (command === 'host_backups') return [{ name: 'backup-1', madeAt: Date.UTC(2026, 9, 28), bytes: 5_000_000 }];
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Put this one back…' }));
+    expect(screen.getByText(/something erased since may come back/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Put it back' }));
+    expect(await screen.findByText(/The host is putting the backup back/)).toBeTruthy();
+    expect(calls).toContainEqual(['restore_host_backup', { name: 'backup-1' }]);
+  });
 });

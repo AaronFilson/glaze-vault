@@ -8,7 +8,9 @@
 use crate::syncing::{SyncStatus, Syncing};
 use crate::{AppState, CommandError, CommandResult, locked};
 use glaze_vault_core::sync::{Checkout, DeviceInfo, DeviceKey};
-use glaze_vault_core::{Error, HostStore, Kind, Note, OfflinePolicy, OfflineStatus, Vault};
+use glaze_vault_core::{
+    Error, HOST_BACKUP_EXTENSION, HostBackup, HostStore, Kind, Note, OfflinePolicy, OfflineStatus, Vault,
+};
 use glaze_vault_sync::net::{self, AdminPairing, DEFAULT_PORT, Finished};
 use serde::Serialize;
 use std::fs;
@@ -16,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, WebviewWindow};
 use uuid::Uuid;
 
 /// What the network keeps between commands.
@@ -678,4 +680,71 @@ pub fn revoke_device(state: State<AppState>, device: Uuid, lost: bool) -> Comman
         passwords,
         reset_elsewhere,
     })
+}
+
+/// The host computer's own backups, newest first, for an admin
+/// (docs/adr/0025-host-backups-from-the-app.md).
+#[tauri::command(async)]
+pub fn host_backups(state: State<AppState>) -> CommandResult<Vec<HostBackup>> {
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move { net::host_backups(vault, &address).await }).map_err(network_error)
+}
+
+/// Has the host put one of its backups back: it starts again in a few seconds, and computers
+/// send again what it lacks as they sync.
+#[tauri::command(async)]
+pub fn restore_host_backup(state: State<AppState>, name: String) -> CommandResult<()> {
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move { net::restore_host_backup(vault, &address, &name).await }).map_err(network_error)
+}
+
+/// Asks where to keep a backup of the host, then fetches one made now. None if the person
+/// cancelled; otherwise when it was made.
+#[tauri::command(async)]
+pub fn save_host_backup(
+    window: WebviewWindow,
+    state: State<AppState>,
+    suggested_name: String,
+) -> CommandResult<Option<i64>> {
+    let Some(path) = crate::save_dialog(
+        &window,
+        &suggested_name,
+        "Glaze Vault host backup",
+        HOST_BACKUP_EXTENSION,
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    let made = on_network(move || async move { net::download_host_backup(vault, &address, &path).await })
+        .map_err(network_error)?;
+    Ok(Some(made))
+}
+
+/// Asks for a backup of the host kept elsewhere, checks it is this vault's, and sends it to the
+/// host to put back. None if the person cancelled; otherwise when it was made.
+#[tauri::command(async)]
+pub fn restore_host_from_file(window: WebviewWindow, state: State<AppState>) -> CommandResult<Option<i64>> {
+    let Some(path) = crate::open_dialog(
+        &window,
+        "Choose a backup of the host",
+        "Glaze Vault host backup",
+        &[HOST_BACKUP_EXTENSION],
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let made = vault.check_host_backup(&path)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move { net::restore_host_from_file(vault, &address, &path).await })
+        .map_err(network_error)?;
+    Ok(Some(made))
 }

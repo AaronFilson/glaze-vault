@@ -8,8 +8,8 @@ use super::tls;
 use crate::proto::{ClientMsg, HostMsg};
 use crate::session::{ClientSession, Report};
 use crate::{Error, Result};
-use glaze_vault_core::Vault;
 use glaze_vault_core::sync::{Checkout, DeviceInfo, DeviceKey};
+use glaze_vault_core::{HostBackup, Vault};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -273,6 +273,96 @@ pub async fn revoke_device(vault: &Vault, address: &str, device: Uuid, lost: boo
         HostMsg::Devices(devices) => Ok(devices),
         other => Err(unexpected(other)),
     }
+}
+
+/// The backups hostd keeps on the host computer, newest first, for an admin's computer.
+pub async fn host_backups(vault: &Vault, address: &str) -> Result<Vec<HostBackup>> {
+    match ask_as_admin(vault, address, ClientMsg::ListBackups).await? {
+        HostMsg::Backups(backups) => Ok(backups),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// Has hostd put one of its backups back. It stops, and starts again in a few seconds.
+pub async fn restore_host_backup(vault: &Vault, address: &str, name: &str) -> Result<()> {
+    match ask_as_admin(vault, address, ClientMsg::RestoreBackup { name: name.into() }).await? {
+        HostMsg::Restoring => Ok(()),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// Saves a backup of the host now to `out`, as one file to keep elsewhere; when it was made.
+pub async fn download_host_backup(vault: &Vault, address: &str, out: &Path) -> Result<i64> {
+    let mut conn = greeted(vault, address).await?;
+    conn.send(&ClientMsg::RequestBackup).await?;
+    let (bytes, made_at) = match answer(&mut conn).await? {
+        HostMsg::BackupReady { bytes, made_at } => (bytes, made_at),
+        other => return Err(unexpected(other)),
+    };
+    let partial = out.with_extension("partial");
+    let fetched = async {
+        let mut file = tokio::fs::File::create(&partial).await?;
+        let mut offset = 0;
+        while offset < bytes {
+            conn.send(&ClientMsg::GetBackupChunk { offset }).await?;
+            match answer(&mut conn).await? {
+                HostMsg::BackupChunk { bytes } if !bytes.is_empty() => {
+                    tokio::io::AsyncWriteExt::write_all(&mut file, &bytes).await?;
+                    offset += bytes.len() as u64;
+                }
+                HostMsg::BackupChunk { .. } => return Err(Error::Protocol("the backup ended early".into())),
+                other => return Err(unexpected(other)),
+            }
+        }
+        file.sync_all().await?;
+        Ok(())
+    }
+    .await;
+    let _ = conn.send(&ClientMsg::Bye).await;
+    conn.close().await;
+    match fetched {
+        Ok(()) => {
+            tokio::fs::rename(&partial, out).await?;
+            Ok(made_at)
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&partial).await;
+            Err(e)
+        }
+    }
+}
+
+/// Sends a backup file kept elsewhere to the host, which puts it back: it stops, and starts
+/// again in a few seconds. The host refuses one that is not its own.
+pub async fn restore_host_from_file(vault: &Vault, address: &str, file: &Path) -> Result<()> {
+    use tokio::io::AsyncReadExt;
+    let mut conn = greeted(vault, address).await?;
+    let mut source = tokio::fs::File::open(file).await?;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut offset = 0u64;
+    let sent = async {
+        loop {
+            let read = source.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            let bytes = buffer[..read].to_vec();
+            conn.send(&ClientMsg::PutBackupChunk { offset, bytes }).await?;
+            match answer(&mut conn).await? {
+                HostMsg::ChunkTaken { next } => offset = next,
+                other => return Err(unexpected(other)),
+            }
+        }
+        conn.send(&ClientMsg::RestoreSent).await?;
+        match answer(&mut conn).await? {
+            HostMsg::Restoring => Ok(()),
+            other => Err(unexpected(other)),
+        }
+    }
+    .await;
+    let _ = conn.send(&ClientMsg::Bye).await;
+    conn.close().await;
+    sent
 }
 
 /// A replica's connection, past hello.

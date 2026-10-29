@@ -10,8 +10,9 @@ mod server;
 mod tls;
 
 pub use client::{
-    AdminPairing, DirectoryHeld, Finished, SharedVault, Watching, check_out, devices, extension_code, hold_directory,
-    pair, release, revoke_device, sync, sync_holding, sync_shared, watch,
+    AdminPairing, DirectoryHeld, Finished, SharedVault, Watching, check_out, devices, download_host_backup,
+    extension_code, hold_directory, host_backups, pair, release, restore_host_backup, restore_host_from_file,
+    revoke_device, sync, sync_holding, sync_shared, watch,
 };
 pub use conn::Conn;
 pub use discover::{Advertised, Found, SERVICE, advertise, browse, vault_tag};

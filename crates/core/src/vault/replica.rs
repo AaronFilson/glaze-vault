@@ -1584,6 +1584,49 @@ mod tests {
     }
 
     #[test]
+    fn a_backup_of_the_host_kept_elsewhere_goes_back_to_it() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let file = kept.path().join("host.gvhost");
+        let made = t.host.export_backup(&file).unwrap();
+        // Ana's computer, with the organization's key, knows it; Ben's does not.
+        assert_eq!(t.computers[0].check_host_backup(&file).unwrap(), made);
+        assert!(t.computers[1].check_host_backup(&file).is_err());
+
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let saved = t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "After", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+
+        // A file changed anywhere is refused.
+        let mut changed = fs::read(&file).unwrap();
+        let last = changed.len() - 1;
+        changed[last] ^= 1;
+        let bad = kept.path().join("changed.gvhost");
+        fs::write(&bad, &changed).unwrap();
+        assert!(matches!(t.host.import_backup(&bad), Err(Error::NotABackup)));
+        assert!(t.host.backups().unwrap().is_empty());
+
+        let name = t.host.import_backup(&file).unwrap();
+        assert_eq!(t.host.backups().unwrap()[0].name, name);
+        t.host.ask_restore(&name).unwrap();
+        assert!(t.host.ask_restore("../elsewhere").is_err());
+        let dir = t.host.dir().to_owned();
+        let asked = fs::read_to_string(dir.join(super::super::RESTORE_FILE)).unwrap();
+        drop(t.host);
+        HostStore::restore(&dir, Path::new(&asked)).unwrap();
+        t.host = HostStore::open(&dir).unwrap();
+        assert!(!items::exists(&t.host.conn, "revisions", &saved.revision_id).unwrap());
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(result.accepted.iter().any(|(id, _)| *id == saved.revision_id));
+    }
+
+    #[test]
     fn after_the_host_is_restored_each_computer_sends_again_what_its_people_saved() {
         let mut t = team();
         let backups = tempfile::tempdir().unwrap();

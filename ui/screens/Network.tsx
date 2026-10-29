@@ -3,6 +3,7 @@ import {
   api,
   errorText,
   type Device,
+  type HostBackup,
   type NetworkStatus,
   type PairingCode,
   type PairingComputer,
@@ -67,6 +68,7 @@ export function Network({
       {admin && <Pairing people={people} />}
       {admin && <Devices people={people} own={status.device} />}
       {admin && <OfflineRule />}
+      {admin && <HostBackups />}
       {status.hostHere ? (
         admin && (
           <StopHosting
@@ -560,6 +562,114 @@ function OfflineRule() {
           </p>
         )}
       </form>
+    </section>
+  );
+}
+
+const megabytes = (bytes: number) => `${Math.max(0.1, bytes / 1024 / 1024).toFixed(1)} MB`;
+const today = () => new Date().toISOString().slice(0, 10);
+
+/** The host's backups, for an admin (docs/adr/0025-host-backups-from-the-app.md): those hostd
+ * makes each day on the host computer, one to keep elsewhere, and putting one back. */
+function HostBackups() {
+  const [backups, setBackups] = useState<HostBackup[] | null>(null);
+  const [asking, setAsking] = useState<HostBackup | 'file' | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const load = () => api.hostBackups().then(setBackups, (e) => setError(errorText(e)));
+  useEffect(() => {
+    void load();
+  }, []);
+  const run = async (work: () => Promise<string | null>) => {
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const done = await work();
+      if (done) setMessage(done);
+      setAsking(null);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const restored =
+    'The host is putting the backup back, and starts again in a few seconds. Each computer then sends again what it saved since.';
+  return (
+    <section aria-label="The host's backups">
+      <h3>The host&rsquo;s backups</h3>
+      <p className="hint">
+        The host computer backs the vault up each day, and keeps the last 14. Keep one elsewhere too, in case the host
+        computer is lost: it opens only with the host computer or the organization&rsquo;s key.
+      </p>
+      {backups && backups.length > 0 && (
+        <ul className="plain">
+          {backups.map((b) => (
+            <li key={b.name} className="row">
+              <span>
+                {when(b.madeAt)}, {megabytes(b.bytes)}
+              </span>
+              <button type="button" disabled={busy} onClick={() => setAsking(b)}>
+                Put this one back…
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {backups && backups.length === 0 && <p className="hint">The host has made no backups yet.</p>}
+      <div className="row">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            void run(async () => {
+              const made = await api.saveHostBackup(`Glaze Vault host ${today()}.gvhost`);
+              return made === null ? null : `Saved a backup of the host made ${when(made)}.`;
+            })
+          }
+        >
+          Save a backup of the host…
+        </button>
+        <button type="button" disabled={busy} onClick={() => setAsking('file')}>
+          Put back a backup saved elsewhere…
+        </button>
+      </div>
+      {asking && (
+        <div className="notice warning" role="alertdialog" aria-label="Put a backup back">
+          <p>
+            The host goes back to how it was
+            {asking === 'file' ? ' when that backup was made' : ` on ${when(asking.madeAt)}`}. Each computer then sends
+            again what it saved since, so little is lost; but something erased since may come back, and computers paired
+            since must pair again.
+          </p>
+          <div className="row">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  if (asking === 'file') return (await api.restoreHostFromFile()) === null ? null : restored;
+                  await api.restoreHostBackup(asking.name);
+                  return restored;
+                })
+              }
+            >
+              {asking === 'file' ? 'Choose the backup and put it back' : 'Put it back'}
+            </button>
+            <button type="button" disabled={busy} onClick={() => setAsking(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {message && <p role="status">{message}</p>}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
     </section>
   );
 }

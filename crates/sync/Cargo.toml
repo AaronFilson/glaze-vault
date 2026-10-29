@@ -23,7 +23,7 @@ sha2 = "0.11.1"
 # The only release that uses curve25519-dalek 5, as x25519-dalek and ed25519-dalek do.
 spake2 = { version = "=0.5.0-pre.0", features = ["getrandom"] }
 thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["net", "rt-multi-thread", "time", "sync", "io-util", "macros"] }
+tokio = { version = "1.53.3", features = ["net", "rt-multi-thread", "time", "sync", "io-util", "macros", "fs"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"

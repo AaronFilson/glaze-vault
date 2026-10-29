@@ -409,3 +409,55 @@ async fn a_paired_computer_takes_the_hosts_extension_codes_until_it_is_revoked()
     let own = lan.ana.device().unwrap();
     assert!(net::revoke_device(&lan.ana, &lan.address, own, false).await.is_err());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_admins_computer_saves_a_backup_of_the_host_and_puts_one_back() {
+    let mut lan = lan().await;
+    net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    assert!(net::host_backups(&lan.ana, &lan.address).await.unwrap().is_empty());
+    let kept = tempfile::tempdir().unwrap();
+    let file = kept.path().join("studio.gvhost");
+    let made = net::download_host_backup(&lan.ana, &lan.address, &file).await.unwrap();
+    assert_eq!(lan.ana.check_host_backup(&file).unwrap(), made);
+    // Nothing is left behind on the host.
+    let host_dir = lan.dirs[1].path();
+    let left = std::fs::read_dir(host_dir)
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension().is_some_and(|x| x == "gvhost"))
+        .count();
+    assert_eq!(left, 0);
+
+    // Sent back, it becomes one of the host's backups, and hostd is asked to restore it.
+    net::restore_host_from_file(&lan.ana, &lan.address, &file)
+        .await
+        .unwrap();
+    let backups = net::host_backups(&lan.ana, &lan.address).await.unwrap();
+    assert_eq!(backups.len(), 1);
+    let asked = std::fs::read_to_string(host_dir.join(glaze_vault_core::RESTORE_FILE)).unwrap();
+    assert!(asked.ends_with(&backups[0].name));
+    std::fs::remove_file(host_dir.join(glaze_vault_core::RESTORE_FILE)).unwrap();
+    net::restore_host_backup(&lan.ana, &lan.address, &backups[0].name)
+        .await
+        .unwrap();
+    assert!(host_dir.join(glaze_vault_core::RESTORE_FILE).exists());
+    assert!(
+        net::restore_host_backup(&lan.ana, &lan.address, "backup-1")
+            .await
+            .is_err()
+    );
+
+    // Only an admin's computer.
+    let ben_dir = tempfile::tempdir().unwrap();
+    {
+        let vault = Vault::unlock_as(lan.dirs[0].path(), Some(lan.ana_id), PASSWORD).unwrap();
+        join_locally(&vault, &mut lan.server.host(), ben_dir.path(), lan.ben);
+    }
+    let ben = Vault::unlock_as(ben_dir.path(), Some(lan.ben), OWN).unwrap();
+    assert!(net::host_backups(&ben, &lan.address).await.is_err());
+    assert!(
+        net::download_host_backup(&ben, &lan.address, &kept.path().join("ben.gvhost"))
+            .await
+            .is_err()
+    );
+    assert!(net::restore_host_from_file(&ben, &lan.address, &file).await.is_err());
+}

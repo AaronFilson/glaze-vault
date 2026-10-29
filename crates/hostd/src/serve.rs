@@ -9,10 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-/// A file in the host's folder naming a backup to restore at the next start.
-pub const RESTORE_FILE: &str = "restore-from";
-/// Where the daily backups go, in the host's folder.
-pub const BACKUPS: &str = "backups";
+/// A file in the host's folder naming a backup to restore at the next start, and where the
+/// daily backups go, in the host's folder.
+pub use glaze_vault_core::{HOST_BACKUPS as BACKUPS, RESTORE_FILE};
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Restores the backup a restore asked for, if one did, before the store opens.

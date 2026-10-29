@@ -28,6 +28,8 @@ const IDLE: Duration = Duration::from_secs(120);
 const KEEPALIVE: Duration = Duration::from_secs(50);
 /// How long a computer waits for another to finish changing the directory.
 const DIRECTORY_WAIT: Duration = Duration::from_secs(30);
+/// The pieces a backup file goes in.
+const BACKUP_CHUNK: usize = 1024 * 1024;
 
 pub struct Server {
     host: Mutex<HostStore>,
@@ -65,6 +67,70 @@ enum Stage {
     Failed(String),
 }
 
+/// A backup file a connection is fetching or sending, kept in the host's folder until it ends.
+#[derive(Default)]
+struct Transfer {
+    path: Option<std::path::PathBuf>,
+    sending: bool,
+}
+
+impl Transfer {
+    fn path(&mut self, dir: &std::path::Path, what: &str) -> std::path::PathBuf {
+        self.clear();
+        let path = dir.join(format!("{what}-{}.gvhost", Uuid::new_v4()));
+        self.path = Some(path.clone());
+        path
+    }
+
+    fn read(&self, offset: u64) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = self.path.as_ref().filter(|_| !self.sending);
+        let mut file = std::fs::File::open(path.ok_or(std::io::ErrorKind::NotFound)?)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = Vec::with_capacity(BACKUP_CHUNK);
+        file.take(BACKUP_CHUNK as u64).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Adds a piece from `offset`, which must be where the file ends; the length after.
+    fn write(&mut self, dir: &std::path::Path, offset: u64, bytes: &[u8]) -> std::io::Result<u64> {
+        use std::io::Write;
+        if offset == 0 {
+            self.path(dir, "upload");
+            self.sending = true;
+        }
+        let path = self
+            .path
+            .as_ref()
+            .filter(|_| self.sending)
+            .ok_or(std::io::ErrorKind::NotFound)?;
+        let length = std::fs::metadata(path).map_or(0, |m| m.len());
+        if length != offset {
+            return Err(std::io::Error::other("a piece out of order"));
+        }
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+        file.write_all(bytes)?;
+        Ok(length + bytes.len() as u64)
+    }
+
+    fn sent(&self) -> Option<std::path::PathBuf> {
+        self.path.clone().filter(|_| self.sending)
+    }
+
+    fn clear(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+        self.sending = false;
+    }
+}
+
+impl Drop for Transfer {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
 /// The directory, held by one connection: let go when it ends.
 struct Holding {
     server: Arc<Server>,
@@ -100,6 +166,14 @@ impl Server {
             news: watch::Sender::new(()),
             directory: Arc::new(tokio::sync::Mutex::new(())),
         })
+    }
+
+    /// Says hostd will stop to put a backup back, which it does once it sees the file asking.
+    fn restoring(&self, asked: std::result::Result<(), glaze_vault_core::Error>) -> HostMsg {
+        match asked {
+            Ok(()) => HostMsg::Restoring,
+            Err(e) => refused(e.to_string()),
+        }
     }
 
     /// The store, for what runs beside the server.
@@ -150,6 +224,8 @@ impl Server {
         let mut spake = None;
         // The directory, while this computer holds it; let go when the connection ends.
         let mut _directory = None;
+        // A backup file this connection is fetching or sending, removed when it ends.
+        let mut transfer = Transfer::default();
         let outcome = loop {
             let message = match timeout(IDLE, conn.recv::<ClientMsg>()).await {
                 Err(_) => break Ok(()),
@@ -231,6 +307,52 @@ impl Server {
                             }
                             Err(e) => refused(e.to_string()),
                         }
+                    }
+                },
+                ClientMsg::ListBackups => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer lists the host's backups"),
+                    Some(_) => self
+                        .host()
+                        .backups()
+                        .map_or_else(|e| refused(e.to_string()), HostMsg::Backups),
+                },
+                ClientMsg::RestoreBackup { name } => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer restores the host"),
+                    Some(_) => self.restoring(self.host().ask_restore(&name)),
+                },
+                ClientMsg::RequestBackup => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer fetches the host's backups"),
+                    Some(_) => {
+                        let path = transfer.path(self.host().dir(), "download");
+                        let made = self.host().export_backup(&path);
+                        match made.and_then(|made| Ok((std::fs::metadata(&path)?.len(), made))) {
+                            Ok((bytes, made_at)) => HostMsg::BackupReady { bytes, made_at },
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
+                ClientMsg::GetBackupChunk { offset } => match transfer.read(offset) {
+                    Ok(bytes) => HostMsg::BackupChunk { bytes },
+                    Err(e) => refused(e.to_string()),
+                },
+                ClientMsg::PutBackupChunk { offset, bytes } => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer restores the host"),
+                    Some(_) => {
+                        let dir = self.host().dir().to_owned();
+                        match transfer.write(&dir, offset, &bytes) {
+                            Ok(next) => HostMsg::ChunkTaken { next },
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
+                ClientMsg::RestoreSent => match (self.admin(session.as_ref()), transfer.sent()) {
+                    (None, _) => refused("only an admin's computer restores the host"),
+                    (Some(_), None) => refused("no backup was sent"),
+                    (Some(_), Some(path)) => {
+                        let host = self.host();
+                        let asked = host.import_backup(&path).and_then(|name| host.ask_restore(&name));
+                        drop(host);
+                        self.restoring(asked)
                     }
                 },
                 ClientMsg::ListDevices => match self.admin(session.as_ref()) {

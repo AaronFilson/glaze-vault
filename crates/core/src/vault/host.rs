@@ -27,9 +27,9 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// The host's secret, from which its X25519 key comes (plan section 2.2).
-const HOST_KEY: &str = "host.key";
+pub(super) const HOST_KEY: &str = "host.key";
 /// The host's database key, sealed to that key.
-const HOST_FILE: &str = "host.json";
+pub(super) const HOST_FILE: &str = "host.json";
 /// How many change log entries a pull reads at a time.
 const PAGE: i64 = 500;
 /// How long a checkout lasts (plan section 3.5).
@@ -43,6 +43,17 @@ struct HostFile {
     /// The port to listen on, if not the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     port: Option<u16>,
+}
+
+/// The host's key from `key_dir`, and the host file and database from `dir`, opened.
+fn open_files(key_dir: &Path, dir: &Path) -> Result<(KeyPair, HostFile, Connection)> {
+    let secret = Zeroizing::new(fs::read(key_dir.join(HOST_KEY))?);
+    let host = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the host key is not valid".into()))?;
+    let file: HostFile = serde_json::from_slice(&fs::read(dir.join(HOST_FILE))?)?;
+    let database_key = crypto::open_key(&host, &file.database_key, &host_info(&file.vault_id))
+        .ok_or_else(|| Error::Corrupt("the host's database key does not open".into()))?;
+    let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
+    Ok((host, file, conn))
 }
 
 fn host_info(vault_id: &Uuid) -> Vec<u8> {
@@ -278,12 +289,7 @@ fn sent(levels: &[Level], kind: Kind, attachment: bool) -> Option<bool> {
 
 impl HostStore {
     pub fn open(dir: &Path) -> Result<HostStore> {
-        let secret = Zeroizing::new(fs::read(dir.join(HOST_KEY))?);
-        let host = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the host key is not valid".into()))?;
-        let file: HostFile = serde_json::from_slice(&fs::read(dir.join(HOST_FILE))?)?;
-        let database_key = crypto::open_key(&host, &file.database_key, &host_info(&file.vault_id))
-            .ok_or_else(|| Error::Corrupt("the host's database key does not open".into()))?;
-        let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
+        let (host, file, conn) = open_files(dir, dir)?;
         let mode: Option<String> = conn
             .query_row("SELECT value FROM meta WHERE name = ?1", params![MODE], |row| {
                 row.get(0)
@@ -301,6 +307,12 @@ impl HostStore {
             checkouts: Vec::new(),
             directory_holder: None,
         })
+    }
+
+    /// Fails unless the store in `backup`, a folder as `back_up` makes, opens with the key of the
+    /// host in `dir`.
+    pub(super) fn check_backup(dir: &Path, backup: &Path) -> Result<()> {
+        open_files(dir, backup).map(|_| ())
     }
 
     pub fn dir(&self) -> &Path {
@@ -1163,7 +1175,7 @@ const GENERATION: &str = "generation";
 pub const BACKUPS_KEPT: usize = 14;
 /// What a backup of the host's store holds, besides its database: the database key, sealed to
 /// the host's key, which stays where it is.
-const BACKUP_PREFIX: &str = "backup-";
+pub(super) const BACKUP_PREFIX: &str = "backup-";
 
 impl HostStore {
     /// The store's generation (plan section 3.9): new each time it is restored from a backup, so
