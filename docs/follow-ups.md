@@ -37,24 +37,17 @@ Work decided on but not done yet, with the reason it waits.
   app ([ADR 22](adr/0022-host-mode.md)); and client mode: joining, the background sync, checkouts
   and photos in pieces ([ADR 23](adr/0023-client-mode.md)); and offline limits, revoking computers
   and the host's backups ([ADR 24](adr/0024-offline-limits-and-revocation.md)). Phase 2 is built.
-- Left from offline limits and revoking: an admin's computer downloading a backup of the host
-  (`RequestBackup`), and restoring one from the app rather than `hostd restore`; a screen for
-  rules by role, which the core and the directory already keep; the LAN update mirror (ADR 5,
-  after stage 8 in the plan).
+- Left after stage 8 ([ADR 25](adr/0025-host-backups-from-the-app.md) built the rest): the LAN
+  update mirror (ADR 5, after stage 8 in the plan), which needs signed updates first; putting a
+  `.gvhost` file on a new host computer, opened with the organization's key; making someone an
+  admin or taking it away from a computer without their key file entry (from the host computer
+  for now); joining photo pieces with rusqlite's incremental BLOB writes rather than in memory.
 - Left from the transport and host mode: the organization certifying the host key at conversion;
-  the offline secret from pairing (stage 8); hostd under a user of its own on macOS
-  (`_glazevault`) and `host.key` under DPAPI on Windows; MSI updates on a computer that serves
-  (only the NSIS installer stops the service); trying the Windows service and updates on a real
-  install; `SMAppService` once macOS 12 support is dropped.
-- Left from the sync core, for the stages that need them: the host keeping and signing the audit
-  log (the computers' logs stay on them for now); a new organization recovery sheet or key reaching
-  every computer's key file; resetting someone, or making or taking an admin, from a computer that
-  does not have their key file entry (from the host computer for now).
-- Left from client mode: the host refusing a directory change from a computer that did not hold
-  the directory (the app always holds it, so only another program would); fetching photos on
-  demand as well as all of them (the plan's question 9); joining photo pieces with rusqlite's
-  incremental BLOB writes rather than in memory; and checkouts of batch sheets, mixes, limit sets
-  and price lists, which only recipes, materials and firings have.
+  hostd under a user of its own on macOS (`_glazevault`) and `host.key` under DPAPI on Windows;
+  MSI updates on a computer that serves (only the NSIS installer stops the service); trying the
+  Windows service and updates on a real install; `SMAppService` once macOS 12 support is dropped.
+- Left from the sync core: the host keeping and signing the audit log (the computers' logs stay
+  on them for now); a new organization recovery sheet or key reaching every computer's key file.
 - The audit log notes opening recipes, materials, batch sheets and firings; mixes, limit sets and
   price lists could be noted too. Signatures of attachments are kept but not shown anywhere yet.
 

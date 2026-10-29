@@ -360,12 +360,10 @@ export interface OfflineStatus {
   clockBack: boolean;
 }
 
-/** A computer revoked; for one lost, its people's new one-time passwords, and those to reset from
- * the host computer. */
+/** A computer revoked; for one lost, its people's new one-time passwords. */
 export interface Revoked {
   devices: Device[];
   passwords: [string, string][];
-  resetElsewhere: string[];
 }
 
 export const api = {

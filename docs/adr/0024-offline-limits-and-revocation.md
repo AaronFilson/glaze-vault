@@ -78,6 +78,7 @@ copy comes back to.
 - Computers paired after the backup that was restored cannot sync, and pair again.
 - An admin's computer downloading a backup of the host (`RequestBackup`), and the app restoring
   one, wait: for now the host's backups are on the host computer, for an administrator there.
+  Built since: [ADR 25](0025-host-backups-from-the-app.md).
 - Rules by role, and an admin's computer resetting someone whose key file entry it does not
-  have, have no screen yet.
+  have, have no screen yet. Built since: ADR 25.
 - Older versions of the app refuse a vault at schema 13.

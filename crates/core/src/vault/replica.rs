@@ -392,6 +392,7 @@ impl Vault {
     /// stays here, set aside, to show.
     pub fn apply_push_result(&mut self, result: &PushResult, pushed: &[Item]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        let mut gone_elsewhere = Vec::new();
         for (id, seq) in &result.accepted {
             tx.execute(
                 "UPDATE changes SET host_seq = ?1 WHERE item_id = ?2 AND host_seq IS NULL",
@@ -399,6 +400,7 @@ impl Vault {
             )?;
             if let Some(Item::Entry(entry)) = pushed.iter().find(|item| item.id() == *id) {
                 put_entry(&tx, entry, false)?;
+                gone_elsewhere.push(entry.person);
             }
         }
         for (id, refusal) in &result.refused {
@@ -442,6 +444,20 @@ impl Vault {
             }
         }
         tx.commit()?;
+        // An entry reset here for someone who signs in elsewhere has gone on to their computers.
+        if self
+            .keyring
+            .users
+            .iter()
+            .any(|u| u.elsewhere && gone_elsewhere.contains(&u.id))
+        {
+            let mut keyring = self.keyring.clone();
+            keyring
+                .users
+                .retain(|u| !(u.elsewhere && gone_elsewhere.contains(&u.id)));
+            keyring.write(&self.dir.join(KEYRING_FILE))?;
+            self.keyring = keyring;
+        }
         self.load_collections()
     }
 
@@ -1643,15 +1659,30 @@ mod tests {
             .find(|c| c.id == t.shared)
             .map(|_| t.computers[0].directory.collection(t.shared).unwrap().epoch)
             .unwrap();
-        // Ana's computer has only her own key file entry: Ben is reset from the host computer.
-        let (passwords, elsewhere) = t.computers[0].secure_after_lost(&[t.ben]).unwrap();
-        assert!(passwords.is_empty());
-        assert_eq!(elsewhere, vec![t.ben]);
+        // Ana's computer has only her own key file entry, and resets Ben all the same.
+        let passwords = t.computers[0].secure_after_lost(&[t.ben]).unwrap();
+        assert_eq!(passwords.iter().map(|p| p.0).collect::<Vec<_>>(), vec![t.ben]);
         assert!(t.computers[0].directory.collection(t.shared).unwrap().epoch > epoch);
         // Production, which Ben could not read, keeps its key.
         assert_eq!(t.computers[0].directory.collection(t.production).unwrap().epoch, 1);
+        // Ben cannot sign in on Ana's computer while his new entry waits there for the host.
+        let dir = t.computers[0].dir.clone();
+        assert!(Vault::people_in(&dir).unwrap().iter().all(|p| p.id != t.ben));
+        assert!(Vault::unlock_as(&dir, Some(t.ben), &passwords[0].1).is_err());
         let result = sync(&mut t.computers[0], &mut t.host);
         assert!(result.refused.is_empty(), "{:?}", result.refused);
+        // It reached the host, for his computers, and went from Ana's.
+        assert!(t.computers[0].keyring.user(&t.ben).is_err());
+        let entry: String = t
+            .host
+            .conn
+            .query_row(
+                "SELECT entry FROM key_entries WHERE person_id = ?1",
+                params![t.ben.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(serde_json::from_str::<PersonEntry>(&entry).unwrap().must_set_password);
     }
 
     #[test]

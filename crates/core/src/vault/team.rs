@@ -463,10 +463,8 @@ impl Vault {
     /// any of its people could read gets a new key, so what is saved from now on is out of reach
     /// of the keys on it, and each of its people but this admin gets new keys and a one-time
     /// password, which is returned to pass on, since their private keys are on it under their
-    /// passwords. Only people whose key file entries this computer has can be reset here; the
-    /// others are returned too, to reset from the host computer, which has everyone's.
-    #[allow(clippy::type_complexity)]
-    pub fn secure_after_lost(&mut self, people: &[Uuid]) -> Result<(Vec<(Uuid, String)>, Vec<Uuid>)> {
+    /// passwords.
+    pub fn secure_after_lost(&mut self, people: &[Uuid]) -> Result<Vec<(Uuid, String)>> {
         self.admin()?;
         let any_admin = people.iter().any(|p| self.directory.is_admin(*p));
         let mut collections: Vec<Uuid> = if any_admin {
@@ -488,17 +486,17 @@ impl Vault {
         tx.commit()?;
         self.load_collections()?;
         let mut passwords = Vec::new();
-        let (reset, elsewhere): (Vec<Uuid>, Vec<Uuid>) = people
+        let reset: Vec<Uuid> = people
             .iter()
             .copied()
             .filter(|p| *p != self.user_id && self.directory.person(*p).is_some())
-            .partition(|p| self.keyring.user(p).is_ok());
+            .collect();
         for person in &reset {
             let password = one_time_password();
             self.reset_person(*person, &password)?;
             passwords.push((*person, password));
         }
-        Ok((passwords, elsewhere))
+        Ok(passwords)
     }
 
     /// Makes someone an admin: the organization key is sealed to them.
@@ -1079,13 +1077,26 @@ fn rekey_person(
         signer,
         signatures::organization_certificate(&vault_id, organization, person, &signing_key, &keys.public),
     )?;
-    let old = keyring.user(&person)?.clone();
-    let mut user = new_user(&vault_id, person, old.name, keys, password, database_key);
+    // On a replica the key file may not have their entry (ADR 20): the directory has their name,
+    // and the new entry is kept only until it reaches the host.
+    let old = keyring.user(&person).ok().cloned();
+    let (name, admin, elsewhere) = match &old {
+        Some(old) => (old.name.clone(), old.organization_key.is_some(), old.elsewhere),
+        None => {
+            let member = directory.person(person).ok_or(Error::NoSuchPerson)?;
+            (member.name.clone(), member.admin, true)
+        }
+    };
+    let mut user = new_user(&vault_id, person, name, keys, password, database_key);
     user.must_set_password = one_time;
-    if old.organization_key.is_some() {
+    user.elsewhere = elsewhere;
+    if admin {
         user.organization_key = Some(seal_organization_key(&vault_id, &user, organization));
     }
-    *super::user_mut(keyring, &person) = user;
+    match old {
+        Some(_) => *super::user_mut(keyring, &person) = user,
+        None => keyring.users.push(user),
+    }
     Ok(())
 }
 
@@ -1183,7 +1194,7 @@ pub(super) fn organization_collections(
 }
 
 pub(super) fn people(keyring: &Keyring) -> Vec<Person> {
-    let mut people: Vec<Person> = keyring.users.iter().map(person).collect();
+    let mut people: Vec<Person> = keyring.users.iter().filter(|u| !u.elsewhere).map(person).collect();
     people.sort_by_key(|p| p.name.to_lowercase());
     people
 }
@@ -1232,6 +1243,7 @@ fn new_user(
         public_key: keys.public.clone(),
         organization_key: None,
         must_set_password: true,
+        elsewhere: false,
     }
 }
 

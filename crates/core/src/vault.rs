@@ -269,6 +269,7 @@ impl Vault {
                 public_key: Vec::new(),
                 organization_key: None,
                 must_set_password: false,
+                elsewhere: false,
             }],
             organization: None,
         };
@@ -1574,7 +1575,10 @@ fn read_keyring(dir: &Path) -> Result<Keyring> {
 /// The person named, or a one-person vault's only person.
 fn person_in(keyring: &Keyring, person: Option<Uuid>) -> Result<&KeyringUser> {
     match (person, keyring.users.as_slice()) {
-        (Some(id), _) => keyring.user(&id),
+        (Some(id), _) => keyring.user(&id).and_then(|user| match user.elsewhere {
+            true => Err(Error::NoSuchPerson),
+            false => Ok(user),
+        }),
         (None, [user]) => Ok(user),
         (None, _) => Err(Error::ChooseName),
     }

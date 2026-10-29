@@ -412,12 +412,6 @@ function Devices({ people, own }: { people: Person[]; own: string | null }) {
               </ul>
             </>
           )}
-          {revoked.resetElsewhere.length > 0 && (
-            <p>
-              Reset {revoked.resetElsewhere.map((id) => names[id] ?? 'someone').join(', ')} from the computer that
-              serves the vault, which holds their keys: People, Reset password.
-            </p>
-          )}
         </div>
       )}
       {error && <p className="error">{error}</p>}

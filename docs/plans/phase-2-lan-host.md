@@ -598,6 +598,11 @@ Sizes: S is under 500 lines changed, M is 500 to 1,500, L is 1,500 to 3,000. Tes
 
 The LAN update mirror (ADR 5, "Updates on the LAN") comes after stage 8, as a follow-up.
 
+**After stage 8, built** ([ADR 25](../adr/0025-host-backups-from-the-app.md)): `RequestBackup` as a
+`.gvhost` file and restoring the host from the app, rules by role on screen, photos on demand,
+checkouts of every kind, the host refusing directory changes from a computer not holding the
+directory, and resetting someone from a computer without their key file entry.
+
 **Biggest risks:**
 
 - The `team.rs` refactor in stage 2.
@@ -639,6 +644,7 @@ This repo writes each record once, and a later change gets a new record. So "cha
 - **New 22. hostd, the blind host and the three modes.** The crate split (adds `crates/sync` to ADR 1's list), services per OS, converting and stopping, the host on the same machine as a loopback replica, the host's keys and disk encryption, sidecar updates, and Linux hosting from `.deb`/`.rpm` only. Notes ADR 6's "the LAN host stops" step.
 - **New 23. Client mode.** Built in stage 7: joining, the background sync, checkouts, photos in pieces, directory changes through the host, and the LAN suite.
 - **New 24. Offline limits, revocation and lost devices.** Makes ADR 5's offline limits concrete: the code format, the clock rule, what read-only means in the core.
+- **New 25. The phase 2 leftovers.** Host backups from the app, and the rest left after stage 8.
 - **Change ADR 11.** The LAN suite: two apps and a foreground `hostd`, and the service smoke test.
 - **Change ADR 7.** Backups in host mode, and that clients do not make them.
 - **docs/follow-ups.md:** remove the Teams item when stage 3 lands. Add: syncing per-person settings, the LAN update mirror, a key per item if moves with photos get slow, and `SMAppService` once macOS 12 support is dropped.

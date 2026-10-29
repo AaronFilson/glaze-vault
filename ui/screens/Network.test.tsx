@@ -106,7 +106,7 @@ describe('the network section', () => {
         return [{ id: 'd1', name: 'The host computer', people: ['ana', 'ben'], issuedAt: 0, revoked: false, lost: false }, laptop];
       if (command === 'offline_policy') return { nagDays: 14, limitDays: null, byRole: [] };
       if (command === 'revoke_device')
-        return { devices: [{ ...laptop, revoked: true, lost: true }], passwords: [['ben', 'abcd-efgh-jkmn']], resetElsewhere: [] };
+        return { devices: [{ ...laptop, revoked: true, lost: true }], passwords: [['ben', 'abcd-efgh-jkmn']] };
     });
     render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
     fireEvent.click(await screen.findByText('Show the computers paired'));

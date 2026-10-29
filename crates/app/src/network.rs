@@ -669,10 +669,8 @@ pub fn extension_code(state: State<AppState>, device: Uuid, days: u32) -> Comman
 #[serde(rename_all = "camelCase")]
 pub struct Revoked {
     devices: Vec<DeviceInfo>,
-    /// For a computer lost: each of its people's new one-time password, to pass on, and those
-    /// to reset from the host computer, which has their key file entries.
+    /// For a computer lost: each of its people's new one-time password, to pass on.
     passwords: Vec<(Uuid, String)>,
-    reset_elsewhere: Vec<Uuid>,
 }
 
 /// Stops a computer syncing, for an admin (plan section 3.11). One lost or stolen also gives new
@@ -691,16 +689,12 @@ pub fn revoke_device(state: State<AppState>, device: Uuid, lost: bool) -> Comman
         .find(|d| d.id == device)
         .map(|d| d.people.clone())
         .unwrap_or_default();
-    let (passwords, reset_elsewhere) = if lost {
+    let passwords = if lost {
         with_host(&state, move |vault| vault.secure_after_lost(&people))?
     } else {
         Default::default()
     };
-    Ok(Revoked {
-        devices,
-        passwords,
-        reset_elsewhere,
-    })
+    Ok(Revoked { devices, passwords })
 }
 
 /// The host computer's own backups, newest first, for an admin

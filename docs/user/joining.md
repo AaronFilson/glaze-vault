@@ -35,14 +35,17 @@ is out of reach. Choose it for more, and for **Sync now**. While the host is out
 everything works as before; what you save is kept, and sent when the host is back.
 
 Photos come after the records they belong to, a piece at a time. One that has not come yet shows
-**Photo not synced yet**, and appears by itself when it has.
+**Photo not synced yet**, comes before the others, and appears by itself when it has. On a computer
+short of room, tick **Bring photos only when someone opens them** in Settings, Network: then a
+photo comes only once someone opens the firing it belongs to.
 
 Changes to people, roles and collections need the host: an admin makes them only while this
 computer can reach it, so two admins cannot change the team in ways that clash.
 
 ## Checking a record out
 
-If you are about to change a recipe, material or firing for a while, choose **Check out** on it.
+If you are about to change a recipe, material, firing, batch sheet, mix, limit formula or price
+list for a while, choose **Check out** on it.
 Everyone else then sees that you are changing it, and cannot save it until you choose **Done
 changing it**. A checkout ends by itself after eight hours.
 
