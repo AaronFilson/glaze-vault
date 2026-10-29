@@ -39,6 +39,7 @@ impl Vault {
         if bytes.len() > MAX_ATTACHMENT_BYTES {
             return Err(Error::TooLarge);
         }
+        self.writable()?;
         if !valid_media_type(media_type) {
             return Err(Error::Corrupt(format!("{media_type} is not a media type")));
         }

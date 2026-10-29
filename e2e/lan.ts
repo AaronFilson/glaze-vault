@@ -128,5 +128,19 @@ export const lanScenarios: LanScenario[] = [
       );
       await b.run(`expect "Shino green" ${SYNCED}`, `expect "is changing this on another computer" ${SYNCED}`);
     }
+  },
+  {
+    name: "Ana retires Ben's computer, and its copy of the vault goes",
+    async run({ a, b }) {
+      await a.run(
+        'click "Settings"',
+        'click "Show the computers paired"',
+        'expect "Ben\'s laptop" 10000',
+        'click "Retire…"',
+        'click "Retire it"',
+        'expect "is revoked" 30000'
+      );
+      await b.run(`expect "An admin took this computer out of the vault" ${SYNCED}`, 'expect "Set up your vault"');
+    }
   }
 ];

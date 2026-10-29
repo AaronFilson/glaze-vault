@@ -51,6 +51,7 @@ import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
 import { SyncIndicator } from './SyncIndicator';
+import { OfflineNotice } from './OfflineNotice';
 import { CollectionPicker, MoveTo } from './Team';
 import { byCollection, canEdit, defaultCollection, editableCollections, may, onlyWeighs } from '../team';
 
@@ -905,6 +906,7 @@ export function Recipes({
       </header>
 
       <div className="notices no-print">
+        <OfflineNotice />
         {confirming && (
           <ConfirmNotice
             confirm={confirming.action === 'delete' ? 'Delete' : 'Erase permanently'}

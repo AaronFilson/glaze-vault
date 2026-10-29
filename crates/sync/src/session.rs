@@ -216,6 +216,10 @@ impl ClientSession {
             }
             (State::Listing, HostMsg::Checkouts(checkouts)) => {
                 vault.set_checkouts(checkouts);
+                // All pulled, and nothing left to send: the offline days start again (ADR 24).
+                if vault.waiting()? == 0 {
+                    vault.mark_synced()?;
+                }
                 self.state = State::Done;
                 Ok(ClientMsg::Bye)
             }

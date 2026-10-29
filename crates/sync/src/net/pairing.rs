@@ -79,6 +79,14 @@ pub(crate) fn confirms(key: &[u8], exporter: &[u8; 32], host: bool, confirmation
     mac(key, exporter, host).verify_slice(confirmation).is_ok()
 }
 
+/// The secret a computer and the host share from pairing (plan section 3.12), for extension
+/// codes: neither sends it, as both have the SPAKE2 key.
+pub(crate) fn offline_secret(key: &[u8]) -> Vec<u8> {
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC takes any key");
+    mac.update(b"glaze-vault v1 offline-secret");
+    mac.finalize().into_bytes().to_vec()
+}
+
 /// A short form of a key for people to compare: the first 8 bytes of its SHA-256, in groups.
 pub fn fingerprint(key: &[u8]) -> String {
     let hash = hex::encode(&Sha256::digest(key)[..8]);

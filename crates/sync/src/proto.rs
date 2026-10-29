@@ -68,6 +68,17 @@ pub enum ClientMsg {
     },
     /// An admin's computer asks which computers sync.
     ListDevices,
+    /// An admin's computer asks for a code that lets a computer take changes for `days` more,
+    /// though it has gone too long without syncing (ADR 24).
+    ExtensionCode {
+        device: Uuid,
+        days: u32,
+    },
+    /// An admin's computer stops a computer syncing, as retired or as lost.
+    RevokeDevice {
+        device: Uuid,
+        lost: bool,
+    },
     /// A new computer's first SPAKE2 message, from the code.
     Pair {
         #[serde(with = "serde_bytes")]
@@ -114,6 +125,9 @@ pub enum HostMsg {
     },
     Approved,
     Devices(Vec<DeviceInfo>),
+    ExtensionCode {
+        code: String,
+    },
     /// The host's SPAKE2 message.
     PairChallenge {
         #[serde(with = "serde_bytes")]

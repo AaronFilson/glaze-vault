@@ -54,6 +54,16 @@ pub fn uninstall(keep_data: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Where the installed service keeps the host's store.
+pub fn data_dir() -> PathBuf {
+    os::data_dir()
+}
+
+/// Whether the service is installed and running, to restart itself for a restore.
+pub fn running() -> bool {
+    os::installed() && os::running()
+}
+
 pub fn status() -> Result<String, String> {
     Ok(match (os::installed(), os::running()) {
         (false, _) => "not installed".to_owned(),

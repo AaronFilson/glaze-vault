@@ -1,6 +1,7 @@
 # 7. Backups, export, locking by itself, and updates
 
-Proposed, 2026-10-14. Drafts are replaced by [ADR 8](0008-materials-history-drafts.md).
+Proposed, 2026-10-14. Drafts are replaced by [ADR 8](0008-materials-history-drafts.md). A vault
+served on a network is backed up by its host, not its computers: [ADR 24](0024-offline-limits-and-revocation.md).
 
 ## Context
 

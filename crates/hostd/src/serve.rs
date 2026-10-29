@@ -1,11 +1,35 @@
-//! Serving: the store opened, the port bound, the host advertised, until `shutdown`, or until
-//! this binary is replaced by an update, when the service manager starts the new one.
+//! Serving: the store opened, the port bound, the host advertised, and a backup made each day,
+//! until `shutdown`, or until this binary is replaced by an update, or a restore is asked for,
+//! when the service manager starts it again (docs/adr/0024-offline-limits-and-revocation.md).
 
 use glaze_vault_core::HostStore;
 use glaze_vault_sync::net::{self, DEFAULT_PORT, Server};
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+
+/// A file in the host's folder naming a backup to restore at the next start.
+pub const RESTORE_FILE: &str = "restore-from";
+/// Where the daily backups go, in the host's folder.
+pub const BACKUPS: &str = "backups";
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Restores the backup a restore asked for, if one did, before the store opens.
+fn restore_asked(dir: &Path) -> Result<(), String> {
+    let file = dir.join(RESTORE_FILE);
+    let Ok(backup) = std::fs::read_to_string(&file) else {
+        return Ok(());
+    };
+    let _ = std::fs::remove_file(&file);
+    let backup = PathBuf::from(backup.trim());
+    HostStore::restore(dir, &backup).map_err(|e| format!("restoring {}: {e}", backup.display()))?;
+    log::info!(
+        "restored the backup {}: computers send again what it lacks",
+        backup.display()
+    );
+    Ok(())
+}
 
 pub struct Options {
     pub dir: PathBuf,
@@ -17,6 +41,7 @@ pub struct Options {
 }
 
 pub async fn serve(options: Options, shutdown: impl Future<Output = ()>) -> Result<(), String> {
+    restore_asked(&options.dir)?;
     let host = HostStore::open(&options.dir).map_err(|e| format!("the host's store does not open: {e}"))?;
     let port = options.port.or(host.port()).unwrap_or(DEFAULT_PORT);
     let organization_key = host.organization_key().map_err(|e| e.to_string())?;
@@ -49,8 +74,14 @@ pub async fn serve(options: Options, shutdown: impl Future<Output = ()>) -> Resu
         None
     };
     let server = Server::new(host);
+    let backups = options.dir.join(BACKUPS);
     tokio::select! {
-        served = net::serve(listener, server) => served.map_err(|e| e.to_string()),
+        served = net::serve(listener, server.clone()) => served.map_err(|e| e.to_string()),
+        () = backing_up(server, backups) => Ok(()),
+        () = restore_requested(&options.dir) => {
+            // The service manager starts this again, and the backup goes in before the store opens.
+            Err("stopping to restore a backup".into())
+        }
         () = shutdown => {
             log::info!("stopping");
             Ok(())
@@ -58,6 +89,28 @@ pub async fn serve(options: Options, shutdown: impl Future<Output = ()>) -> Resu
         () = replaced() => {
             log::info!("this program was updated: stopping, for the new one to start");
             Ok(())
+        }
+    }
+}
+
+/// A backup a minute after starting, then each day (the plan's question 12).
+async fn backing_up(server: Arc<Server>, backups: PathBuf) {
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    loop {
+        match server.host().back_up(&backups) {
+            Ok(made) => log::info!("backed up to {}", made.display()),
+            Err(e) => log::error!("the daily backup failed: {e}"),
+        }
+        tokio::time::sleep(DAY).await;
+    }
+}
+
+/// When `hostd restore` asks for a backup to be restored.
+async fn restore_requested(dir: &Path) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        if dir.join(RESTORE_FILE).exists() {
+            return;
         }
     }
 }

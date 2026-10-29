@@ -8,7 +8,7 @@
 use crate::syncing::{SyncStatus, Syncing};
 use crate::{AppState, CommandError, CommandResult, locked};
 use glaze_vault_core::sync::{Checkout, DeviceInfo, DeviceKey};
-use glaze_vault_core::{Error, HostStore, Kind, Note, Vault};
+use glaze_vault_core::{Error, HostStore, Kind, Note, OfflinePolicy, OfflineStatus, Vault};
 use glaze_vault_sync::net::{self, AdminPairing, DEFAULT_PORT, Finished};
 use serde::Serialize;
 use std::fs;
@@ -81,6 +81,8 @@ pub struct NetworkStatus {
     /// Whether this app can serve: hostd is installed beside it.
     can_host: bool,
     default_port: u16,
+    /// This computer, as the host knows it.
+    device: Option<Uuid>,
 }
 
 #[tauri::command(async)]
@@ -94,6 +96,7 @@ pub fn network_status(state: State<AppState>) -> CommandResult<NetworkStatus> {
         host_address,
         can_host: hostd().is_some(),
         default_port: DEFAULT_PORT,
+        device: vault.device().ok(),
     })
 }
 
@@ -602,4 +605,76 @@ pub fn release_checkout(state: State<AppState>, record: Uuid) -> CommandResult<V
         .map_err(|_| Error::NeedsHost)?;
     vault.set_checkouts(after.clone());
     Ok(views(vault, after))
+}
+
+/// How this computer stands against the vault's rule for computers away from the host (ADR 24).
+#[tauri::command(async)]
+pub fn offline_status(state: State<AppState>) -> CommandResult<OfflineStatus> {
+    let vault = state.vault.lock().unwrap();
+    Ok(vault.as_ref().ok_or_else(locked)?.offline_status()?)
+}
+
+/// Takes an extension code an admin read out.
+#[tauri::command(async)]
+pub fn extend_offline(state: State<AppState>, code: String) -> CommandResult<OfflineStatus> {
+    let mut vault = state.vault.lock().unwrap();
+    Ok(vault.as_mut().ok_or_else(locked)?.extend(&code)?)
+}
+
+#[tauri::command(async)]
+pub fn offline_policy(state: State<AppState>) -> CommandResult<OfflinePolicy> {
+    let vault = state.vault.lock().unwrap();
+    Ok(vault.as_ref().ok_or_else(locked)?.offline_policy())
+}
+
+#[tauri::command(async)]
+pub fn set_offline_policy(state: State<AppState>, policy: OfflinePolicy) -> CommandResult<()> {
+    with_host(&state, move |vault| vault.set_offline_policy(&policy))
+}
+
+/// A code for a computer that has gone too long without syncing, from the host, for an admin.
+#[tauri::command(async)]
+pub fn extension_code(state: State<AppState>, device: Uuid, days: u32) -> CommandResult<String> {
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move { net::extension_code(vault, &address, device, days).await }).map_err(network_error)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revoked {
+    devices: Vec<DeviceInfo>,
+    /// For a computer lost: each of its people's new one-time password, to pass on, and those
+    /// to reset from the host computer, which has their key file entries.
+    passwords: Vec<(Uuid, String)>,
+    reset_elsewhere: Vec<Uuid>,
+}
+
+/// Stops a computer syncing, for an admin (plan section 3.11). One lost or stolen also gives new
+/// keys to everything it could read, and new keys and one-time passwords to its people.
+#[tauri::command(async)]
+pub fn revoke_device(state: State<AppState>, device: Uuid, lost: bool) -> CommandResult<Revoked> {
+    let devices = {
+        let mut vault = state.vault.lock().unwrap();
+        let vault = vault.as_mut().ok_or_else(locked)?;
+        let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+        on_network(move || async move { net::revoke_device(vault, &address, device, lost).await })
+            .map_err(network_error)?
+    };
+    let people = devices
+        .iter()
+        .find(|d| d.id == device)
+        .map(|d| d.people.clone())
+        .unwrap_or_default();
+    let (passwords, reset_elsewhere) = if lost {
+        with_host(&state, move |vault| vault.secure_after_lost(&people))?
+    } else {
+        Default::default()
+    };
+    Ok(Revoked {
+        devices,
+        passwords,
+        reset_elsewhere,
+    })
 }

@@ -58,6 +58,8 @@ enum Stage {
         device: Uuid,
         name: String,
         key: Vec<u8>,
+        /// For extension codes, kept once the computer is approved.
+        secret: Vec<u8>,
     },
     Approved(Box<JoinPackage>),
     Failed(String),
@@ -185,6 +187,33 @@ impl Server {
                 ClientMsg::StartPairing => self.start_pairing(session.as_ref()),
                 ClientMsg::AwaitPairing => self.await_pairing(session.as_ref()).await,
                 ClientMsg::ApproveDevice { certificate } => self.approve(session.as_ref(), &certificate),
+                ClientMsg::ExtensionCode { device, days } => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer gives extension codes"),
+                    Some(_) => {
+                        let code = self.host().extension_code(device, days);
+                        match code {
+                            Ok(code) => HostMsg::ExtensionCode { code },
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
+                ClientMsg::RevokeDevice { device, lost } => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer revokes computers"),
+                    Some(admin) if admin == device => refused("a computer cannot revoke itself"),
+                    Some(_) => {
+                        let revoked = {
+                            let mut host = self.host();
+                            host.revoke_device(device, lost).and_then(|_| host.devices())
+                        };
+                        match revoked {
+                            Ok(devices) => {
+                                self.news.send_replace(());
+                                HostMsg::Devices(devices)
+                            }
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
                 ClientMsg::ListDevices => match self.admin(session.as_ref()) {
                     None => refused("only an admin's computer lists computers"),
                     Some(_) => {
@@ -309,6 +338,7 @@ impl Server {
             device,
             name,
             key: key.to_vec(),
+            secret: pairing::offline_secret(&shared),
         });
         HostMsg::PairConfirmed {
             mac: pairing::confirmation(&shared, exporter, true),
@@ -367,7 +397,7 @@ impl Server {
             |pairing| match pairing.as_ref() {
                 Some(p) if p.admin != admin => Some(refused("another admin started a pairing since")),
                 Some(Pairing {
-                    stage: Stage::Finished { device, name, key },
+                    stage: Stage::Finished { device, name, key, .. },
                     ..
                 }) => Some(HostMsg::PairingFinished {
                     device: *device,
@@ -393,20 +423,22 @@ impl Server {
         let Some(admin) = self.admin(session) else {
             return refused("only an admin's computer can pair another");
         };
-        let matches = match self.pairing().as_ref() {
+        let secret = match self.pairing().as_ref() {
             Some(Pairing {
                 admin: started,
-                stage: Stage::Finished { device, key, .. },
+                stage: Stage::Finished {
+                    device, key, secret, ..
+                },
                 ..
-            }) => *started == admin && *device == certificate.device && *key == certificate.signing_key,
-            _ => false,
+            }) if *started == admin && *device == certificate.device && *key == certificate.signing_key => {
+                secret.clone()
+            }
+            _ => return refused("the certificate is not for the computer waiting to pair"),
         };
-        if !matches {
-            return refused("the certificate is not for the computer waiting to pair");
-        }
         let package = {
             let mut host = self.host();
             host.add_device(certificate)
+                .and_then(|()| host.set_offline_secret(certificate.device, &secret))
                 .and_then(|()| host.join_package(certificate.device))
         };
         match package {

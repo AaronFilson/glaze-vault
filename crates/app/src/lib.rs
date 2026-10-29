@@ -1017,6 +1017,12 @@ pub fn run() {
             network::checkouts,
             network::check_out,
             network::release_checkout,
+            network::offline_status,
+            network::extend_offline,
+            network::offline_policy,
+            network::set_offline_policy,
+            network::extension_code,
+            network::revoke_device,
             #[cfg(debug_assertions)]
             dev_screen,
             #[cfg(debug_assertions)]

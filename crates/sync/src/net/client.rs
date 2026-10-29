@@ -207,6 +207,32 @@ pub async fn devices(vault: &Vault, address: &str) -> Result<Vec<DeviceInfo>> {
     }
 }
 
+/// Asks the host one thing an admin's computer may ask, on a connection of its own.
+async fn ask_as_admin(vault: &Vault, address: &str, message: ClientMsg) -> Result<HostMsg> {
+    let mut conn = greeted(vault, address).await?;
+    conn.send(&message).await?;
+    let answered = answer(&mut conn).await;
+    let _ = conn.send(&ClientMsg::Bye).await;
+    conn.close().await;
+    answered
+}
+
+/// A code an admin reads out to a computer that has gone too long without syncing (ADR 24).
+pub async fn extension_code(vault: &Vault, address: &str, device: Uuid, days: u32) -> Result<String> {
+    match ask_as_admin(vault, address, ClientMsg::ExtensionCode { device, days }).await? {
+        HostMsg::ExtensionCode { code } => Ok(code),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// Stops a computer syncing, as retired or as lost; the computers after.
+pub async fn revoke_device(vault: &Vault, address: &str, device: Uuid, lost: bool) -> Result<Vec<DeviceInfo>> {
+    match ask_as_admin(vault, address, ClientMsg::RevokeDevice { device, lost }).await? {
+        HostMsg::Devices(devices) => Ok(devices),
+        other => Err(unexpected(other)),
+    }
+}
+
 /// A replica's connection, past hello.
 async fn greeted(vault: &Vault, address: &str) -> Result<Conn<Stream>> {
     let mut conn = connect_replica(vault, address).await?;
@@ -256,11 +282,12 @@ pub async fn pair(address: &str, code: &str, name: &str, dir: &Path, device: &De
         HostMsg::Joined(package) => package,
         other => return Err(pairing_error(other)),
     };
+    let offline_secret = pairing::offline_secret(&shared);
     conn.close().await;
     if package.host_key != host_key {
         return Err(Error::Pairing("the host sent another host's key".into()));
     }
-    Vault::join_at(dir, &package, device, Some(address))?;
+    Vault::join_at(dir, &package, device, Some(address), Some(&offline_secret))?;
     Ok(())
 }
 

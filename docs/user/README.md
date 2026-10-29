@@ -32,5 +32,4 @@ Vault ever asks the internet is whether there is a newer version, and you can tu
 
 ## Coming later
 
-- **Limits for computers away from the network,** taking a lost laptop out of the vault, and
-  backups made by the computer that serves it.
+- **Downloading the host's backups** to another computer, and restoring one from the app.

@@ -54,7 +54,7 @@ pub(super) const MODE: &str = "mode";
 
 pub struct HostStore {
     dir: PathBuf,
-    conn: Connection,
+    pub(super) conn: Connection,
     vault: Uuid,
     /// The seed of its TLS key.
     identity: Zeroizing<[u8; 32]>,
@@ -383,7 +383,9 @@ impl HostStore {
     /// Every computer added, revoked ones too, oldest first.
     pub fn devices(&self) -> Result<Vec<DeviceInfo>> {
         self.conn
-            .prepare("SELECT id, name, people, issued_at, revoked_at IS NOT NULL FROM devices ORDER BY issued_at")?
+            .prepare(
+                "SELECT id, name, people, issued_at, revoked_at IS NOT NULL, lost FROM devices ORDER BY issued_at",
+            )?
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -391,16 +393,18 @@ impl HostStore {
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, bool>(4)?,
+                    row.get::<_, bool>(5)?,
                 ))
             })?
             .map(|row| {
-                let (id, name, people, issued_at, revoked) = row?;
+                let (id, name, people, issued_at, revoked, lost) = row?;
                 Ok(DeviceInfo {
                     id: parse_id(&id)?,
                     name,
                     people: serde_json::from_str(&people)?,
                     issued_at,
                     revoked,
+                    lost,
                 })
             })
             .collect()
@@ -490,7 +494,10 @@ impl HostStore {
             });
         }
         let now = levels(&Directory::load(&self.conn)?, &device.people);
-        let mut welcome = Welcome::default();
+        let mut welcome = Welcome {
+            generation: self.generation()?,
+            ..Welcome::default()
+        };
         for (scope, before) in known {
             let Scope::Collection(collection) = scope else {
                 continue;
@@ -1127,6 +1134,134 @@ impl HostStore {
     fn prune_checkouts(&mut self) {
         let now = now_ms();
         self.checkouts.retain(|c| c.expires > now);
+    }
+}
+
+/// The store's generation, in `meta`.
+const GENERATION: &str = "generation";
+/// How many of its daily backups the host keeps (the plan's question 12).
+pub const BACKUPS_KEPT: usize = 14;
+/// What a backup of the host's store holds, besides its database: the database key, sealed to
+/// the host's key, which stays where it is.
+const BACKUP_PREFIX: &str = "backup-";
+
+impl HostStore {
+    /// The store's generation (plan section 3.9): new each time it is restored from a backup, so
+    /// computers know to send again what it lost. Made when first asked for.
+    pub fn generation(&self) -> Result<Uuid> {
+        let stored: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE name = ?1", params![GENERATION], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if let Some(stored) = stored {
+            return parse_id(&stored);
+        }
+        let generation = Uuid::new_v4();
+        self.conn.execute(
+            "INSERT INTO meta (name, value) VALUES (?1, ?2)",
+            params![GENERATION, generation.to_string()],
+        )?;
+        Ok(generation)
+    }
+
+    /// Keeps the secret a computer and the host share from pairing, which extension codes are
+    /// made with.
+    pub fn set_offline_secret(&mut self, device: Uuid, secret: &[u8]) -> Result<()> {
+        self.conn.execute(
+            "UPDATE devices SET offline_secret = ?1 WHERE id = ?2",
+            params![secret, device.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// A code that lets a computer take changes for `days` more from today, though it has gone
+    /// too long without syncing (ADR 24). Whoever asks must be an admin's computer: the server
+    /// checks.
+    pub fn extension_code(&self, device: Uuid, days: u32) -> Result<String> {
+        if !(1..=99).contains(&days) {
+            return Err(Error::InvalidSetting("An extension gives from 1 to 99 days."));
+        }
+        let (secret, revoked): (Option<Vec<u8>>, bool) = self
+            .conn
+            .query_row(
+                "SELECT offline_secret, revoked_at IS NOT NULL FROM devices WHERE id = ?1",
+                params![device.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        let secret = secret.filter(|_| !revoked).ok_or(Error::NotAllowed)?;
+        let today = now_ms().div_euclid(24 * 60 * 60 * 1000);
+        Ok(super::offline::extension_code(&secret, device, today, days))
+    }
+
+    /// Stops a computer syncing (plan section 3.11). At its next connection it is told so, and
+    /// removes its copy. One `lost` is marked so: its admin gives new keys to what it could read
+    /// and resets its people, from their own computer.
+    pub fn revoke_device(&mut self, device: Uuid, lost: bool) -> Result<DeviceInfo> {
+        let changed = self.conn.execute(
+            "UPDATE devices SET revoked_at = coalesce(revoked_at, ?1), lost = max(lost, ?2) WHERE id = ?3",
+            params![now_ms(), lost, device.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(Error::NotFound);
+        }
+        self.checkouts.retain(|c| c.device != device);
+        self.devices()?
+            .into_iter()
+            .find(|d| d.id == device)
+            .ok_or(Error::NotFound)
+    }
+
+    /// Copies the store into a new folder in `backups`, and keeps only the newest
+    /// [`BACKUPS_KEPT`]. The copy is as encrypted as the store, and opens with the host's key.
+    pub fn back_up(&mut self, backups: &Path) -> Result<PathBuf> {
+        self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        fs::create_dir_all(backups)?;
+        let folder = backups.join(format!("{BACKUP_PREFIX}{}", now_ms()));
+        let partial = folder.with_extension("partial");
+        fs::create_dir_all(&partial)?;
+        fs::copy(self.dir.join(DATABASE_FILE), partial.join(DATABASE_FILE))?;
+        fs::copy(self.dir.join(HOST_FILE), partial.join(HOST_FILE))?;
+        fs::rename(&partial, &folder)?;
+        let mut made: Vec<PathBuf> = fs::read_dir(backups)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.is_dir()
+                    && p.extension().is_none()
+                    && p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with(BACKUP_PREFIX))
+            })
+            .collect();
+        made.sort();
+        while made.len() > BACKUPS_KEPT {
+            fs::remove_dir_all(made.remove(0))?;
+        }
+        Ok(folder)
+    }
+
+    /// Puts the store in `dir` back as `backup` (a folder `back_up` made) had it, with a new
+    /// generation. What reached the host since is gone from it until computers send it again.
+    /// Computers paired since cannot sync, and pair again.
+    pub fn restore(dir: &Path, backup: &Path) -> Result<()> {
+        for file in [DATABASE_FILE, HOST_FILE] {
+            if !backup.join(file).is_file() {
+                return Err(Error::NotABackup);
+            }
+        }
+        for stale in ["-wal", "-shm"] {
+            let _ = fs::remove_file(dir.join(format!("{DATABASE_FILE}{stale}")));
+        }
+        fs::copy(backup.join(DATABASE_FILE), dir.join(DATABASE_FILE))?;
+        fs::copy(backup.join(HOST_FILE), dir.join(HOST_FILE))?;
+        let host = HostStore::open(dir)?;
+        host.conn.execute(
+            "INSERT INTO meta (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+            params![GENERATION, Uuid::new_v4().to_string()],
+        )?;
+        Ok(())
     }
 }
 

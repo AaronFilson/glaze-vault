@@ -22,6 +22,6 @@ pub use recovery::RecoveryKey;
 pub use vault::HostStore;
 pub use vault::{
     Attachment, AuditEntry, AuditLog, BackupInfo, Capabilities, Collection, Credential, CustomRole, Fork, Grant, Kind,
-    LastBackup, MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS, Note, Person, Revision, SetAside, Settings, SignatureCheck,
-    Signed, SignedAs, Vault,
+    LastBackup, MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS, Note, OfflinePolicy, OfflineStatus, Person, Revision,
+    RoleLimit, SetAside, Settings, SignatureCheck, Signed, SignedAs, Vault,
 };

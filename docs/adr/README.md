@@ -28,3 +28,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0021](0021-transport-and-pairing.md)    | The transport and pairing: pinned keys over TLS, a code, and hostd     | 2026-10-21 |
 | [0022](0022-host-mode.md)                | Host mode: hostd as a service, and the host computer's app as a replica | 2026-10-21 |
 | [0023](0023-client-mode.md)              | Client mode: joining, syncing in the background, checkouts, and photos in pieces | 2026-10-29 |
+| [0024](0024-offline-limits-and-revocation.md) | Offline limits, revoking computers, and the host's backups   | 2026-10-29 |

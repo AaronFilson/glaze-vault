@@ -459,6 +459,48 @@ impl Vault {
         self.load_collections()
     }
 
+    /// After a computer was lost or stolen (plan section 3.11), for an admin: every collection
+    /// any of its people could read gets a new key, so what is saved from now on is out of reach
+    /// of the keys on it, and each of its people but this admin gets new keys and a one-time
+    /// password, which is returned to pass on, since their private keys are on it under their
+    /// passwords. Only people whose key file entries this computer has can be reset here; the
+    /// others are returned too, to reset from the host computer, which has everyone's.
+    #[allow(clippy::type_complexity)]
+    pub fn secure_after_lost(&mut self, people: &[Uuid]) -> Result<(Vec<(Uuid, String)>, Vec<Uuid>)> {
+        self.admin()?;
+        let any_admin = people.iter().any(|p| self.directory.is_admin(*p));
+        let mut collections: Vec<Uuid> = if any_admin {
+            self.directory.collections.iter().map(|c| c.id).collect()
+        } else {
+            self.directory
+                .grants
+                .iter()
+                .filter(|g| people.contains(&g.person))
+                .map(|g| g.collection)
+                .collect()
+        };
+        collections.sort();
+        collections.dedup();
+        let tx = self.conn.unchecked_transaction()?;
+        for collection in &collections {
+            self.new_epoch_in(&tx, collection)?;
+        }
+        tx.commit()?;
+        self.load_collections()?;
+        let mut passwords = Vec::new();
+        let (reset, elsewhere): (Vec<Uuid>, Vec<Uuid>) = people
+            .iter()
+            .copied()
+            .filter(|p| *p != self.user_id && self.directory.person(*p).is_some())
+            .partition(|p| self.keyring.user(p).is_ok());
+        for person in &reset {
+            let password = one_time_password();
+            self.reset_person(*person, &password)?;
+            passwords.push((*person, password));
+        }
+        Ok((passwords, elsewhere))
+    }
+
     /// Makes someone an admin: the organization key is sealed to them.
     pub fn make_admin(&mut self, person: Uuid) -> Result<()> {
         let organization = self.admin()?;
@@ -1339,6 +1381,17 @@ fn organization_grant_info(vault_id: &Uuid, collection_id: &Uuid, epoch: i64) ->
         epoch_words(epoch)
     )
     .into_bytes()
+}
+
+/// A one-time password to read out: three groups of four letters, about 56 bits.
+fn one_time_password() -> String {
+    const LETTERS: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+    let bytes: [u8; 12] = crypto::random();
+    let letters: String = bytes
+        .iter()
+        .map(|b| LETTERS[*b as usize % LETTERS.len()] as char)
+        .collect();
+    format!("{}-{}-{}", &letters[..4], &letters[4..8], &letters[8..])
 }
 
 #[cfg(test)]

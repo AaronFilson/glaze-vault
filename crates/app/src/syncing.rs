@@ -153,6 +153,13 @@ impl Syncing {
             }
         });
         self.count(app);
+        // An admin revoked this computer: its copy goes (the plan's question 7).
+        if matches!(synced, Err(Error::Core(glaze_vault_core::Error::Revoked))) {
+            let removed = state.vault.lock().unwrap().take().map(Vault::leave);
+            if let Some(removed) = removed {
+                let _ = app.emit("vault-removed", removed.map_err(|e| e.to_string()).err());
+            }
+        }
         if let Ok(report) = &synced
             && (report.pulled > 0 || report.fetched > 0)
         {

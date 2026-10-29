@@ -256,6 +256,16 @@ const MIGRATIONS: &[&str] = &[
         at INTEGER NOT NULL,
         PRIMARY KEY (id, offset)
     );",
+    // 13: offline limits, revoking computers and the host's backups (ADR 24). The vault's rule
+    // for computers away from the host is the directory's, as its event wrote it. The host keeps
+    // each computer's offline secret from pairing, which extension codes are made with, and
+    // whether a computer revoked was lost.
+    "CREATE TABLE offline_policy (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        policy TEXT NOT NULL
+    );
+    ALTER TABLE devices ADD COLUMN offline_secret BLOB;
+    ALTER TABLE devices ADD COLUMN lost INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// A step a migration needs that SQL cannot do, run in its transaction after its SQL.

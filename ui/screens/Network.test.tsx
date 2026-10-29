@@ -16,6 +16,7 @@ const status = (fields: Partial<NetworkStatus>): NetworkStatus => ({
   hostAddress: null,
   canHost: true,
   defaultPort: 47917,
+  device: null,
   ...fields
 });
 
@@ -92,5 +93,45 @@ describe('the network section', () => {
     render(<Network people={PEOPLE} admin={false} onChanged={() => {}} onLeft={() => {}} />);
     expect(await screen.findByText(/on this computer alone/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Serve on this network' })).toBeNull();
+  });
+
+  it('revokes a lost computer, and shows its people\u2019s new one-time passwords', async () => {
+    const calls: [string, unknown][] = [];
+    const laptop = { id: 'd2', name: "Ben's laptop", people: ['ben'], issuedAt: 1, revoked: false, lost: false };
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'network_status')
+        return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917', device: 'd1' });
+      if (command === 'devices')
+        return [{ id: 'd1', name: 'The host computer', people: ['ana', 'ben'], issuedAt: 0, revoked: false, lost: false }, laptop];
+      if (command === 'offline_policy') return { nagDays: 14, limitDays: null, byRole: [] };
+      if (command === 'revoke_device')
+        return { devices: [{ ...laptop, revoked: true, lost: true }], passwords: [['ben', 'abcd-efgh-jkmn']], resetElsewhere: [] };
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    fireEvent.click(await screen.findByText('Show the computers paired'));
+    expect(await screen.findByText(/\(this computer\)/)).toBeTruthy();
+    // Only the other computer can be revoked.
+    expect(screen.getAllByRole('button', { name: 'Lost or stolen…' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Lost or stolen…' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke it as lost' }));
+    expect(await screen.findByText('abcd-efgh-jkmn')).toBeTruthy();
+    expect(calls).toContainEqual(['revoke_device', { device: 'd2', lost: true }]);
+    expect(await screen.findByText(/revoked as lost/)).toBeTruthy();
+  });
+
+  it('sets the rule for computers away from the host', async () => {
+    const calls: [string, unknown][] = [];
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'network_status') return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917' });
+      if (command === 'offline_policy') return { nagDays: 14, limitDays: null, byRole: [] };
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    fireEvent.change(await screen.findByLabelText('Stop taking changes after this many days'), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save the rule' }));
+    await waitFor(() =>
+      expect(calls).toContainEqual(['set_offline_policy', { policy: { nagDays: 14, limitDays: 30, byRole: [] } }])
+    );
   });
 });

@@ -10,6 +10,7 @@ mod host;
 mod hosting;
 mod items;
 mod moving;
+mod offline;
 mod replica;
 mod roles;
 mod signatures;
@@ -20,6 +21,7 @@ pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
 pub use audit::{AuditEntry, AuditLog, Note};
 pub(crate) use events::Body;
 pub use host::HostStore;
+pub use offline::{OfflinePolicy, OfflineStatus, RoleLimit};
 pub use roles::{Capabilities, CustomRole};
 pub use signatures::{SignatureCheck, Signed, SignedAs};
 pub use team::{Collection, Grant, Person};
@@ -670,6 +672,7 @@ impl Vault {
     /// brought back. Backups made before still hold it. The vault remembers that it was erased,
     /// and by whom, though nothing of what it held (ADR 17). Returns how many revisions there were.
     pub fn erase(&mut self, kind: Kind, record_id: Uuid) -> Result<usize> {
+        self.writable()?;
         let deleted = self.deleted(kind)?;
         let Some(record) = deleted.iter().find(|r| r.record_id == record_id) else {
             return Err(Error::NotDeleted);
@@ -795,6 +798,7 @@ impl Vault {
                 (parse_id(&record_id)?, number + 1, parse_id(&collection_id)?)
             }
         };
+        self.writable()?;
         if let Some(by) = self.checked_out_by(record_id) {
             return Err(Error::CheckedOut(by));
         }
@@ -1215,6 +1219,9 @@ impl Vault {
         let _ = vault.certify_myself();
         let _ = vault.attest();
         audit::note(&vault.conn, &vault.signer, audit::Entry::new("signed-in"))?;
+        if vault.is_replica() {
+            vault.note_time()?;
+        }
         Ok(vault)
     }
 

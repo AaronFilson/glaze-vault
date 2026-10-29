@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, errorText, type Person, type UpdateInfo, type VaultStatus } from './api';
+import { api, errorText, onEvent, type Person, type UpdateInfo, type VaultStatus } from './api';
 import { FirstSignIn } from './screens/FirstSignIn';
 import { Join } from './screens/Join';
 import { Recipes, type LockReason } from './screens/Recipes';
@@ -12,7 +12,7 @@ import { Unlock } from './screens/Unlock';
 type Screen =
   | { name: 'loading' }
   | { name: 'failed'; message: string }
-  | { name: 'setup' }
+  | { name: 'setup'; notice?: string }
   | { name: 'join' }
   /** A recovery key to show once, the organization's or a person's. */
   | { name: 'recovery-sheet'; words: string[]; organization?: boolean }
@@ -57,6 +57,15 @@ export function App() {
         }
       })
       .catch((error) => setScreen({ name: 'failed', message: errorText(error) }));
+    // An admin revoked this computer, and its copy of the vault is gone (ADR 24).
+    return onEvent<string | null>('vault-removed', () => {
+      void refreshStatus();
+      setScreen({
+        name: 'setup',
+        notice:
+          'An admin took this computer out of the vault, so its copy was removed. Everything that reached the host is still there.'
+      });
+    });
   }, []);
 
   const locked = (reason: LockReason) => {
@@ -91,6 +100,7 @@ export function App() {
     case 'setup':
       return (
         <Setup
+          notice={screen.notice}
           onCreated={(words) => setScreen({ name: 'recovery-sheet', words })}
           onRestore={() => setScreen({ name: 'restore', back: 'setup' })}
           onJoin={() => setScreen({ name: 'join' })}

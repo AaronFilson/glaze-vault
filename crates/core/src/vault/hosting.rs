@@ -12,13 +12,18 @@ use std::path::Path;
 use uuid::Uuid;
 
 /// What a replica keeps in `meta` that a vault on one computer does not.
-const REPLICA_META: [&str; 6] = [
+const REPLICA_META: [&str; 11] = [
     MODE,
     "device",
     "device_key",
     "device_certificate",
     "host_key",
     "host_address",
+    "host_generation",
+    super::offline::SECRET,
+    "offline_last_synced",
+    "offline_latest_seen",
+    "offline_extended_until",
 ];
 
 impl Vault {

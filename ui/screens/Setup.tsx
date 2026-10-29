@@ -3,10 +3,12 @@ import { api, errorText } from '../api';
 import { NewPassword } from './NewPassword';
 
 export function Setup({
+  notice,
   onCreated,
   onRestore,
   onJoin
 }: {
+  notice?: string;
   onCreated: (words: string[]) => void;
   onRestore: () => void;
   onJoin: () => void;
@@ -31,6 +33,11 @@ export function Setup({
   return (
     <main className="center">
       <form className="card" onSubmit={create}>
+        {notice && (
+          <p className="notice" role="status">
+            {notice}
+          </p>
+        )}
         <h1>Set up your vault</h1>
         <p>
           Glaze Vault keeps your recipes encrypted on this computer. Choose a password: you will type it each time

@@ -187,6 +187,10 @@ pub(crate) enum Body {
     RoleDeleted {
         role: Uuid,
     },
+    /// The rule for computers that go without reaching the host (ADR 24).
+    OfflinePolicySet {
+        policy: super::offline::OfflinePolicy,
+    },
     /// A deleted record erased (ADR 9): its revisions and attachments go, and its tombstone stays.
     Erased {
         record: Uuid,
@@ -232,6 +236,7 @@ impl Body {
             Body::RoleCreated { .. } => "role-created",
             Body::RoleChanged { .. } => "role-changed",
             Body::RoleDeleted { .. } => "role-deleted",
+            Body::OfflinePolicySet { .. } => "offline-policy-set",
             Body::Erased { .. } => "erased",
             Body::Moved { .. } => "moved",
         }
@@ -573,6 +578,13 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
         }
         Body::RoleDeleted { role } => {
             conn.execute("DELETE FROM roles WHERE id = ?1", params![role.to_string()])?;
+        }
+        Body::OfflinePolicySet { policy } => {
+            conn.execute(
+                "INSERT INTO offline_policy (id, policy) VALUES (1, ?1)
+                 ON CONFLICT (id) DO UPDATE SET policy = excluded.policy",
+                params![serde_json::to_string(policy)?],
+            )?;
         }
         Body::Erased {
             record,

@@ -261,6 +261,8 @@ export interface NetworkStatus {
   /** hostd is installed beside the app. */
   canHost: boolean;
   defaultPort: number;
+  /** This computer, as the host knows it. */
+  device: string | null;
 }
 
 export interface SyncReport {
@@ -326,6 +328,37 @@ export interface Device {
   people: string[];
   issuedAt: number;
   revoked: boolean;
+  /** Revoked as lost or stolen. */
+  lost: boolean;
+}
+
+/** The vault's rule for computers that go without reaching the host (docs/adr/0024-offline-limits-and-revocation.md). */
+export interface OfflinePolicy {
+  nagDays: number;
+  /** Null: changes never stop. */
+  limitDays: number | null;
+  byRole: { role: Role; nagDays: number; limitDays: number | null }[];
+}
+
+/** How this computer stands against that rule. */
+export interface OfflineStatus {
+  applies: boolean;
+  lastSynced: number | null;
+  days: number;
+  nagDays: number;
+  limitDays: number | null;
+  extendedUntil: number | null;
+  nag: boolean;
+  readOnly: boolean;
+  clockBack: boolean;
+}
+
+/** A computer revoked; for one lost, its people's new one-time passwords, and those to reset from
+ * the host computer. */
+export interface Revoked {
+  devices: Device[];
+  passwords: [string, string][];
+  resetElsewhere: string[];
 }
 
 export const api = {
@@ -437,6 +470,13 @@ export const api = {
   checkOut: (kind: Kind, record: string, takeOver: boolean) =>
     invoke<Checkout[]>('check_out', { kind, record, takeOver }),
   releaseCheckout: (record: string) => invoke<Checkout[]>('release_checkout', { record }),
+  offlineStatus: () => invoke<OfflineStatus>('offline_status'),
+  extendOffline: (code: string) => invoke<OfflineStatus>('extend_offline', { code }),
+  offlinePolicy: () => invoke<OfflinePolicy>('offline_policy'),
+  setOfflinePolicy: (policy: OfflinePolicy) => invoke<void>('set_offline_policy', { policy }),
+  /** For an admin: a code another computer types to take changes for `days` more. */
+  extensionCode: (device: string, days: number) => invoke<string>('extension_code', { device, days }),
+  revokeDevice: (device: string, lost: boolean) => invoke<Revoked>('revoke_device', { device, lost }),
   auditLog: (limit: number | null) => invoke<AuditLog>('audit_log', { limit }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),
@@ -472,7 +512,7 @@ export const api = {
 
 /** Hears an event from the core until the returned function is called. Pages run without one in
  * tests, where nothing is heard. */
-export function onEvent<T>(name: 'sync-status' | 'vault-changed', handler: (payload: T) => void): () => void {
+export function onEvent<T>(name: 'sync-status' | 'vault-changed' | 'vault-removed', handler: (payload: T) => void): () => void {
   let stop: (() => unknown) | null = null;
   let stopped = false;
   // The page may be going, with the app's event system: then nothing is left to stop.

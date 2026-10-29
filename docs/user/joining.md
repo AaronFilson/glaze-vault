@@ -52,6 +52,25 @@ Checking out needs the host. Work saved where the host could not be reached is n
 if two people changed the same record apart, it becomes a [fork](forks.md), and one of them
 chooses which version to keep.
 
+## Away from the network
+
+A computer works the same away from the host: a laptop in the kiln shed, or on a trip. After two
+weeks without a sync, unless an admin chose another number, Glaze Vault reminds you to bring it
+back to the network, so the team's copies do not drift apart.
+
+An admin can also choose a number of days after which a computer away stops taking changes. The
+reminder says how many days are left. After that you can still open, read and print everything,
+and what you type is kept as a draft, but nothing is saved until the computer syncs. If you cannot
+reach the network, ask an admin for an **extension code**: they read out something like
+`14-K7Q-F9M2D-XW3PA`, which you type in the notice. It works only on this computer, and lets it
+take changes for the days the admin chose.
+
+The limit is a rule in the app, not a lock. It keeps a team's work together; it does not stop
+someone who has the computer and their password from getting round it.
+
+If this computer's clock is put back more than a day, it counts as too long away, until it syncs
+or takes a code.
+
 ## Leaving
 
 To take a computer out of the vault, as before giving it away, choose **Leave this vault…** in
@@ -60,3 +79,6 @@ first if you can, because it would be lost. This computer's copy is then written
 removed. The host, and the other computers, keep everything that reached the host.
 
 The computer that serves the vault does not leave it: it [stops serving](hosting.md#stopping).
+
+If an admin [retires this computer](hosting.md#retiring-a-computer-or-one-that-was-lost), its copy
+is removed the next time it reaches the host, and Glaze Vault says so.

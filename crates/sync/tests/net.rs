@@ -343,3 +343,45 @@ async fn a_record_is_checked_out_and_released_over_the_network() {
     assert_eq!(taken[0].person, lan.ben);
     assert!(net::release(&ben, &lan.address, record).await.unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paired_computer_takes_the_hosts_extension_codes_until_it_is_revoked() {
+    let mut lan = lan().await;
+    net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    let mut pairing = AdminPairing::start(&lan.ana, &lan.address).await.unwrap();
+    let ben_dir = tempfile::tempdir().unwrap();
+    let joining = tokio::spawn({
+        let (address, code, dir) = (lan.address.clone(), pairing.code.clone(), ben_dir.path().to_owned());
+        async move { net::pair(&address, &code, "laptop", &dir, &DeviceKey::generate()).await }
+    });
+    let finished = pairing.wait().await.unwrap();
+    pairing.approve(&lan.ana, &finished, &[lan.ben]).await.unwrap();
+    joining.await.unwrap().unwrap();
+    let mut ben = Vault::unlock_as(ben_dir.path(), Some(lan.ben), OWN).unwrap();
+    net::sync(&mut ben, &lan.address).await.unwrap();
+
+    // Both sides have the secret from pairing, so the host's code works here.
+    let code = net::extension_code(&lan.ana, &lan.address, finished.device, 5)
+        .await
+        .unwrap();
+    let status = ben.extend(&code).unwrap();
+    assert!(status.extended_until.is_some());
+    // Only an admin's computer gets one.
+    assert!(
+        net::extension_code(&ben, &lan.address, finished.device, 5)
+            .await
+            .is_err()
+    );
+
+    let devices = net::revoke_device(&lan.ana, &lan.address, finished.device, false)
+        .await
+        .unwrap();
+    assert!(devices.iter().any(|d| d.id == finished.device && d.revoked && !d.lost));
+    assert!(matches!(
+        net::sync(&mut ben, &lan.address).await,
+        Err(Error::Core(glaze_vault_core::Error::Revoked))
+    ));
+    // An admin's computer cannot revoke itself.
+    let own = lan.ana.device().unwrap();
+    assert!(net::revoke_device(&lan.ana, &lan.address, own, false).await.is_err());
+}

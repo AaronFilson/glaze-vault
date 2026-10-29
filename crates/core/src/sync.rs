@@ -214,6 +214,10 @@ pub struct Pulled {
 #[serde(rename_all = "camelCase")]
 pub struct Welcome {
     pub revoked: bool,
+    /// The host's store as restored from a backup last (ADR 24): a computer that sees a new one
+    /// pulls everything again, and sends again what its people saved.
+    #[serde(default)]
+    pub generation: Uuid,
     pub reset: Vec<Scope>,
     pub dropped: Vec<Scope>,
     /// What the computer's people hold now in each collection, to say next time.
@@ -315,6 +319,9 @@ pub struct DeviceInfo {
     pub people: Vec<Uuid>,
     pub issued_at: i64,
     pub revoked: bool,
+    /// Revoked as lost or stolen, rather than retired.
+    #[serde(default)]
+    pub lost: bool,
 }
 
 /// The organization part of the key file that every computer keeps: its public key, and its

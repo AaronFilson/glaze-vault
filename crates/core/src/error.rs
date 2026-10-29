@@ -74,6 +74,12 @@ pub enum Error {
     CheckedOut(String),
     #[error("That needs the vault's host: connect this computer to its network, then try again.")]
     NeedsHost,
+    #[error(
+        "This computer has gone too long without reaching the vault's host, so it takes no changes until it syncs. An admin can give an extension code."
+    )]
+    OfflineTooLong,
+    #[error("That extension code is not for this computer, or was typed wrongly, or has run out.")]
+    WrongExtensionCode,
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -123,6 +129,8 @@ impl Error {
             Error::NotFetched => "not-fetched",
             Error::CheckedOut(_) => "checked-out",
             Error::NeedsHost => "needs-host",
+            Error::OfflineTooLong => "offline-too-long",
+            Error::WrongExtensionCode => "wrong-extension-code",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",

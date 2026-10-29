@@ -35,8 +35,12 @@ Work decided on but not done yet, with the reason it waits.
   replicas tested without a network ([ADR 20](adr/0020-sync-core.md)); and the transport, pairing
   and `hostd` in the foreground ([ADR 21](adr/0021-transport-and-pairing.md)); and host mode in the
   app ([ADR 22](adr/0022-host-mode.md)); and client mode: joining, the background sync, checkouts
-  and photos in pieces ([ADR 23](adr/0023-client-mode.md)). Stage 8, offline limits, revocation
-  and the host's backups, is next.
+  and photos in pieces ([ADR 23](adr/0023-client-mode.md)); and offline limits, revoking computers
+  and the host's backups ([ADR 24](adr/0024-offline-limits-and-revocation.md)). Phase 2 is built.
+- Left from offline limits and revoking: an admin's computer downloading a backup of the host
+  (`RequestBackup`), and restoring one from the app rather than `hostd restore`; a screen for
+  rules by role, which the core and the directory already keep; the LAN update mirror (ADR 5,
+  after stage 8 in the plan).
 - Left from the transport and host mode: the organization certifying the host key at conversion;
   the offline secret from pairing (stage 8); hostd under a user of its own on macOS
   (`_glazevault`) and `host.key` under DPAPI on Windows; MSI updates on a computer that serves
