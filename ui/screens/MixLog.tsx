@@ -26,6 +26,7 @@ import { useRevisionLines } from '../useRevisionLines';
 import { ConfirmNotice } from './Deleted';
 import { Fold, PendingNotice } from './FiringLog';
 import { ForkChoice } from './ForkChoice';
+import { CheckoutBar } from './CheckoutBar';
 
 /** The mix open in the editor: the newest revision, if saved, and the edits to it. */
 export interface MixEditing {
@@ -304,6 +305,7 @@ function MixEditor({
           }}
         />
       )}
+      {current && <CheckoutBar kind="mix" record={current.recordId} readOnly={readOnly} />}
       {readOnly && current && (
         <p className="hint" role="status">
           You can read this mix, but not change it.

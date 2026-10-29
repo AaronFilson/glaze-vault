@@ -17,6 +17,7 @@ import { amountOf, sameName } from '../chemistry';
 import { byCollection, canEdit, may } from '../team';
 import { ConfirmNotice } from './Deleted';
 import { ForkChoice } from './ForkChoice';
+import { CheckoutBar } from './CheckoutBar';
 import { BatchTable } from './PrintView';
 
 /** The batch sheets this person can open, one at a time, at the size they weigh. */
@@ -247,6 +248,7 @@ export function BatchSheetForm({
     <form className="notice" onSubmit={save}>
       <fieldset>
         <legend>Batch sheet</legend>
+        {sheet && <CheckoutBar kind="batch" record={sheet.recordId} readOnly={false} />}
         <p className="hint">
           A batch operator sees the sheet with these codes instead of the materials, and none of the chemistry. They
           still see the amounts.

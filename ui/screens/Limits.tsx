@@ -14,6 +14,7 @@ import {
 } from '../limits';
 import { ConfirmNotice } from './Deleted';
 import { ForkChoice } from './ForkChoice';
+import { CheckoutBar } from './CheckoutBar';
 
 const CHOICE_KEY = 'glaze-vault.limits';
 
@@ -217,6 +218,7 @@ export function LimitSets({
           }}
         />
       )}
+      {editing?.current && <CheckoutBar kind="limits" record={editing.current.recordId} readOnly={!canCreate} />}
       {editing && (
         <form className="notice" onSubmit={save}>
           <fieldset>
