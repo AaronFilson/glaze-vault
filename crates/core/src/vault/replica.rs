@@ -25,6 +25,11 @@ impl Vault {
     /// for it (HostStore::join_package) and its own key. It holds nothing until it first syncs;
     /// its people sign in with the passwords they have.
     pub fn join(dir: &Path, package: &JoinPackage, device: &DeviceKey) -> Result<()> {
+        Vault::join_at(dir, package, device, None)
+    }
+
+    /// Joins as `join` does, keeping where the host was reached, to sync with it there.
+    pub fn join_at(dir: &Path, package: &JoinPackage, device: &DeviceKey, address: Option<&str>) -> Result<()> {
         if Vault::exists(dir) {
             return Err(Error::VaultExists);
         }
@@ -77,6 +82,12 @@ impl Vault {
             ("host_key", hex::encode(&package.host_key)),
         ] {
             tx.execute("INSERT INTO meta (name, value) VALUES (?1, ?2)", params![name, value])?;
+        }
+        if let Some(address) = address {
+            tx.execute(
+                "INSERT INTO meta (name, value) VALUES ('host_address', ?1)",
+                params![address],
+            )?;
         }
         for entry in &package.entries {
             put_entry(&tx, entry, false)?;

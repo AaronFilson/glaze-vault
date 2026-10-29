@@ -260,7 +260,7 @@ pub async fn pair(address: &str, code: &str, name: &str, dir: &Path, device: &De
     if package.host_key != host_key {
         return Err(Error::Pairing("the host sent another host's key".into()));
     }
-    Vault::join(dir, &package, device)?;
+    Vault::join_at(dir, &package, device, Some(address))?;
     Ok(())
 }
 

@@ -135,6 +135,8 @@ async fn an_admin_pairs_a_new_computer_with_a_code() {
 
     let mut ben = Vault::unlock_as(ben_dir.path(), Some(lan.ben), OWN).unwrap();
     assert_eq!(ben.device().unwrap(), finished.device);
+    // It syncs where it paired.
+    assert_eq!(ben.host_address().unwrap().as_deref(), Some(lan.address.as_str()));
     net::sync(&mut ben, &lan.address).await.unwrap();
     assert_eq!(ben.heads(Kind::Recipe).unwrap().len(), 1);
     // The host remembers it by its key now; the code is spent.
