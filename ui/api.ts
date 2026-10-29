@@ -1,6 +1,7 @@
 // The Rust core's commands (crates/app/src/lib.rs). The UI makes no access decisions: it shows
 // what these return.
 import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { BatchSheet } from './batch';
 import type { Firing, FiringContent } from './firing';
 import type { LimitsContent } from './limits';
@@ -268,6 +269,44 @@ export interface SyncReport {
   refused: number;
 }
 
+/** How the background sync stands (docs/adr/0023-client-mode.md), sent as `sync-status`. */
+export interface SyncStatus {
+  replica: boolean;
+  syncing: boolean;
+  /** When the last sync worked, in ms since the epoch. */
+  lastSynced: number | null;
+  error: string | null;
+  /** Whether this computer hears from the host now. */
+  watching: boolean;
+  /** Saved here and not at the host yet. */
+  waiting: number;
+  /** What the host would not take. */
+  refused: number;
+  photosWaiting: number;
+}
+
+/** A host serving a vault on this network, as it advertises itself. */
+export interface FoundHost {
+  name: string;
+  address: string;
+}
+
+export interface Joining {
+  /** This computer's key, for the admin to check. */
+  fingerprint: string;
+  suggestedName: string;
+}
+
+/** Someone changing a record on some computer (plan section 3.5). */
+export interface Checkout {
+  record: string;
+  person: string;
+  name: string;
+  mine: boolean;
+  since: number;
+  expires: number;
+}
+
 export interface PairingCode {
   code: string;
   expiresAt: number;
@@ -386,6 +425,18 @@ export const api = {
   approvePairing: (people: string[]) => invoke<void>('approve_pairing', { people }),
   cancelPairing: () => invoke<void>('cancel_pairing'),
   devices: () => invoke<Device[]>('devices'),
+  syncStatus: () => invoke<SyncStatus>('sync_status'),
+  /** The hosts that answer on this network within a few seconds. */
+  discoverHosts: () => invoke<FoundHost[]>('discover_hosts'),
+  prepareJoin: () => invoke<Joining>('prepare_join'),
+  /** Waits until an admin approves this computer, then it holds a locked vault to sign in to. */
+  joinVault: (address: string, code: string, name: string) => invoke<void>('join_vault', { address, code, name }),
+  /** Removes this computer's copy of the vault. */
+  leaveVault: () => invoke<void>('leave_vault'),
+  checkouts: () => invoke<Checkout[]>('checkouts'),
+  checkOut: (kind: Kind, record: string, takeOver: boolean) =>
+    invoke<Checkout[]>('check_out', { kind, record, takeOver }),
+  releaseCheckout: (record: string) => invoke<Checkout[]>('release_checkout', { record }),
   auditLog: (limit: number | null) => invoke<AuditLog>('audit_log', { limit }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),
@@ -418,6 +469,39 @@ export const api = {
   /** Downloads, locks the vault, installs and restarts. */
   installUpdate: () => invoke<void>('install_update')
 };
+
+/** Hears an event from the core until the returned function is called. Pages run without one in
+ * tests, where nothing is heard. */
+export function onEvent<T>(name: 'sync-status' | 'vault-changed', handler: (payload: T) => void): () => void {
+  let stop: (() => unknown) | null = null;
+  let stopped = false;
+  // The page may be going, with the app's event system: then nothing is left to stop.
+  const quietly = (unlisten: () => unknown) => {
+    try {
+      Promise.resolve(unlisten()).catch(() => {});
+    } catch {
+      // As above.
+    }
+  };
+  listen<T>(name, (event) => handler(event.payload)).then(
+    (unlisten) => (stopped ? quietly(unlisten) : (stop = unlisten)),
+    () => {}
+  );
+  return () => {
+    stopped = true;
+    if (stop) quietly(stop);
+  };
+}
+
+/** What a sync that brought something sends with `vault-changed`. */
+export interface VaultChanged {
+  pulled: number;
+  fetched: number;
+}
+
+export function errorCode(error: unknown): string | null {
+  return error && typeof error === 'object' && 'code' in error ? String((error as CommandError).code) : null;
+}
 
 export function errorText(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) return String((error as CommandError).message);

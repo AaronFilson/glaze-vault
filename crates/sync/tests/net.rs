@@ -125,7 +125,7 @@ async fn an_admin_pairs_a_new_computer_with_a_code() {
     let ben_dir = tempfile::tempdir().unwrap();
     let joining = tokio::spawn({
         let (address, code, dir) = (lan.address.clone(), pairing.code.clone(), ben_dir.path().to_owned());
-        async move { net::pair(&address, &code, "Ben's laptop", &dir).await }
+        async move { net::pair(&address, &code, "Ben's laptop", &dir, &DeviceKey::generate()).await }
     });
     let finished = pairing.wait().await.unwrap();
     assert_eq!(finished.name, "Ben's laptop");
@@ -144,7 +144,7 @@ async fn an_admin_pairs_a_new_computer_with_a_code() {
     );
     let other = tempfile::tempdir().unwrap();
     assert!(matches!(
-        net::pair(&lan.address, &code, "again", other.path()).await,
+        net::pair(&lan.address, &code, "again", other.path(), &DeviceKey::generate()).await,
         Err(Error::Pairing(_))
     ));
 }
@@ -160,7 +160,7 @@ async fn a_wrong_code_ends_the_pairing() {
         "1234-5678"
     };
     let dir = tempfile::tempdir().unwrap();
-    let tried = net::pair(&lan.address, wrong, "guess", dir.path()).await;
+    let tried = net::pair(&lan.address, wrong, "guess", dir.path(), &DeviceKey::generate()).await;
     assert!(
         matches!(tried, Err(Error::Pairing(ref reason)) if reason.contains("wrong")),
         "{tried:?}"
@@ -168,7 +168,7 @@ async fn a_wrong_code_ends_the_pairing() {
     assert!(!Vault::exists(dir.path()));
     assert!(matches!(pairing.wait().await, Err(Error::Pairing(_))));
     // One attempt only: the right code no longer works either.
-    let right = net::pair(&lan.address, &pairing.code, "right", dir.path()).await;
+    let right = net::pair(&lan.address, &pairing.code, "right", dir.path(), &DeviceKey::generate()).await;
     assert!(matches!(right, Err(Error::Pairing(_))), "{right:?}");
 }
 
@@ -245,4 +245,99 @@ async fn the_host_computers_own_vault_syncs_with_the_host_it_became_and_lists_it
     vault.stop_syncing().unwrap();
     assert!(net::sync(&mut vault, &address).await.is_err());
     assert_eq!(vault.heads(Kind::Recipe).unwrap().len(), 1);
+}
+
+/// Ben's computer, joined without pairing and unlocked.
+fn ben_computer(lan: &Lan) -> (TempDir, Vault) {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let vault = Vault::unlock_as(lan.dirs[0].path(), Some(lan.ana_id), PASSWORD).unwrap();
+        join_locally(&vault, &mut lan.server.host(), dir.path(), lan.ben);
+    }
+    let ben = Vault::unlock_as(dir.path(), Some(lan.ben), OWN).unwrap();
+    (dir, ben)
+}
+
+struct Shared(std::sync::Mutex<Vault>);
+
+impl net::SharedVault for Shared {
+    fn with<T>(&self, work: impl FnOnce(&mut Vault) -> glaze_vault_sync::Result<T>) -> glaze_vault_sync::Result<T> {
+        work(&mut self.0.lock().unwrap())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watching_computer_hears_when_another_pushes() {
+    let mut lan = lan().await;
+    net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    let (_dir, ben) = ben_computer(&lan);
+    let ben = Shared(std::sync::Mutex::new(ben));
+    net::sync_shared(&ben, &lan.address).await.unwrap();
+    let (device, pin) = {
+        let ben = ben.0.lock().unwrap();
+        (ben.device_key().unwrap(), ben.host_key().unwrap())
+    };
+    let mut watching = net::watch(&device, pin, &lan.address).await.unwrap();
+
+    let head = lan.ana.heads(Kind::Recipe).unwrap().remove(0);
+    lan.ana
+        .save(
+            Kind::Recipe,
+            Some(head.revision_id),
+            &json!({ "name": "Shino 2", "lines": [], "notes": "" }),
+        )
+        .unwrap();
+    net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), watching.next())
+        .await
+        .expect("news in time")
+        .unwrap();
+    net::sync_shared(&ben, &lan.address).await.unwrap();
+    let names: Vec<String> = ben
+        .0
+        .lock()
+        .unwrap()
+        .heads(Kind::Recipe)
+        .unwrap()
+        .iter()
+        .map(|r| r.content["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["Shino 2"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_computer_at_a_time_holds_the_directory() {
+    let mut lan = lan().await;
+    net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    let (_dir, mut ben) = ben_computer(&lan);
+    net::sync(&mut ben, &lan.address).await.unwrap();
+    let held = net::hold_directory(&lan.ana, &lan.address).await.unwrap();
+    let started = std::time::Instant::now();
+    let waiting = async {
+        let held = net::hold_directory(&ben, &lan.address).await.unwrap();
+        held.release().await;
+        started.elapsed()
+    };
+    let letting_go = async {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        held.release().await;
+    };
+    let (waited, ()) = tokio::join!(waiting, letting_go);
+    assert!(waited >= std::time::Duration::from_millis(300));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_record_is_checked_out_and_released_over_the_network() {
+    let mut lan = lan().await;
+    net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    let (_dir, mut ben) = ben_computer(&lan);
+    net::sync(&mut ben, &lan.address).await.unwrap();
+    let record = lan.ana.heads(Kind::Recipe).unwrap()[0].record_id;
+    let held = net::check_out(&lan.ana, &lan.address, record, false).await.unwrap();
+    assert_eq!(held[0].person, lan.ana_id);
+    let seen = net::check_out(&ben, &lan.address, record, false).await.unwrap();
+    assert_eq!(seen[0].person, lan.ana_id);
+    let taken = net::check_out(&ben, &lan.address, record, true).await.unwrap();
+    assert_eq!(taken[0].person, lan.ben);
+    assert!(net::release(&ben, &lan.address, record).await.unwrap().is_empty());
 }

@@ -146,6 +146,10 @@ impl Vault {
         let (record_id, collection_id) = (parse_id(&record_id)?, parse_id(&collection_id)?);
         let kind = Kind::parse(&kind).ok_or_else(|| Error::Corrupt(format!("unknown kind {kind}")))?;
         let collection = self.readable(&collection_id)?;
+        // A replica pulls an attachment before its bytes, which it fetches after (plan section 3.7).
+        if ciphertext.is_empty() {
+            return Err(Error::NotFetched);
+        }
         let key = self.key_for(collection, kind, epoch)?.ok_or(Error::NotFound)?;
         let bytes = crypto::decrypt(
             &key,

@@ -1,6 +1,7 @@
 # 11. End-to-end tests through the development screen and driver
 
-Proposed, 2026-10-16.
+Proposed, 2026-10-16. A second suite, on the LAN, with two apps and a host, is in
+[ADR 23](0023-client-mode.md).
 
 ## Context
 

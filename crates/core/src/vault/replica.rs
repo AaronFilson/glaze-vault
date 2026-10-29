@@ -330,7 +330,8 @@ impl Vault {
         for (id, refusal) in &result.refused {
             let id_text = id.to_string();
             match refusal {
-                Refusal::StaleEpoch { .. } => {}
+                // Sealed again, or its bytes sent, before the next push.
+                Refusal::StaleEpoch { .. } | Refusal::BytesMissing => {}
                 Refusal::Erased => {
                     tx.execute("DELETE FROM changes WHERE item_id = ?1", params![id_text])?;
                     tx.execute("DELETE FROM attachments WHERE id = ?1", params![id_text])?;
@@ -508,6 +509,151 @@ impl Vault {
     }
 }
 
+/// How long what the host said of checkouts holds, unless a sync says it again: past that, this
+/// computer is taken to be offline, and saves as it would without a host (plan section 3.5).
+const CHECKOUTS_HOLD_MS: i64 = 2 * 60 * 1000;
+
+impl Vault {
+    /// The attachments pulled without their bytes, newest first, with how much of each has come.
+    pub fn missing_bytes(&self) -> Result<Vec<(Uuid, u64)>> {
+        let ids = self
+            .conn
+            .prepare("SELECT id FROM attachments WHERE length(ciphertext) = 0 ORDER BY created_at DESC")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids.iter()
+            .map(|id| {
+                let id = parse_id(id)?;
+                Ok((id, items::staged_length(&self.conn, &id)?.0))
+            })
+            .collect()
+    }
+
+    /// Keeps a piece of an attachment's bytes from the host. Once they have all come they are
+    /// checked against the hash its signature covers, and kept with it. Whether it is whole now.
+    pub fn take_chunk(&mut self, chunk: &crate::sync::Chunk) -> Result<bool> {
+        let row: Option<(Vec<u8>, Vec<u8>, i64)> = self
+            .conn
+            .query_row(
+                "SELECT nonce, sha256, length(ciphertext) FROM attachments WHERE id = ?1",
+                params![chunk.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((nonce, sha256, length)) = row else {
+            items::unstage(&self.conn, &chunk.id)?;
+            return Ok(false);
+        };
+        if length > 0 {
+            return Ok(true);
+        }
+        let (had, _) = items::staged_length(&self.conn, &chunk.id)?;
+        if chunk.offset != had || had + chunk.bytes.len() as u64 > chunk.total {
+            return Err(Error::Corrupt("a piece of a photo came out of order".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        items::stage(&tx, &chunk.id, None, chunk.offset, &chunk.bytes)?;
+        let whole = had + chunk.bytes.len() as u64 == chunk.total;
+        if whole {
+            let ciphertext = items::staged(&tx, &chunk.id)?;
+            items::unstage(&tx, &chunk.id)?;
+            if store::attachment_hash(&nonce, &ciphertext) != sha256 {
+                tx.commit()?;
+                return Err(Error::BadSignature);
+            }
+            tx.execute(
+                "UPDATE attachments SET ciphertext = ?1 WHERE id = ?2",
+                params![ciphertext, chunk.id.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(whole)
+    }
+
+    /// An attachment's ciphertext, to send to the host in pieces.
+    pub fn attachment_bytes(&self, id: Uuid) -> Result<Vec<u8>> {
+        Ok(self.conn.query_row(
+            "SELECT ciphertext FROM attachments WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// How many things saved here wait to reach the host, leaving out what it would not take.
+    pub fn waiting(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT count(DISTINCT item_id) FROM changes WHERE host_seq IS NULL
+             AND item IN ('revision', 'attachment', 'event') AND item_id NOT IN (SELECT item_id FROM refused)",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// The organization's signing key, which the host advertises a tag of (ADR 21), so this
+    /// computer can find its host again when its address changes.
+    pub fn organization_signing_key(&self) -> Option<Vec<u8>> {
+        self.directory.organization_keys.last().cloned()
+    }
+
+    /// What the host just said of who is changing what.
+    pub fn set_checkouts(&mut self, checkouts: Vec<crate::sync::Checkout>) {
+        self.checkouts = Some((now_ms(), checkouts));
+    }
+
+    /// Who is changing what, as the host said in the last little while; nothing if it has not.
+    pub fn checkouts(&self) -> Vec<crate::sync::Checkout> {
+        match &self.checkouts {
+            Some((at, checkouts)) if now_ms() - at < CHECKOUTS_HOLD_MS => checkouts.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The name of someone in the vault.
+    pub fn name_of(&self, person: Uuid) -> Option<String> {
+        self.directory.person(person).map(|p| p.name.clone())
+    }
+
+    /// The name of whoever else has a record checked out, if someone has.
+    pub(super) fn checked_out_by(&self, record: Uuid) -> Option<String> {
+        self.checkouts()
+            .into_iter()
+            .find(|c| c.record == record && c.person != self.user_id)
+            .map(|c| {
+                self.directory
+                    .person(c.person)
+                    .map_or_else(|| "Someone".to_owned(), |p| p.name.clone())
+            })
+    }
+
+    /// Takes this computer out of the vault (plan section 2.3): the replica's files are written
+    /// over and removed. What was not synced is lost; the screen says so first.
+    pub fn leave(self) -> Result<()> {
+        if !self.is_replica() {
+            return Err(Error::NotAllowed);
+        }
+        let dir = self.dir.clone();
+        drop(self);
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_file() {
+                let length = fs::metadata(&path)?.len();
+                let mut file = fs::OpenOptions::new().write(true).open(&path)?;
+                let zeros = vec![0u8; 64 * 1024];
+                let mut left = length;
+                while left > 0 {
+                    let n = left.min(zeros.len() as u64) as usize;
+                    std::io::Write::write_all(&mut file, &zeros[..n])?;
+                    left -= n as u64;
+                }
+                file.sync_all()?;
+            }
+        }
+        fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+}
+
 /// Whether a record has a tombstone here.
 fn erased_here(conn: &Connection, record: &Uuid) -> Result<bool> {
     Ok(conn
@@ -547,6 +693,7 @@ fn take_entry(conn: &Connection, keyring: &mut Keyring, database_key: &crypto::K
 mod tests {
     use super::*;
     use crate::access::Role;
+    use crate::vault::items::CHUNK_BYTES;
     use crate::vault::{Capabilities, HostStore, Kind};
     use serde_json::json;
     use tempfile::TempDir;
@@ -567,6 +714,14 @@ mod tests {
             vault.apply_batch(&batch).unwrap();
             if !batch.more {
                 break;
+            }
+        }
+        for (id, mut offset) in vault.missing_bytes().unwrap() {
+            while let Some(chunk) = host.chunk(device, id, offset).unwrap() {
+                offset += chunk.bytes.len() as u64;
+                if vault.take_chunk(&chunk).unwrap() {
+                    break;
+                }
             }
         }
         let pending = vault.pending(usize::MAX).unwrap();
@@ -1040,5 +1195,189 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn both_computers_list_the_version_the_host_took_last_first() {
+        let mut t = team();
+        let shino = head(&t.computers[0], t.recipe).revision_id;
+        // Ben saves first by the clock, but reaches the host last.
+        t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "Ben's", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        t.computers[0]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "Ana's", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[0], &mut t.host);
+        sync(&mut t.computers[1], &mut t.host);
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(head(&t.computers[0], t.recipe).content["name"], "Ben's");
+        assert_eq!(head(&t.computers[1], t.recipe).content["name"], "Ben's");
+    }
+
+    #[test]
+    fn a_photo_comes_in_pieces_after_its_firing() {
+        let mut t = team();
+        let big: Vec<u8> = (0..(2 * CHUNK_BYTES + 1000)).map(|i| (i % 251) as u8).collect();
+        let photo = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/jpeg", &big)
+            .unwrap();
+        // Sent whole, as the core's helper does, and pulled by Ana's computer without its bytes.
+        sync(&mut t.computers[1], &mut t.host);
+        let device = t.computers[0].device().unwrap();
+        let (_, levels) = t.computers[0].sync_state().unwrap();
+        t.computers[0]
+            .apply_welcome(&t.host.hello(device, &levels).unwrap())
+            .unwrap();
+        let (cursors, _) = t.computers[0].sync_state().unwrap();
+        let batch = t.host.pull(device, &cursors, usize::MAX).unwrap();
+        t.computers[0].apply_batch(&batch).unwrap();
+        assert!(matches!(t.computers[0].attachment(photo.id), Err(Error::NotFetched)));
+        let missing = t.computers[0].missing_bytes().unwrap();
+        assert_eq!(missing, vec![(photo.id, 0)]);
+
+        // A piece out of order is refused; then it comes, a piece at a time.
+        let first = t.host.chunk(device, photo.id, 0).unwrap().unwrap();
+        assert_eq!(first.bytes.len(), CHUNK_BYTES);
+        let mut skipped = t.host.chunk(device, photo.id, CHUNK_BYTES as u64).unwrap().unwrap();
+        assert!(t.computers[0].take_chunk(&skipped).is_err());
+        assert!(!t.computers[0].take_chunk(&first).unwrap());
+        assert_eq!(
+            t.computers[0].missing_bytes().unwrap(),
+            vec![(photo.id, CHUNK_BYTES as u64)]
+        );
+        assert!(!t.computers[0].take_chunk(&skipped).unwrap());
+        skipped = t.host.chunk(device, photo.id, 2 * CHUNK_BYTES as u64).unwrap().unwrap();
+        assert!(t.computers[0].take_chunk(&skipped).unwrap());
+        assert_eq!(*t.computers[0].attachment(photo.id).unwrap().1, big);
+        assert!(t.computers[0].missing_bytes().unwrap().is_empty());
+
+        // Cleo's computer, which has no firings, is sent none of it.
+        let cleo = t.computers[2].device().unwrap();
+        assert!(t.host.chunk(cleo, photo.id, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_attachment_sent_in_pieces_is_taken_once_they_have_all_come() {
+        let mut t = team();
+        let bytes: Vec<u8> = (0..(CHUNK_BYTES + 10)).map(|i| (i % 7) as u8).collect();
+        let photo = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/png", &bytes)
+            .unwrap();
+        let device = t.computers[1].device().unwrap();
+        let pending = t.computers[1].pending(usize::MAX).unwrap();
+        let stripped: Vec<Item> = pending
+            .iter()
+            .cloned()
+            .map(|item| match item {
+                Item::Attachment(mut a) => {
+                    a.ciphertext = Vec::new();
+                    Item::Attachment(a)
+                }
+                other => other,
+            })
+            .collect();
+        // Without its bytes it is not taken, but not refused for good either.
+        let result = t.host.accept(device, stripped.clone()).unwrap();
+        assert_eq!(result.refused, vec![(photo.id, Refusal::BytesMissing)]);
+        t.computers[1].apply_push_result(&result, &stripped).unwrap();
+        assert_eq!(t.computers[1].waiting().unwrap(), 1);
+
+        let ciphertext = t.computers[1].attachment_bytes(photo.id).unwrap();
+        let piece = |offset: usize| crate::sync::Chunk {
+            id: photo.id,
+            offset: offset as u64,
+            total: ciphertext.len() as u64,
+            bytes: ciphertext[offset..(offset + CHUNK_BYTES).min(ciphertext.len())].to_vec(),
+        };
+        assert_eq!(t.host.take_chunk(device, &piece(0)).unwrap(), CHUNK_BYTES as u64);
+        // Sent again after a break, the host says how far it got.
+        assert_eq!(t.host.take_chunk(device, &piece(0)).unwrap(), CHUNK_BYTES as u64);
+        // Another computer cannot add to it.
+        let ana = t.computers[0].device().unwrap();
+        assert!(t.host.take_chunk(ana, &piece(CHUNK_BYTES)).is_err());
+        assert_eq!(
+            t.host.take_chunk(device, &piece(CHUNK_BYTES)).unwrap(),
+            ciphertext.len() as u64
+        );
+        let result = t.host.accept(device, stripped.clone()).unwrap();
+        assert_eq!(result.accepted.len(), 1);
+        t.computers[1].apply_push_result(&result, &stripped).unwrap();
+        assert_eq!(t.computers[1].waiting().unwrap(), 0);
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(*t.computers[0].attachment(photo.id).unwrap().1, bytes);
+    }
+
+    #[test]
+    fn a_record_checked_out_elsewhere_cannot_be_saved_until_it_is_taken_over() {
+        let mut t = team();
+        let (ana, ben) = (t.computers[0].device().unwrap(), t.computers[1].device().unwrap());
+        // Ben's computer cannot check out for Ana, nor Cleo's change a recipe.
+        assert!(t.host.check_out(ben, t.ana, t.recipe, false).is_err());
+        let cleo = t.computers[2].device().unwrap();
+        assert!(t.host.check_out(cleo, t.cleo, t.recipe, false).is_err());
+
+        let held = t.host.check_out(ana, t.ana, t.recipe, false).unwrap();
+        assert_eq!(held.len(), 1);
+        // Ben asks, and Ana still has it.
+        let seen = t.host.check_out(ben, t.ben, t.recipe, false).unwrap();
+        assert_eq!(seen[0].person, t.ana);
+        t.computers[1].set_checkouts(seen);
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let content = json!({ "name": "Ben's", "lines": [], "notes": "" });
+        match t.computers[1].save(Kind::Recipe, Some(shino), &content) {
+            Err(Error::CheckedOut(by)) => assert_eq!(by, "Ana"),
+            other => panic!("saved anyway: {:?}", other.map(|r| r.revision_id)),
+        }
+        // Ana's own computer saves as before; Cleo's sees nothing of the recipe.
+        t.computers[0].set_checkouts(t.host.checkouts(ana).unwrap());
+        let anas = head(&t.computers[0], t.recipe).revision_id;
+        t.computers[0].save(Kind::Recipe, Some(anas), &content).unwrap();
+        assert!(t.host.checkouts(cleo).unwrap().is_empty());
+
+        let taken = t.host.check_out(ben, t.ben, t.recipe, true).unwrap();
+        assert_eq!(taken[0].person, t.ben);
+        t.computers[1].set_checkouts(taken);
+        t.computers[1].save(Kind::Recipe, Some(shino), &content).unwrap();
+        assert!(t.host.release(ben, t.ben, t.recipe).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_resolution_cannot_set_aside_another_records_revision() {
+        let mut t = team();
+        let recipe = head(&t.computers[1], t.recipe).revision_id;
+        let other = t.computers[1]
+            .save_in(
+                Kind::Recipe,
+                t.shared,
+                &json!({ "name": "Other", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+        // As if a computer had saved a resolution that names a revision of another record.
+        let resolution = t.computers[1]
+            .add_revision(
+                Kind::Recipe,
+                Some(recipe),
+                None,
+                &json!({ "name": "Shino", "lines": [], "notes": "" }),
+                false,
+                &[other.revision_id],
+            )
+            .unwrap();
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(matches!(
+            result.refused.iter().find(|(id, _)| *id == resolution.revision_id),
+            Some((_, Refusal::Invalid { .. }))
+        ));
     }
 }

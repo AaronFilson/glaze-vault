@@ -2,7 +2,15 @@ import { useState } from 'react';
 import { api, errorText } from '../api';
 import { NewPassword } from './NewPassword';
 
-export function Setup({ onCreated, onRestore }: { onCreated: (words: string[]) => void; onRestore: () => void }) {
+export function Setup({
+  onCreated,
+  onRestore,
+  onJoin
+}: {
+  onCreated: (words: string[]) => void;
+  onRestore: () => void;
+  onJoin: () => void;
+}) {
   const [password, setPassword] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -35,6 +43,9 @@ export function Setup({ onCreated, onRestore }: { onCreated: (words: string[]) =
         </button>
         <button type="button" className="link" onClick={onRestore}>
           Restore from a backup
+        </button>
+        <button type="button" className="link" onClick={onJoin}>
+          Join a vault on this network
         </button>
       </form>
     </main>

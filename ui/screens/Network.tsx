@@ -6,14 +6,27 @@ import {
   type NetworkStatus,
   type PairingCode,
   type PairingComputer,
-  type Person
+  type Person,
+  type SyncStatus
 } from '../api';
 
 const when = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-/** Serving the vault to other computers on this network, for an admin
- * (docs/adr/0022-host-mode.md): starting, pairing computers, the computers paired, and stopping. */
-export function Network({ people, onChanged }: { people: Person[]; onChanged: () => void }) {
+/** The vault on this network. For an admin, serving it to other computers
+ * (docs/adr/0022-host-mode.md): starting, pairing computers, the computers paired, and stopping.
+ * For anyone on a computer that syncs with a host (docs/adr/0023-client-mode.md): syncing, and
+ * leaving the vault. */
+export function Network({
+  people,
+  admin,
+  onChanged,
+  onLeft
+}: {
+  people: Person[];
+  admin: boolean;
+  onChanged: () => void;
+  onLeft: () => void;
+}) {
   const [status, setStatus] = useState<NetworkStatus | null>(null);
   const [error, setError] = useState('');
   const load = () =>
@@ -26,6 +39,8 @@ export function Network({ people, onChanged }: { people: Person[]; onChanged: ()
   }, []);
 
   if (!status) return error ? <p className="error">{error}</p> : <p className="hint">Loading…</p>;
+  if (!status.replica && !admin)
+    return <p className="hint">This vault is on this computer alone. An admin can serve it to the team's other computers.</p>;
   if (!status.replica)
     return (
       <StartHosting
@@ -44,15 +59,19 @@ export function Network({ people, onChanged }: { people: Person[]; onChanged: ()
           : `This vault syncs with the host at ${status.hostAddress}.`}
       </p>
       <SyncNow onPulled={onChanged} />
-      <Pairing people={people} />
-      <Devices people={people} />
-      {status.hostHere && (
-        <StopHosting
-          onStopped={() => {
-            void load();
-            onChanged();
-          }}
-        />
+      {admin && <Pairing people={people} />}
+      {admin && <Devices people={people} />}
+      {status.hostHere ? (
+        admin && (
+          <StopHosting
+            onStopped={() => {
+              void load();
+              onChanged();
+            }}
+          />
+        )
+      ) : (
+        <LeaveVault onLeft={onLeft} />
       )}
     </>
   );
@@ -315,6 +334,69 @@ function StopHosting({ onStopped }: { onStopped: () => void }) {
         </>
       )}
       {error && <p role="alert" className="error">{error}</p>}
+    </section>
+  );
+}
+
+/** Takes this computer out of the vault: its copy goes. Others keep theirs, and the host keeps
+ * everything that reached it. */
+function LeaveVault({ onLeft }: { onLeft: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const [sync, setSync] = useState<SyncStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const ask = () => {
+    setAsking(true);
+    api.syncStatus().then(setSync, () => {});
+  };
+  const leave = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await api.leaveVault();
+      onLeft();
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  };
+  const unsent = (sync?.waiting ?? 0) + (sync?.refused ?? 0);
+  return (
+    <section aria-label="Leave this vault">
+      <h3>Leave this vault</h3>
+      {!asking ? (
+        <div className="row">
+          <button type="button" onClick={ask}>
+            Leave this vault…
+          </button>
+        </div>
+      ) : (
+        <>
+          <p>
+            This computer's copy of the vault is removed. Everyone keeps what reached the host, and can join this
+            computer again with a new code from an admin.
+          </p>
+          {unsent > 0 && (
+            <p className="error">
+              {unsent === 1 ? 'One change' : `${unsent} changes`} saved here never reached the host, and would be lost.
+              Sync first, if you can.
+            </p>
+          )}
+          <div className="row">
+            <button type="button" className="danger" disabled={busy} onClick={() => void leave()}>
+              {busy ? 'Leaving…' : 'Leave and remove it'}
+            </button>
+            <button type="button" onClick={() => setAsking(false)}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
     </section>
   );
 }

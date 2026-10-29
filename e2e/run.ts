@@ -1,15 +1,20 @@
 // End-to-end tests: `npm run e2e` builds and opens the app in development with a throwaway vault,
 // works through the scenarios in order as a person would, and stops at the first that fails,
 // showing the screen as it was. `npm run e2e -- --keep` keeps the folder with the vault, the files
-// the scenarios made and the app's log.
+// the scenarios made and the app's log. `npm run e2e -- --suite lan` runs the LAN suite instead
+// (e2e/lan.ts): two apps, one serving the vault to the other.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { App } from './app.ts';
+import { lanScenarios } from './lan.ts';
 import { scenarios, type Vault } from './scenarios.ts';
 
 const keep = process.argv.includes('--keep');
+const suite = process.argv.indexOf('--suite');
+const lan = suite >= 0 && process.argv[suite + 1] === 'lan';
+const ROOT = join(import.meta.dirname, '..');
 // The first build compiles SQLCipher and OpenSSL, which takes a while on a cold CI cache.
 const startMinutes = Number(process.env.E2E_START_MINUTES) || 30;
 
@@ -21,8 +26,14 @@ if (process.platform === 'darwin' && /"CGSSessionScreenIsLocked"=Yes/.test(spawn
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'glaze-vault-e2e-'));
-const app = new App(dir);
+// The LAN suite's first app serves through hostd as its child, with no service (ADR 22), and
+// its second runs the debug build the first one's `tauri dev` made.
+const app = lan ? new App(join(dir, 'a'), { GLAZE_VAULT_HOST_NO_SERVICE: '1' }) : new App(dir);
+const other = lan ? new App(join(dir, 'b')) : null;
 const vault: Vault = { password: '', recoveryWords: [], organizationWords: [] };
+const run = lan
+  ? lanScenarios.map((s) => ({ name: s.name, run: () => s.run({ a: app, b: other! }) }))
+  : scenarios.map((s) => ({ name: s.name, run: () => s.run(app, vault) }));
 /** In GitHub Actions, the failure goes on the run as an annotation too, which can be read without
  * the job's log. */
 const annotate = (text: string) => {
@@ -35,21 +46,30 @@ const seconds = (since: number) => `${((Date.now() - since) / 1000).toFixed(1)}s
 let failed = false;
 try {
   const started = Date.now();
+  if (lan) {
+    console.log('Building hostd');
+    const built = spawnSync('cargo', ['build', '-p', 'glaze-vault-hostd'], { cwd: ROOT, stdio: 'inherit' });
+    if (built.status !== 0) throw new Error('hostd did not build');
+  }
   console.log(`Starting the app, with its files in ${dir}`);
   await app.start(startMinutes * 60_000);
+  if (other) {
+    const binary = join(ROOT, 'target', 'debug', `glaze-vault${process.platform === 'win32' ? '.exe' : ''}`);
+    await other.start(120_000, binary);
+  }
   console.log(`Started in ${seconds(started)}\n`);
 
-  for (const [index, scenario] of scenarios.entries()) {
+  for (const [index, scenario] of run.entries()) {
     const at = Date.now();
     try {
-      await scenario.run(app, vault);
+      await scenario.run();
       console.log(`  ok    ${scenario.name} (${seconds(at)})`);
     } catch (e) {
       failed = true;
       console.log(`  FAIL  ${scenario.name} (${seconds(at)})\n`);
       console.log((e as Error).message);
       annotate(`${scenario.name}: ${(e as Error).message}`);
-      const rest = scenarios.length - index - 1;
+      const rest = run.length - index - 1;
       if (rest) console.log(`\n${rest} more not run: each starts where the one before left off.`);
       break;
     }
@@ -59,6 +79,7 @@ try {
   console.log((e as Error).message);
   annotate((e as Error).message);
 } finally {
+  await other?.stop();
   await app.stop();
 }
 

@@ -245,6 +245,17 @@ const MIGRATIONS: &[&str] = &[
     UPDATE changes SET collection_id = (SELECT e.collection_id FROM events e WHERE e.id = changes.item_id)
         WHERE item = 'event' AND item_id IN (
             SELECT id FROM events WHERE type IN ('collection-created', 'collection-renamed'));",
+    // 12: photos in chunks (plan section 3.7). A replica keeps an attachment it pulled without its
+    // bytes, an empty ciphertext, until it has fetched them; on the way in, on the host from a
+    // computer or on a replica from the host, the pieces wait here until the last arrives.
+    "CREATE TABLE incoming_attachments (
+        id TEXT NOT NULL,
+        device_id TEXT,
+        offset INTEGER NOT NULL,
+        bytes BLOB NOT NULL,
+        at INTEGER NOT NULL,
+        PRIMARY KEY (id, offset)
+    );",
 ];
 
 /// A step a migration needs that SQL cannot do, run in its transaction after its SQL.

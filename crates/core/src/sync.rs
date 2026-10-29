@@ -114,7 +114,8 @@ pub struct SummaryItem {
     pub summary: Vec<u8>,
 }
 
-/// An attachment as it is stored, its bytes with it.
+/// An attachment as it is stored. Its bytes travel apart, in pieces (plan section 3.7): an item
+/// without them has an empty ciphertext, and its hash and signature still check.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentItem {
@@ -244,6 +245,8 @@ pub enum Refusal {
     /// An erasure of a record someone changed since it was deleted.
     ChangedElsewhere,
     ParentUnknown,
+    /// An attachment whose bytes have not all reached the host: send them, then it again.
+    BytesMissing,
     /// Something about it does not hold together.
     Invalid {
         reason: String,
@@ -261,6 +264,30 @@ impl Refusal {
 pub struct PushResult {
     pub accepted: Vec<(Uuid, i64)>,
     pub refused: Vec<(Uuid, Refusal)>,
+}
+
+/// A piece of an attachment's ciphertext.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Chunk {
+    pub id: Uuid,
+    pub offset: u64,
+    /// How many bytes the attachment has in all.
+    pub total: u64,
+    #[serde(with = "serde_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+/// Someone changing a record (plan section 3.5): advisory, kept by the host while it runs, and
+/// ending by itself after a while.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Checkout {
+    pub record: Uuid,
+    pub person: Uuid,
+    pub device: Uuid,
+    pub since: i64,
+    pub expires: i64,
 }
 
 /// The organization's statement that a computer, its signing key, may sync, for these people.

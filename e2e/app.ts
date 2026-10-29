@@ -53,8 +53,12 @@ export class App {
   private child: ChildProcess | null = null;
   private exited = false;
 
-  constructor(dir: string) {
+  /** What this app's environment adds, such as the LAN suite's development host. */
+  private readonly env: Record<string, string>;
+
+  constructor(dir: string, env: Record<string, string> = {}) {
     this.dir = dir;
+    this.env = env;
     this.vault = join(dir, 'vault');
     this.files = join(dir, 'files');
     this.log = join(dir, 'dev.log');
@@ -63,25 +67,29 @@ export class App {
     mkdirSync(this.files, { recursive: true });
   }
 
-  /** Builds and opens the app, and waits for its first screen. */
-  async start(timeoutMs: number) {
+  /** Builds and opens the app, and waits for its first screen. With `binary`, runs the debug
+   * build another app's `tauri dev` made instead, which loads the page from that one's Vite. */
+  async start(timeoutMs: number, binary?: string) {
     const log = openSync(this.log, 'a');
     const env = {
       ...process.env,
       GLAZE_VAULT_DIR: this.vault,
       GLAZE_VAULT_SCREEN: this.screenFile,
       GLAZE_VAULT_DRIVE: this.driveFile,
-      GLAZE_VAULT_SHOW_SECRETS: '1'
+      GLAZE_VAULT_SHOW_SECRETS: '1',
+      ...this.env
     };
     const windows = process.platform === 'win32';
     // Its own process group, so stopping it stops Vite and the app too.
-    this.child = spawn(windows ? 'npx.cmd' : 'npx', ['tauri', 'dev', '--no-watch'], {
-      cwd: ROOT,
-      env,
-      stdio: ['ignore', log, log],
-      detached: !windows,
-      shell: windows
-    });
+    this.child = binary
+      ? spawn(binary, [], { cwd: ROOT, env, stdio: ['ignore', log, log], detached: !windows })
+      : spawn(windows ? 'npx.cmd' : 'npx', ['tauri', 'dev', '--no-watch'], {
+          cwd: ROOT,
+          env,
+          stdio: ['ignore', log, log],
+          detached: !windows,
+          shell: windows
+        });
     this.child.on('exit', () => (this.exited = true));
     if (process.platform === 'darwin') {
       // macOS slows a hidden window's page, and after a few minutes with the display asleep

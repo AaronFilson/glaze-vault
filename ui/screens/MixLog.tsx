@@ -25,6 +25,7 @@ import { canEdit, editableCollections } from '../team';
 import { useRevisionLines } from '../useRevisionLines';
 import { ConfirmNotice } from './Deleted';
 import { Fold, PendingNotice } from './FiringLog';
+import { ForkChoice } from './ForkChoice';
 
 /** The mix open in the editor: the newest revision, if saved, and the edits to it. */
 export interface MixEditing {
@@ -286,6 +287,23 @@ function MixEditor({
 
   return (
     <>
+      {current && (
+        <ForkChoice
+          kind="mix"
+          head={current}
+          name={`Mix of ${name}`}
+          readOnly={readOnly}
+          onResolved={(saved) => {
+            if (saved.deleted) {
+              onErased(saved.recordId);
+              onEdit(null);
+            } else {
+              onSaved(saved);
+              onEdit({ current: saved, draft: saved.content });
+            }
+          }}
+        />
+      )}
       {readOnly && current && (
         <p className="hint" role="status">
           You can read this mix, but not change it.

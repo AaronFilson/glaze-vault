@@ -32,7 +32,7 @@ describe('the network section', () => {
         return { pulled: 3, accepted: 0, refused: 0 };
       }
     });
-    render(<Network people={PEOPLE} onChanged={() => {}} />);
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
     fireEvent.change(await screen.findByLabelText('Port'), { target: { value: '5000' } });
     fireEvent.change(screen.getByLabelText('Name other computers see'), { target: { value: 'Studio' } });
     fireEvent.click(screen.getByRole('button', { name: 'Serve on this network' }));
@@ -48,7 +48,7 @@ describe('the network section', () => {
       if (command === 'start_pairing') return { code: '4821-0937', expiresAt: Date.now() + 600_000 };
       if (command === 'wait_for_pairing') return { device: 'd1', name: "Ben's laptop", fingerprint: '428b-ec49-9b19-3bd5' };
     });
-    render(<Network people={PEOPLE} onChanged={() => {}} />);
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Pair a computer…' }));
     expect(await screen.findByText(/428b-ec49-9b19-3bd5/)).toBeTruthy();
     const approve = screen.getByRole('button', { name: 'Approve' });
@@ -61,7 +61,34 @@ describe('the network section', () => {
 
   it('says so when hostd is missing', async () => {
     mockIPC((command) => (command === 'network_status' ? status({ canHost: false }) : undefined));
-    render(<Network people={PEOPLE} onChanged={() => {}} />);
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
     expect(await screen.findByText(/hostd, is missing/)).toBeTruthy();
+  });
+
+  it('lets someone on a computer that syncs leave, warning of what has not reached the host', async () => {
+    const calls: string[] = [];
+    let left = false;
+    mockIPC((command) => {
+      calls.push(command);
+      if (command === 'network_status') return status({ replica: true, hostAddress: '192.168.1.20:47917' });
+      if (command === 'sync_status')
+        return { replica: true, syncing: false, lastSynced: 1, error: null, watching: true, waiting: 2, refused: 0, photosWaiting: 0 };
+    });
+    render(<Network people={PEOPLE} admin={false} onChanged={() => {}} onLeft={() => (left = true)} />);
+    expect(await screen.findByText(/syncs with the host at 192.168.1.20/)).toBeTruthy();
+    // Someone who is not an admin pairs nothing.
+    expect(screen.queryByRole('button', { name: 'Pair a computer…' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave this vault…' }));
+    expect(await screen.findByText(/2 changes saved here never reached the host/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave and remove it' }));
+    await waitFor(() => expect(left).toBe(true));
+    expect(calls).toContain('leave_vault');
+  });
+
+  it('tells someone who is not an admin that the vault is on this computer alone', async () => {
+    mockIPC((command) => (command === 'network_status' ? status({}) : undefined));
+    render(<Network people={PEOPLE} admin={false} onChanged={() => {}} onLeft={() => {}} />);
+    expect(await screen.findByText(/on this computer alone/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Serve on this network' })).toBeNull();
   });
 });

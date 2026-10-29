@@ -34,7 +34,9 @@ Work decided on but not done yet, with the reason it waits.
   audit log ([ADR 19](adr/0019-signatures-and-audit-log.md)); and the sync core, a blind host and
   replicas tested without a network ([ADR 20](adr/0020-sync-core.md)); and the transport, pairing
   and `hostd` in the foreground ([ADR 21](adr/0021-transport-and-pairing.md)); and host mode in the
-  app ([ADR 22](adr/0022-host-mode.md)). Stage 7, client mode, is next.
+  app ([ADR 22](adr/0022-host-mode.md)); and client mode: joining, the background sync, checkouts
+  and photos in pieces ([ADR 23](adr/0023-client-mode.md)). Stage 8, offline limits, revocation
+  and the host's backups, is next.
 - Left from the transport and host mode: the organization certifying the host key at conversion;
   the offline secret from pairing (stage 8); hostd under a user of its own on macOS
   (`_glazevault`) and `host.key` under DPAPI on Windows; MSI updates on a computer that serves
@@ -43,14 +45,14 @@ Work decided on but not done yet, with the reason it waits.
 - Left from the sync core, for the stages that need them: the host keeping and signing the audit
   log (the computers' logs stay on them for now); a new organization recovery sheet or key reaching
   every computer's key file; resetting someone, or making or taking an admin, from a computer that
-  does not have their key file entry (stage 6, from the host computer); directory changes on a
-  replica waiting for the host (stage 7, the plan's question 5), since one the host refuses leaves
-  the replica apart; listing a record's newest revisions by the host's order; and the host
-  checking that what a revision supersedes is its record's.
+  does not have their key file entry (from the host computer for now).
+- Left from client mode: the host refusing a directory change from a computer that did not hold
+  the directory (the app always holds it, so only another program would); fetching photos on
+  demand as well as all of them (the plan's question 9); joining photo pieces with rusqlite's
+  incremental BLOB writes rather than in memory; and checkouts of batch sheets, mixes, limit sets
+  and price lists, which only recipes, materials and firings have.
 - The audit log notes opening recipes, materials, batch sheets and firings; mixes, limit sets and
   price lists could be noted too. Signatures of attachments are kept but not shown anywhere yet.
-- Before replicas (stage 7): the fork notice in the firing log, mix log, batch sheets, limit sets
-  and price lists, which show a forked record's newest for now; and a user guide page on forks.
 
 ## Clay bodies
 

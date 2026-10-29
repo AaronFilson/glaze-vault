@@ -111,6 +111,8 @@ pub enum Note {
     },
     /// What was exported: the format and how many records.
     Exported { detail: String },
+    /// A record someone else had checked out, taken over from them (plan section 3.5).
+    TookOver { kind: Kind, record: Uuid, from: Uuid },
 }
 
 /// One entry, for an admin's screen.
@@ -155,6 +157,9 @@ impl Vault {
                 }
             }
             Note::Exported { detail } => Entry::new("exported").detail(detail),
+            Note::TookOver { kind, record, from } => {
+                Entry::of("took-over", kind, record, self.collection_of(kind, record)?).detail(format!("person {from}"))
+            }
         };
         note(&self.conn, &self.signer, entry)
     }

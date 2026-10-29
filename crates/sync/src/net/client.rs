@@ -1,4 +1,5 @@
-//! A computer's side of the network: syncing with the host it pinned, pairing to join one, and an
+//! A computer's side of the network: syncing with the host it pinned, watching it for news,
+//! checking records out, holding the directory while changing it, pairing to join a host, and an
 //! admin's computer letting a new one in.
 
 use super::conn::Conn;
@@ -8,7 +9,7 @@ use crate::proto::{ClientMsg, HostMsg};
 use crate::session::{ClientSession, Report};
 use crate::{Error, Result};
 use glaze_vault_core::Vault;
-use glaze_vault_core::sync::{DeviceInfo, DeviceKey};
+use glaze_vault_core::sync::{Checkout, DeviceInfo, DeviceKey};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +22,9 @@ use uuid::Uuid;
 type Stream = TlsStream<TcpStream>;
 
 const CONNECT: Duration = Duration::from_secs(10);
+/// How long a computer waits for the host's answer; a host watched for longer than this without
+/// a word has gone.
+const ANSWER: Duration = Duration::from_secs(120);
 
 /// Connects to `address` as `device`, and the key the host showed.
 async fn connect(address: &str, device: &DeviceKey, pin: Option<Vec<u8>>) -> Result<(Conn<Stream>, Vec<u8>)> {
@@ -43,13 +47,23 @@ async fn connect(address: &str, device: &DeviceKey, pin: Option<Vec<u8>>) -> Res
 
 /// Connects a replica to its host, by the key it pinned when it joined.
 async fn connect_replica(vault: &Vault, address: &str) -> Result<Conn<Stream>> {
-    let pin = vault.host_key()?;
+    connect_pinned(&vault.device_key()?, vault.host_key()?, address).await
+}
+
+async fn connect_pinned(device: &DeviceKey, pin: Vec<u8>, address: &str) -> Result<Conn<Stream>> {
     if pin.len() != 32 {
         return Err(Error::Protocol(
             "this computer has no host key: join the vault again".into(),
         ));
     }
-    Ok(connect(address, &vault.device_key()?, Some(pin)).await?.0)
+    Ok(connect(address, device, Some(pin)).await?.0)
+}
+
+/// The host's next message, unless it says nothing for too long.
+async fn answer(conn: &mut Conn<Stream>) -> Result<HostMsg> {
+    timeout(ANSWER, conn.recv())
+        .await
+        .map_err(|_| Error::Io(std::io::ErrorKind::TimedOut.into()))?
 }
 
 fn unexpected(message: HostMsg) -> Error {
@@ -72,6 +86,112 @@ pub async fn sync(vault: &mut Vault, address: &str) -> Result<Report> {
         }
         message = session.handle(vault, conn.recv().await?)?;
     }
+}
+
+/// A vault the app uses while it syncs: the sync takes it only to handle each message, not
+/// while it waits on the network, so the person can go on working.
+pub trait SharedVault {
+    fn with<T>(&self, work: impl FnOnce(&mut Vault) -> Result<T>) -> Result<T>;
+}
+
+/// Syncs a vault shared with the rest of the app, as `sync` does. If another vault is opened
+/// meanwhile, the sync stops.
+pub async fn sync_shared(vault: &impl SharedVault, address: &str) -> Result<Report> {
+    let (device, pin, id) = vault.with(|v| Ok((v.device_key()?, v.host_key()?, v.device()?)))?;
+    let mut conn = connect_pinned(&device, pin, address).await?;
+    let (mut session, mut message) = vault.with(|v| ClientSession::start(v))?;
+    loop {
+        conn.send(&message).await?;
+        if matches!(message, ClientMsg::Bye) {
+            conn.close().await;
+            return Ok(session.report().clone());
+        }
+        let received = answer(&mut conn).await?;
+        message = vault.with(|v| {
+            if v.device()? != id {
+                return Err(Error::Protocol("another vault was opened during the sync".into()));
+            }
+            session.handle(v, received)
+        })?;
+    }
+}
+
+/// A connection that hears from the host when there is something new.
+pub struct Watching {
+    conn: Conn<Stream>,
+}
+
+/// Watches the host at `address` for news, as this computer.
+pub async fn watch(device: &DeviceKey, host_key: Vec<u8>, address: &str) -> Result<Watching> {
+    let mut conn = connect_pinned(device, host_key, address).await?;
+    conn.send(&ClientMsg::Watch).await?;
+    Ok(Watching { conn })
+}
+
+impl Watching {
+    /// Waits for the host's next word: news, or that it is still there.
+    pub async fn next(&mut self) -> Result<()> {
+        match answer(&mut self.conn).await? {
+            HostMsg::News => Ok(()),
+            other => Err(unexpected(other)),
+        }
+    }
+}
+
+/// The directory, held by this computer until this is let go: while it is, no other computer
+/// changes people, roles or collections (the plan's question 5).
+pub struct DirectoryHeld {
+    conn: Conn<Stream>,
+}
+
+/// Waits until no other computer is changing the directory, and holds it.
+pub async fn hold_directory(vault: &Vault, address: &str) -> Result<DirectoryHeld> {
+    let mut conn = connect_replica(vault, address).await?;
+    conn.send(&ClientMsg::LockDirectory).await?;
+    match answer(&mut conn).await? {
+        HostMsg::DirectoryLocked => Ok(DirectoryHeld { conn }),
+        other => Err(unexpected(other)),
+    }
+}
+
+impl DirectoryHeld {
+    pub async fn release(mut self) {
+        let _ = self.conn.send(&ClientMsg::Bye).await;
+        self.conn.close().await;
+    }
+}
+
+/// Asks the host one thing about checkouts, on a connection of its own.
+async fn ask_checkouts(vault: &Vault, address: &str, message: ClientMsg) -> Result<Vec<Checkout>> {
+    let mut conn = greeted(vault, address).await?;
+    conn.send(&message).await?;
+    let answered = answer(&mut conn).await;
+    let _ = conn.send(&ClientMsg::Bye).await;
+    conn.close().await;
+    match answered? {
+        HostMsg::Checkouts(checkouts) => Ok(checkouts),
+        other => Err(unexpected(other)),
+    }
+}
+
+/// Checks a record out for the person signed in, or takes it over; who has what after.
+pub async fn check_out(vault: &Vault, address: &str, record: Uuid, take_over: bool) -> Result<Vec<Checkout>> {
+    let person = vault.me().id;
+    ask_checkouts(
+        vault,
+        address,
+        ClientMsg::CheckOut {
+            record,
+            person,
+            take_over,
+        },
+    )
+    .await
+}
+
+pub async fn release(vault: &Vault, address: &str, record: Uuid) -> Result<Vec<Checkout>> {
+    let person = vault.me().id;
+    ask_checkouts(vault, address, ClientMsg::Release { record, person }).await
 }
 
 /// The computers that sync with the host, for an admin's computer.
@@ -99,13 +219,13 @@ async fn greeted(vault: &Vault, address: &str) -> Result<Conn<Stream>> {
 }
 
 /// Joins the vault served at `address` with a pairing code an admin read out, as a replica in
-/// `dir`, named `name` for the admin to see. Waits until the admin approves it.
-pub async fn pair(address: &str, code: &str, name: &str, dir: &Path) -> Result<()> {
+/// `dir`, named `name` for the admin to see, with the key this computer made to join. Waits
+/// until the admin approves it.
+pub async fn pair(address: &str, code: &str, name: &str, dir: &Path, device: &DeviceKey) -> Result<()> {
     if Vault::exists(dir) {
         return Err(glaze_vault_core::Error::VaultExists.into());
     }
-    let device = DeviceKey::generate();
-    let (mut conn, host_key) = connect(address, &device, None).await?;
+    let (mut conn, host_key) = connect(address, device, None).await?;
     let exporter = pairing::exported(
         conn.stream()
             .get_ref()
@@ -140,7 +260,7 @@ pub async fn pair(address: &str, code: &str, name: &str, dir: &Path) -> Result<(
     if package.host_key != host_key {
         return Err(Error::Pairing("the host sent another host's key".into()));
     }
-    Vault::join(dir, &package, &device)?;
+    Vault::join(dir, &package, device)?;
     Ok(())
 }
 

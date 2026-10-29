@@ -9,7 +9,10 @@ mod pairing;
 mod server;
 mod tls;
 
-pub use client::{AdminPairing, Finished, devices, pair, sync};
+pub use client::{
+    AdminPairing, DirectoryHeld, Finished, SharedVault, Watching, check_out, devices, hold_directory, pair, release,
+    sync, sync_shared, watch,
+};
 pub use conn::Conn;
 pub use discover::{Advertised, Found, SERVICE, advertise, browse, vault_tag};
 pub use pairing::{CODE_LIFETIME, fingerprint};

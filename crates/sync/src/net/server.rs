@@ -1,4 +1,5 @@
-//! The host's server: TLS connections from computers, each a sync session or a step of pairing.
+//! The host's server: TLS connections from computers, each a sync session, a step of pairing, a
+//! computer watching for news, or an admin's computer holding the directory while it changes it.
 //! The store is shared between connections behind a lock, held only while a message is handled.
 
 use super::conn::Conn;
@@ -23,6 +24,10 @@ use zeroize::Zeroizing;
 const HANDSHAKE: Duration = Duration::from_secs(15);
 /// How long a connection may be quiet between messages, except while it waits on pairing.
 const IDLE: Duration = Duration::from_secs(120);
+/// How often a watching computer hears from the host when nothing changes.
+const KEEPALIVE: Duration = Duration::from_secs(50);
+/// How long a computer waits for another to finish changing the directory.
+const DIRECTORY_WAIT: Duration = Duration::from_secs(30);
 
 pub struct Server {
     host: Mutex<HostStore>,
@@ -31,6 +36,10 @@ pub struct Server {
     pairing: Mutex<Option<Pairing>>,
     /// Ticks whenever the pairing changes, for those waiting on it.
     changed: watch::Sender<()>,
+    /// Ticks whenever a computer pushes or checks something out, for those watching.
+    news: watch::Sender<()>,
+    /// Held by the one computer changing people, roles or collections (the plan's question 5).
+    directory: Arc<tokio::sync::Mutex<()>>,
 }
 
 struct Pairing {
@@ -72,6 +81,8 @@ impl Server {
             identity,
             pairing: Mutex::new(None),
             changed: watch::Sender::new(()),
+            news: watch::Sender::new(()),
+            directory: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -121,6 +132,8 @@ impl Server {
         let mut session = device.map(HostSession::new);
         let mut conn = Conn::new(stream);
         let mut spake = None;
+        // The directory, while this computer holds it; let go when the connection ends.
+        let mut _directory = None;
         let outcome = loop {
             let message = match timeout(IDLE, conn.recv::<ClientMsg>()).await {
                 Err(_) => break Ok(()),
@@ -149,6 +162,26 @@ impl Server {
                     }
                     break Ok(());
                 }
+                ClientMsg::Watch => {
+                    if session.is_none() {
+                        conn.send(&refused("this computer is not paired with the host")).await?;
+                        break Ok(());
+                    }
+                    break self.watch(&mut conn).await;
+                }
+                ClientMsg::LockDirectory => {
+                    if session.is_none() {
+                        refused("this computer is not paired with the host")
+                    } else {
+                        match timeout(DIRECTORY_WAIT, self.directory.clone().lock_owned()).await {
+                            Ok(held) => {
+                                _directory = Some(held);
+                                HostMsg::DirectoryLocked
+                            }
+                            Err(_) => refused("someone else is changing the team: try again in a moment"),
+                        }
+                    }
+                }
                 ClientMsg::StartPairing => self.start_pairing(session.as_ref()),
                 ClientMsg::AwaitPairing => self.await_pairing(session.as_ref()).await,
                 ClientMsg::ApproveDevice { certificate } => self.approve(session.as_ref(), &certificate),
@@ -167,7 +200,14 @@ impl Server {
                         conn.send(&refused("this computer is not paired with the host")).await?;
                         break Ok(());
                     };
+                    let news = matches!(
+                        message,
+                        ClientMsg::Push { .. } | ClientMsg::CheckOut { .. } | ClientMsg::Release { .. }
+                    );
                     let handled = session.handle(&mut self.host(), message);
+                    if news && handled.is_ok() {
+                        self.news.send_replace(());
+                    }
                     match handled {
                         Ok(Some(answer)) => answer,
                         Ok(None) => break Ok(()),
@@ -191,6 +231,31 @@ impl Server {
         }
         conn.close().await;
         outcome
+    }
+
+    /// Tells a watching computer whenever something changes, and every so often anyway, until it
+    /// says goodbye or goes.
+    async fn watch(&self, conn: &mut Conn<TlsStream<TcpStream>>) -> Result<()> {
+        let mut news = self.news.subscribe();
+        news.mark_unchanged();
+        loop {
+            tokio::select! {
+                changed = news.changed() => {
+                    if changed.is_err() {
+                        return Ok(());
+                    }
+                }
+                _ = tokio::time::sleep(KEEPALIVE) => {}
+                said = conn.recv::<ClientMsg>() => {
+                    return match said {
+                        Ok(ClientMsg::Bye) | Err(Error::Closed) => Ok(()),
+                        Ok(_) => Err(Error::Protocol("a message while watching".into())),
+                        Err(e) => Err(e),
+                    };
+                }
+            }
+            conn.send(&HostMsg::News).await?;
+        }
     }
 
     /// Takes the code's one attempt.
@@ -347,6 +412,7 @@ impl Server {
         match package {
             Ok(package) => {
                 self.set_stage(Stage::Approved(Box::new(package)));
+                self.news.send_replace(());
                 HostMsg::Approved
             }
             Err(e) => refused(e.to_string()),

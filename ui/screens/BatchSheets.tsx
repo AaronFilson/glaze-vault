@@ -16,6 +16,7 @@ import {
 import { amountOf, sameName } from '../chemistry';
 import { byCollection, canEdit, may } from '../team';
 import { ConfirmNotice } from './Deleted';
+import { ForkChoice } from './ForkChoice';
 import { BatchTable } from './PrintView';
 
 /** The batch sheets this person can open, one at a time, at the size they weigh. */
@@ -28,7 +29,8 @@ export function BatchSheets({
   mixCount,
   onMixes,
   onPrint,
-  onDeleted
+  onDeleted,
+  onSaved
 }: {
   sheets: BatchSheet[];
   access: Access;
@@ -41,6 +43,8 @@ export function BatchSheets({
   onMixes: (sheet: BatchSheet, logging: boolean) => void;
   onPrint: (size: number, unit: BatchUnit) => void;
   onDeleted: (sheet: BatchSheet) => void;
+  /** A fork ended, by the version kept. */
+  onSaved: (sheet: BatchSheet) => void;
 }) {
   const [size, setSize] = useState('1000');
   const [unit, setUnit] = useState<BatchUnit>('g');
@@ -101,6 +105,13 @@ export function BatchSheets({
           <>
             <h1>{current.content.name || 'Untitled'}</h1>
             <p className="hint">Saved {new Date(current.savedAt).toLocaleString()}</p>
+            <ForkChoice
+              kind="batch"
+              head={current}
+              name={current.content.name}
+              readOnly={!canEdit(access, current.collectionId, 'batch')}
+              onResolved={(saved) => (saved.deleted ? onDeleted(current) : onSaved(saved))}
+            />
             <div className="row batch-size">
               <label htmlFor="sheet-size">Batch size</label>
               <input

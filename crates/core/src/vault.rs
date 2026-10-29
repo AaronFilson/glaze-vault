@@ -72,6 +72,9 @@ pub struct Vault {
     /// a summary (summaries.rs). Vaults from before are changed over by the first person to
     /// unlock who holds every collection's key.
     summaries: bool,
+    /// On a replica: who is changing which records, as the host last said, and when it said so
+    /// (plan section 3.5).
+    checkouts: Option<(i64, Vec<crate::sync::Checkout>)>,
 }
 
 /// A collection this person can open.
@@ -341,6 +344,7 @@ impl Vault {
             signer,
             opened: HashSet::new(),
             summaries: true,
+            checkouts: None,
         };
         Ok((vault, recovery))
     }
@@ -791,6 +795,9 @@ impl Vault {
                 (parse_id(&record_id)?, number + 1, parse_id(&collection_id)?)
             }
         };
+        if let Some(by) = self.checked_out_by(record_id) {
+            return Err(Error::CheckedOut(by));
+        }
         let collection = self.editable(&collection_id, kind)?;
         let epoch = collection.epoch;
         let collection_key = self.key_for(collection, kind, epoch)?.ok_or(Error::NotAllowed)?;
@@ -947,6 +954,13 @@ impl Vault {
         // (ADR 5): a fork. The newest is listed, with the others, except that one that keeps the
         // record goes before one that deleted it, so a delete made without seeing another change
         // does not hide that change (ADR 17).
+        // Which of a fork's versions is listed first goes by the order the host took them in,
+        // so every computer shows the same one, not by computers' clocks; what this computer has
+        // not synced yet is newer than all of it.
+        let order = self.change_order(kind)?;
+        let place = |id: &Uuid| order.get(id).copied().unwrap_or((true, i64::MAX));
+        let mut revisions = revisions;
+        revisions.sort_by_key(|r| std::cmp::Reverse(place(&r.revision_id)));
         let mut heads: Vec<Revision> = Vec::new();
         for revision in revisions {
             if superseded.contains(&revision.revision_id) {
@@ -965,9 +979,37 @@ impl Vault {
             }
         }
         for head in &mut heads {
-            head.forks.sort_by_key(|fork| std::cmp::Reverse(fork.saved_at));
+            head.forks
+                .sort_by_key(|fork| std::cmp::Reverse(place(&fork.revision_id)));
         }
+        heads.sort_by_key(|head| std::cmp::Reverse(head.saved_at));
         Ok(heads)
+    }
+
+    /// Where each revision of a kind came in the change log: the host's number once it has one,
+    /// else this store's own, after every number of the host's.
+    fn change_order(&self, kind: Kind) -> Result<std::collections::HashMap<Uuid, (bool, i64)>> {
+        let rows = self
+            .conn
+            .prepare("SELECT item_id, host_seq, seq FROM changes WHERE item = 'revision' AND kind = ?1")?
+            .query_map(params![kind.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let replica = self.is_replica();
+        rows.into_iter()
+            .map(|(id, host_seq, seq)| {
+                let place = match host_seq {
+                    Some(host_seq) if replica => (false, host_seq),
+                    _ => (true, seq),
+                };
+                Ok((parse_id(&id)?, place))
+            })
+            .collect()
     }
 
     /// Every saved revision of one record, newest first. Revisions that deleted it are left out:
@@ -1160,6 +1202,7 @@ impl Vault {
             signer,
             opened: HashSet::new(),
             summaries: false,
+            checkouts: None,
         };
         vault.summaries = vault.meta(summaries::META)?.is_some();
         vault.load_collections()?;

@@ -4,9 +4,8 @@ A vault is for one person until you share it. Sharing lets other people sign in 
 computer with their own passwords, and you decide what each of them can see and change. Each
 person's recipes are encrypted so that only the people allowed can open them.
 
-> An admin can now [serve the vault on your network](hosting.md) from one computer. Joining it
-> from the others comes in the next version; until then, everyone signs in on the computer the
-> vault is on.
+> An admin can also [serve the vault on your network](hosting.md) from one computer, and the
+> team's other computers [join it](joining.md).
 
 ## Sharing your vault
 

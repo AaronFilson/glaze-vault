@@ -3,6 +3,7 @@
 //! page never chooses where files are written.
 
 mod network;
+mod syncing;
 
 use glaze_vault_core::{
     Attachment, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error, Grant, Kind,
@@ -189,7 +190,7 @@ fn add_person(
     roles: Vec<(Uuid, Role)>,
 ) -> CommandResult<Person> {
     let one_time_password = Zeroizing::new(one_time_password);
-    with_vault(&state, |vault| vault.add_person(&name, &one_time_password, &roles))
+    network::with_host(&state, |vault| vault.add_person(&name, &one_time_password, &roles))
 }
 
 /// At a first sign-in: sets the password the person chose, and returns their recovery key.
@@ -202,35 +203,35 @@ fn set_own_password(state: State<AppState>, new_password: String) -> CommandResu
 /// Gives a person a role on a collection, or takes it away with none.
 #[tauri::command(async)]
 fn set_role(state: State<AppState>, person: Uuid, collection: Uuid, role: Option<Role>) -> CommandResult<()> {
-    with_vault(&state, |vault| vault.set_role(person, collection, role))
+    network::with_host(&state, |vault| vault.set_role(person, collection, role))
 }
 
 #[tauri::command(async)]
 fn remove_person(state: State<AppState>, person: Uuid) -> CommandResult<()> {
-    with_vault(&state, |vault| vault.remove_person(person))
+    network::with_host(&state, |vault| vault.remove_person(person))
 }
 
 #[tauri::command(async)]
 fn reset_person(state: State<AppState>, person: Uuid, one_time_password: String) -> CommandResult<()> {
     let one_time_password = Zeroizing::new(one_time_password);
-    with_vault(&state, |vault| vault.reset_person(person, &one_time_password))
+    network::with_host(&state, |vault| vault.reset_person(person, &one_time_password))
 }
 
 #[tauri::command(async)]
 fn make_admin(state: State<AppState>, person: Uuid) -> CommandResult<()> {
-    with_vault(&state, |vault| vault.make_admin(person))
+    network::with_host(&state, |vault| vault.make_admin(person))
 }
 
 /// Takes admin away; returns the organization's new recovery words, to print.
 #[tauri::command(async)]
 fn take_admin_away(state: State<AppState>, person: Uuid) -> CommandResult<Vec<String>> {
-    with_vault(&state, |vault| Ok(vault.take_admin_away(person)?.words()))
+    network::with_host(&state, |vault| Ok(vault.take_admin_away(person)?.words()))
 }
 
 /// A new organization recovery key, for a lost sheet; returns its words, to print.
 #[tauri::command(async)]
 fn new_organization_recovery_key(state: State<AppState>) -> CommandResult<Vec<String>> {
-    with_vault(&state, |vault| Ok(vault.new_organization_recovery_key()?.words()))
+    network::with_host(&state, |vault| Ok(vault.new_organization_recovery_key()?.words()))
 }
 
 /// Makes a team's vault this admin's alone again (ADR 6). Returns where the backup made first is.
@@ -243,12 +244,12 @@ fn go_back_to_one_person(state: State<AppState>) -> CommandResult<String> {
 
 #[tauri::command(async)]
 fn create_collection(state: State<AppState>, name: String) -> CommandResult<Collection> {
-    with_vault(&state, |vault| vault.create_collection(&name))
+    network::with_host(&state, |vault| vault.create_collection(&name))
 }
 
 #[tauri::command(async)]
 fn rename_collection(state: State<AppState>, collection: Uuid, name: String) -> CommandResult<()> {
-    with_vault(&state, |vault| vault.rename_collection(collection, &name))
+    network::with_host(&state, |vault| vault.rename_collection(collection, &name))
 }
 
 /// The roles admins have made, which anyone signed in sees named on their collections.
@@ -264,7 +265,7 @@ fn create_role(
     changes: Vec<Kind>,
     may: Capabilities,
 ) -> CommandResult<CustomRole> {
-    with_vault(&state, |vault| vault.create_role(&name, &changes, may))
+    network::with_host(&state, |vault| vault.create_role(&name, &changes, may))
 }
 
 #[tauri::command(async)]
@@ -275,12 +276,12 @@ fn change_role(
     changes: Vec<Kind>,
     may: Capabilities,
 ) -> CommandResult<()> {
-    with_vault(&state, |vault| vault.change_role(id, &name, &changes, may))
+    network::with_host(&state, |vault| vault.change_role(id, &name, &changes, may))
 }
 
 #[tauri::command(async)]
 fn delete_role(state: State<AppState>, id: Uuid) -> CommandResult<()> {
-    with_vault(&state, |vault| vault.delete_role(id))
+    network::with_host(&state, |vault| vault.delete_role(id))
 }
 
 /// Dropping the vault wipes its keys from memory.
@@ -930,12 +931,14 @@ pub fn run() {
                 None => app.path().app_local_data_dir()?.join("vault"),
             };
             app.manage(network::Network::default());
+            app.manage(std::sync::Arc::new(syncing::Syncing::default()));
             app.manage(AppState {
                 dir,
                 vault: Mutex::new(None),
                 updates_configured,
                 update: Mutex::new(None),
             });
+            syncing::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1006,6 +1009,14 @@ pub fn run() {
             network::approve_pairing,
             network::cancel_pairing,
             network::devices,
+            network::sync_status,
+            network::discover_hosts,
+            network::prepare_join,
+            network::join_vault,
+            network::leave_vault,
+            network::checkouts,
+            network::check_out,
+            network::release_checkout,
             #[cfg(debug_assertions)]
             dev_screen,
             #[cfg(debug_assertions)]

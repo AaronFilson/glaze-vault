@@ -282,3 +282,43 @@ fn computers_that_save_delete_and_sync_at_random_end_up_the_same() {
         assert!(computer.pending(usize::MAX).unwrap().is_empty());
     }
 }
+
+#[test]
+fn a_photo_travels_in_pieces_both_ways() {
+    let mut t = team(&[("Ben", Role::Formulator)]);
+    let head = t.computers[1].heads(Kind::Recipe).unwrap().remove(0);
+    let photo: Vec<u8> = (0..3_500_000u32).map(|i| (i % 253) as u8).collect();
+    let attached = t.computers[1]
+        .add_attachment(Kind::Recipe, head.record_id, "image/jpeg", &photo)
+        .unwrap();
+    // Ben's computer sends it in pieces before the push that holds it.
+    let report = sync_in_process(&mut t.computers[1], &mut t.host).unwrap();
+    assert_eq!(report.accepted, 1);
+    assert!(report.refused.is_empty());
+    // Ana's pulls it without its bytes, then fetches them.
+    let report = sync_in_process(&mut t.computers[0], &mut t.host).unwrap();
+    assert_eq!(report.fetched, 1);
+    assert!(!report.more_photos);
+    assert_eq!(*t.computers[0].attachment(attached.id).unwrap().1, photo);
+    assert!(t.computers[0].missing_bytes().unwrap().is_empty());
+}
+
+#[test]
+fn each_sync_asks_who_is_changing_what() {
+    let mut t = team(&[("Ben", Role::Formulator)]);
+    let head = t.computers[1].heads(Kind::Recipe).unwrap().remove(0);
+    let ana_device = t.computers[0].device().unwrap();
+    t.host
+        .check_out(ana_device, t.people[0], head.record_id, false)
+        .unwrap();
+    sync_in_process(&mut t.computers[1], &mut t.host).unwrap();
+    assert_eq!(t.computers[1].checkouts().len(), 1);
+    assert!(matches!(
+        t.computers[1].save(
+            Kind::Recipe,
+            Some(head.revision_id),
+            &json!({ "name": "Ben's", "lines": [], "notes": "" })
+        ),
+        Err(glaze_vault_core::Error::CheckedOut(_))
+    ));
+}

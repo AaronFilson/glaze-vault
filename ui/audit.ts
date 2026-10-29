@@ -36,6 +36,7 @@ const ACTIONS: Record<string, string> = {
   opened: 'Opened',
   printed: 'Printed',
   exported: 'Exported',
+  'took-over': 'Took over',
   'person-added': 'Added',
   'person-keys-changed': 'Gave new keys to',
   'person-removed': 'Removed',
@@ -74,7 +75,7 @@ export function describe(entry: AuditEntry, names: AuditNames): string {
   }
   // Directory changes name a person or a role in their detail.
   const subject = entry.detail?.match(/^person (.+)$/);
-  if (subject) parts.push(personName(subject[1], names));
+  if (subject) parts.push(`${entry.action === 'took-over' ? 'from ' : ''}${personName(subject[1], names)}`);
   else if (entry.detail && !entry.detail.startsWith('role ') && !entry.detail.startsWith('from ')) {
     parts.push(`(${entry.detail})`);
   }

@@ -19,6 +19,7 @@ import {
 import { hasSheet, isClay, MATERIAL_CLASSES, SHEET_FIELDS, tidySheet, type DataSheet, type MaterialClass } from '../materialData';
 import type { Editor } from '../useEditor';
 import { DeletedList, DeletedNotice } from './Deleted';
+import { CheckoutBar } from './CheckoutBar';
 import { ForkNotice } from './ForkNotice';
 import { MaterialCompare } from './MaterialCompare';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
@@ -187,6 +188,7 @@ export function Materials({
         {current && !viewing && (
           <ForkNotice head={current} name={current.content.name} readOnly={readOnly} onKeep={onKeepVersion} />
         )}
+        {current && !viewing && <CheckoutBar kind="material" record={current.recordId} readOnly={readOnly} />}
         {readOnly && current && !viewing && (
           <p className="hint" role="status">
             You can read this material, but not change it. An admin can change what you may do.

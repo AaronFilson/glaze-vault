@@ -4,10 +4,10 @@
 //! computer what its people may read, from metadata alone.
 
 use super::events::{self, Body, SignedBy};
-use super::items;
+use super::items::{self, CHUNK_BYTES};
 use super::signatures::Trust;
 use super::team::PENDING_ORGANIZATION;
-use super::{DATABASE_FILE, Held, Kind, Vault, now_ms, parse_id};
+use super::{DATABASE_FILE, Held, Kind, MAX_ATTACHMENT_BYTES, Vault, now_ms, parse_id};
 use crate::access::Directory;
 use crate::crypto::{self, KeyPair, SealedBox};
 use crate::error::{Error, Result};
@@ -15,8 +15,8 @@ use crate::keyring::PersonEntry;
 use crate::signing::{self, As};
 use crate::store;
 use crate::sync::{
-    Batch, DeviceCertificate, DeviceInfo, EntryItem, Item, JoinPackage, Level, OrganizationEntry, Pulled, PushResult,
-    Refusal, Scope, Welcome,
+    Batch, Checkout, Chunk, DeviceCertificate, DeviceInfo, EntryItem, Item, JoinPackage, Level, OrganizationEntry,
+    Pulled, PushResult, Refusal, Scope, Welcome,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,8 @@ const HOST_KEY: &str = "host.key";
 const HOST_FILE: &str = "host.json";
 /// How many change log entries a pull reads at a time.
 const PAGE: i64 = 500;
+/// How long a checkout lasts (plan section 3.5).
+const CHECKOUT_MS: i64 = 8 * 60 * 60 * 1000;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,10 +59,14 @@ pub struct HostStore {
     /// The seed of its TLS key.
     identity: Zeroizing<[u8; 32]>,
     port: Option<u16>,
+    /// Who is changing what, kept only while the host runs: a checkout is advisory, and one lost
+    /// when the host restarts is taken again at the next save.
+    checkouts: Vec<Checkout>,
 }
 
 /// A computer the host syncs with, from its certificate.
 struct Device {
+    id: Uuid,
     people: Vec<Uuid>,
     revoked: bool,
 }
@@ -289,6 +295,7 @@ impl HostStore {
             vault: file.vault_id,
             identity: Zeroizing::new(signing::host_key(&host).to_bytes()),
             port: file.port,
+            checkouts: Vec::new(),
         })
     }
 
@@ -410,6 +417,7 @@ impl HostStore {
             .optional()?
             .ok_or(Error::Revoked)?;
         Ok(Device {
+            id,
             people: serde_json::from_str(&people)?,
             revoked,
         })
@@ -579,8 +587,13 @@ impl HostStore {
                 Some(stripped) => Some(Item::Revision(items::revision_item(&self.conn, id, stripped)?)),
                 None => None,
             },
+            // Its bytes follow in pieces, when the computer asks for them (plan section 3.7).
             ("attachment", Some(kind)) => match sent(held, kind, true) {
-                Some(_) => Some(Item::Attachment(items::attachment_item(&self.conn, id)?)),
+                Some(_) => {
+                    let mut attachment = items::attachment_item(&self.conn, id)?;
+                    attachment.ciphertext = Vec::new();
+                    Some(Item::Attachment(attachment))
+                }
                 None => None,
             },
             ("event", _) => {
@@ -729,6 +742,28 @@ impl HostStore {
                 if elsewhere.is_some() {
                     return Ok(Err(invalid("its record is in another collection")));
                 }
+                // A fork's resolution sets aside only revisions of its own record.
+                for superseded in r
+                    .supersedes
+                    .iter()
+                    .flat_map(|list| list.split(','))
+                    .filter(|id| !id.is_empty())
+                {
+                    let of: Option<(String, String)> = conn
+                        .query_row(
+                            "SELECT record_id, kind FROM revisions WHERE id = ?1",
+                            params![superseded],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .optional()?;
+                    match of {
+                        None => return Ok(Err(Refusal::ParentUnknown)),
+                        Some((record, kind)) if record != r.record.to_string() || kind != r.kind.as_str() => {
+                            return Ok(Err(invalid("it sets aside another record's revision")));
+                        }
+                        Some(_) => {}
+                    }
+                }
                 items::store_revision(conn, r)?;
                 let seq = items::log(conn, "revision", &r.id, &r.collection, r.kind, None)?;
                 self.numbered(conn, &r.id)?;
@@ -738,6 +773,24 @@ impl HostStore {
                 if items::exists(conn, "attachments", &a.id)? {
                     return self.again(conn, "attachments", &a.id, &a.signed.signature);
                 }
+                // Sent without its bytes, which came before it in pieces.
+                let whole;
+                let a = if a.ciphertext.is_empty() {
+                    let (_, from) = items::staged_length(conn, &a.id)?;
+                    if from != Some(device.id.to_string()) {
+                        return Ok(Err(Refusal::BytesMissing));
+                    }
+                    let mut joined = a.clone();
+                    joined.ciphertext = items::staged(conn, &a.id)?;
+                    whole = joined;
+                    if store::attachment_hash(&whole.nonce, &whole.ciphertext) != whole.sha256 {
+                        items::unstage(conn, &a.id)?;
+                        return Ok(Err(Refusal::BytesMissing));
+                    }
+                    &whole
+                } else {
+                    a
+                };
                 let signed = match items::check_attachment(&trust, &self.vault, a) {
                     Ok(signed) => signed,
                     Err(refusal) => return Ok(Err(refusal)),
@@ -766,6 +819,7 @@ impl HostStore {
                     return Ok(Err(Refusal::ParentUnknown));
                 }
                 items::store_attachment(conn, a)?;
+                items::unstage(conn, &a.id)?;
                 let seq = items::log(conn, "attachment", &a.id, &a.collection, a.kind, None)?;
                 self.numbered(conn, &a.id)?;
                 Ok(Ok(seq))
@@ -923,6 +977,156 @@ impl HostStore {
             params![id.to_string()],
             |row| row.get(0),
         )?)
+    }
+}
+
+impl HostStore {
+    /// A piece of an attachment's ciphertext from `offset`, if the computer's people may read the
+    /// attachment; none if not, or if the host does not have it.
+    pub fn chunk(&self, device: Uuid, id: Uuid, offset: u64) -> Result<Option<Chunk>> {
+        let device = self.device(device)?;
+        if device.revoked {
+            return Err(Error::Revoked);
+        }
+        let row: Option<(String, String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT kind, collection_id, length(ciphertext) FROM attachments WHERE id = ?1",
+                params![id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((kind, collection, total)) = row else {
+            return Ok(None);
+        };
+        let kind = Kind::parse(&kind).ok_or_else(|| Error::Corrupt(format!("unknown kind {kind}")))?;
+        let levels = levels(&Directory::load(&self.conn)?, &device.people);
+        let held = levels.get(&parse_id(&collection)?).map_or(&[][..], Vec::as_slice);
+        if sent(held, kind, true).is_none() || offset > total as u64 {
+            return Ok(None);
+        }
+        let bytes: Vec<u8> = self.conn.query_row(
+            "SELECT substr(ciphertext, ?2, ?3) FROM attachments WHERE id = ?1",
+            params![id.to_string(), offset as i64 + 1, CHUNK_BYTES as i64],
+            |row| row.get(0),
+        )?;
+        Ok(Some(Chunk {
+            id,
+            offset,
+            total: total as u64,
+            bytes,
+        }))
+    }
+
+    /// Keeps a piece of an attachment a computer is sending, before the attachment itself, and
+    /// says how much of it the host has: a piece from further on is not kept, and one it has
+    /// already is skipped, so a sending that broke off goes on from where it got to.
+    pub fn take_chunk(&mut self, device: Uuid, chunk: &Chunk) -> Result<u64> {
+        let device = self.device(device)?;
+        if device.revoked {
+            return Err(Error::Revoked);
+        }
+        if items::exists(&self.conn, "attachments", &chunk.id)? {
+            return Ok(chunk.total);
+        }
+        if chunk.bytes.len() > CHUNK_BYTES || chunk.total > (MAX_ATTACHMENT_BYTES + 1024) as u64 {
+            return Err(Error::TooLarge);
+        }
+        let (had, from) = items::staged_length(&self.conn, &chunk.id)?;
+        if from.is_some_and(|from| from != device.id.to_string()) {
+            return Err(Error::NotAllowed);
+        }
+        if chunk.offset != had || chunk.bytes.is_empty() {
+            return Ok(had);
+        }
+        if had + chunk.bytes.len() as u64 > chunk.total {
+            return Err(Error::TooLarge);
+        }
+        items::stage(&self.conn, &chunk.id, Some(device.id), chunk.offset, &chunk.bytes)?;
+        Ok(had + chunk.bytes.len() as u64)
+    }
+
+    /// Checks a record out to a person at a computer, who may change it, unless someone else has
+    /// it and `take_over` is not asked; returns the checkouts the computer sees after.
+    pub fn check_out(&mut self, device: Uuid, person: Uuid, record: Uuid, take_over: bool) -> Result<Vec<Checkout>> {
+        let found = self.device(device)?;
+        if found.revoked {
+            return Err(Error::Revoked);
+        }
+        let (kind, collection): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT kind, collection_id FROM revisions WHERE record_id = ?1 LIMIT 1",
+                params![record.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        let kind = Kind::parse(&kind).ok_or_else(|| Error::Corrupt(format!("unknown kind {kind}")))?;
+        if !found.people.contains(&person)
+            || !Directory::load(&self.conn)?.may_change(person, parse_id(&collection)?, kind)
+        {
+            return Err(Error::NotAllowed);
+        }
+        self.prune_checkouts();
+        let held = self.checkouts.iter().position(|c| c.record == record);
+        if let Some(at) = held {
+            if self.checkouts[at].person != person && !take_over {
+                return self.checkouts(device);
+            }
+            self.checkouts.remove(at);
+        }
+        let now = now_ms();
+        self.checkouts.push(Checkout {
+            record,
+            person,
+            device,
+            since: now,
+            expires: now + CHECKOUT_MS,
+        });
+        self.checkouts(device)
+    }
+
+    /// Ends a person's checkout of a record.
+    pub fn release(&mut self, device: Uuid, person: Uuid, record: Uuid) -> Result<Vec<Checkout>> {
+        let found = self.device(device)?;
+        if found.revoked || !found.people.contains(&person) {
+            return Err(Error::NotAllowed);
+        }
+        self.checkouts.retain(|c| !(c.record == record && c.person == person));
+        self.checkouts(device)
+    }
+
+    /// The checkouts of records a computer's people read.
+    pub fn checkouts(&mut self, device: Uuid) -> Result<Vec<Checkout>> {
+        let found = self.device(device)?;
+        if found.revoked {
+            return Err(Error::Revoked);
+        }
+        self.prune_checkouts();
+        let levels = levels(&Directory::load(&self.conn)?, &found.people);
+        let mut seen = Vec::new();
+        for checkout in &self.checkouts {
+            let row: Option<(String, String)> = self
+                .conn
+                .query_row(
+                    "SELECT collection_id, kind FROM revisions WHERE record_id = ?1 LIMIT 1",
+                    params![checkout.record.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((collection, kind)) = row else { continue };
+            let held = levels.get(&parse_id(&collection)?).map_or(&[][..], Vec::as_slice);
+            if Kind::parse(&kind).is_some_and(|kind| sent(held, kind, false).is_some()) {
+                seen.push(checkout.clone());
+            }
+        }
+        Ok(seen)
+    }
+
+    fn prune_checkouts(&mut self) {
+        let now = now_ms();
+        self.checkouts.retain(|c| c.expires > now);
     }
 }
 

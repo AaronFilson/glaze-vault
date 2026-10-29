@@ -12,7 +12,9 @@ import {
   type Revision,
   type Settings as VaultSettings,
   type UpdateInfo,
-  type VaultStatus
+  type VaultChanged,
+  type VaultStatus,
+  onEvent
 } from '../api';
 import { BATCH_UNITS, type BatchSheet, type BatchUnit } from '../batch';
 import {
@@ -48,6 +50,7 @@ import { PrintView, type PrintJob } from './PrintView';
 import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
 import { RecoverySheet } from './RecoverySheet';
 import { Settings } from './Settings';
+import { SyncIndicator } from './SyncIndicator';
 import { CollectionPicker, MoveTo } from './Team';
 import { byCollection, canEdit, defaultCollection, editableCollections, may, onlyWeighs } from '../team';
 
@@ -66,7 +69,7 @@ interface Records<Content> {
   setError: (error: string) => void;
 }
 
-export type LockReason = 'manual' | 'idle' | 'idle-with-draft' | 'switched';
+export type LockReason = 'manual' | 'idle' | 'idle-with-draft' | 'switched' | 'left';
 
 /** The open vault: the recipe list and editor, materials, settings, printing, and the notices
  * above them. */
@@ -177,6 +180,8 @@ export function Recipes({
         setPriceLists(priceLists);
         setRecipes(heads);
         setMaterials(ownMaterials);
+        recipe.follow(heads);
+        material.follow(ownMaterials);
         setSheets(batchSheets);
         setFirings(allFirings);
         setMixes(allMixes);
@@ -185,19 +190,9 @@ export function Recipes({
       .catch((e) => setError(errorText(e)));
   };
 
-  // A vault that syncs with a host syncs every half minute while open, and shows what came
-  // (docs/adr/0022-host-mode.md). Stage 7 of the LAN plan moves this into the app's core.
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      try {
-        if (!(await api.networkStatus()).replica) return;
-        if ((await api.syncNow()).pulled) reloadAccess();
-      } catch {
-        // The host is out of reach for now; the next try may work.
-      }
-    }, 30_000);
-    return () => clearInterval(timer);
-  }, []);
+  // A vault that syncs with a host syncs by itself while open (docs/adr/0023-client-mode.md); the
+  // lists are read again when a sync brings something.
+  useEffect(() => onEvent<VaultChanged>('vault-changed', (changed) => changed.pulled && reloadAccess()), []);
 
   useEffect(() => {
     (async () => {
@@ -901,6 +896,7 @@ export function Recipes({
           {team && viewButton('batches', 'Batch sheets')}
           {viewButton('materials', 'Materials')}
           {viewButton('settings', 'Settings')}
+          <SyncIndicator />
           {team && access && <span className="hint signed-in">{access.me.name}</span>}
           <button type="button" onClick={lock}>
             Lock
@@ -1030,6 +1026,7 @@ export function Recipes({
 
       {view === 'settings' && settings ? (
         <Settings
+          onLeft={() => onLocked('left')}
           settings={settings}
           onSettings={saveSettings}
           lastBackup={lastBackup}
@@ -1201,6 +1198,10 @@ export function Recipes({
           onDeleted={(gone) => {
             setSheets((list) => list.filter((s) => s.recordId !== gone.recordId));
             setSheet(null);
+          }}
+          onSaved={(saved) => {
+            setSheets((list) => [saved, ...list.filter((s) => s.recordId !== saved.recordId)]);
+            setSheet(saved);
           }}
         />
       ) : view === 'materials' ? (

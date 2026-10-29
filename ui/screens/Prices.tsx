@@ -5,6 +5,7 @@ import { api, errorText, type Access, type Revision } from '../api';
 import type { MaterialLibrary, RecipeLine } from '../chemistry';
 import { EMPTY_PRICES, money, recipeCost, type PricesContent } from '../prices';
 import { canEdit, collectionLabel, editableCollections } from '../team';
+import { ForkChoice } from './ForkChoice';
 
 /** What the recipe costs, from the price list, if it has prices for any of it. */
 export function CostLine({ lines, list }: { lines: RecipeLine[]; list: PricesContent | null }) {
@@ -125,6 +126,18 @@ export function PriceList({
 
   return (
     <form onSubmit={save}>
+      {list && (
+        <ForkChoice
+          kind="prices"
+          head={list}
+          name="These prices"
+          readOnly={!canEdit}
+          onResolved={(saved) => {
+            setDraft(withEmptyLine(saved.content));
+            onSaved(saved);
+          }}
+        />
+      )}
       <p className="hint">
         What each material costs you, dry, so each recipe shows what it costs below its unity formula.
       </p>
