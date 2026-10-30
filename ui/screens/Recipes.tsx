@@ -28,7 +28,7 @@ import {
 } from '../chemistry';
 import { localDate } from '../export';
 import { restorePart, useEditor, type Editor } from '../useEditor';
-import { useIdleLock } from '../useIdleLock';
+import { BACKGROUND_GRACE_SECONDS, useBackgroundLock, useIdleLock } from '../useIdleLock';
 import { BatchSheetForm, BatchSheets } from './BatchSheets';
 import { Blend } from './Blend';
 import { Fit } from './Fit';
@@ -70,7 +70,7 @@ interface Records<Content> {
   setError: (error: string) => void;
 }
 
-export type LockReason = 'manual' | 'idle' | 'idle-with-draft' | 'switched' | 'left';
+export type LockReason = 'manual' | 'idle' | 'idle-with-draft' | 'away' | 'away-with-draft' | 'switched' | 'left';
 
 /** The open vault: the recipe list and editor, materials, settings, printing, and the notices
  * above them. */
@@ -327,20 +327,26 @@ export function Recipes({
     priceListFor(priceLists, (recipe.viewing ?? recipe.current)?.collectionId ?? newCollection)?.content ?? null;
   const analysis = useMemo(() => analyse(shownRecipe.lines, library), [shownRecipe.lines, library]);
 
-  useIdleLock(settings?.autoLock && !newWords ? settings.autoLockMinutes : null, async () => {
+  /** Locks by itself, keeping unsaved changes as a draft. */
+  const lockBySelf = async (reason: 'idle' | 'away') => {
     try {
       if (unsaved) {
         await writeDraft(() => api.lockWithDraft(unsaved));
-        onLocked('idle-with-draft');
+        onLocked(`${reason}-with-draft`);
       } else {
         await api.lock();
-        onLocked('idle');
+        onLocked(reason);
       }
     } catch {
       await api.lock().catch(() => {});
-      onLocked('idle');
+      onLocked(reason);
     }
-  });
+  };
+  useIdleLock(settings?.autoLock && !newWords ? settings.autoLockMinutes : null, () => lockBySelf('idle'));
+  // A phone also locks once the app has been in the background for a while (ADR 27).
+  useBackgroundLock(status.platform !== 'desktop' && !newWords ? BACKGROUND_GRACE_SECONDS : null, () =>
+    lockBySelf('away')
+  );
 
   const unsavedIn = (scope: Scope) =>
     (scope !== 'material' && recipe.changed) || (scope !== 'recipe' && material.changed);

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and later: only finished backups go into Google's backup or to a new phone, never
+     the live vault (docs/adr/0027-phones.md). Naming a folder to include leaves everything else
+     out. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="root" path="backups/" />
+        <include domain="file" path="backups/" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="root" path="backups/" />
+        <include domain="file" path="backups/" />
+    </device-transfer>
+</data-extraction-rules>

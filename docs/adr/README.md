@@ -31,3 +31,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0024](0024-offline-limits-and-revocation.md) | Offline limits, revoking computers, and the host's backups   | 2026-10-29 |
 | [0025](0025-host-backups-from-the-app.md)     | The phase 2 leftovers: host backups from the app, and the rest | 2026-10-29 |
 | [0026](0026-mobile-builds.md)                 | Mobile builds: the same app for phones and tablets             | 2026-10-30 |
+| [0027](0027-phones.md)                        | Phones: the vault's folder, locking and what the page offers   | 2026-10-30 |

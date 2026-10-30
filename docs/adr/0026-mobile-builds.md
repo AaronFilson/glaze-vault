@@ -1,5 +1,7 @@
 # 26. Mobile builds: the same app for phones and tablets
 
+The mobile projects are still made by `tauri init`, and changed after it: see [ADR 27](0027-phones.md).
+
 Proposed, 2026-10-30. Stage 1 of [the phase 3 plan](../plans/phase-3-mobile.md#7-staged-delivery).
 Builds on [ADR 1](0001-tauri-rust-react.md)'s "Tauri 2 can build the same app for iOS and
 Android", and undoes the desktop-only library of the lean-build change.
