@@ -72,6 +72,7 @@ fn on_network<T: Send, F: Future<Output = T>>(work: impl FnOnce() -> F + Send) -
 }
 
 /// Where hostd is: beside the app, as the installer puts its sidecar, or GLAZE_VAULT_HOSTD.
+#[cfg(desktop)]
 fn hostd() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("GLAZE_VAULT_HOSTD") {
         return Some(PathBuf::from(path));
@@ -80,6 +81,12 @@ fn hostd() -> Option<PathBuf> {
         .ok()?
         .with_file_name(format!("hostd{}", std::env::consts::EXE_SUFFIX));
     path.is_file().then_some(path)
+}
+
+/// Phones and tablets never serve (docs/plans/phase-3-mobile.md).
+#[cfg(mobile)]
+fn hostd() -> Option<PathBuf> {
+    None
 }
 
 /// Development and tests: hostd as a child process, with no service and no administrator.
@@ -420,6 +427,7 @@ pub fn devices(state: State<AppState>) -> CommandResult<Vec<DeviceInfo>> {
 }
 
 /// Runs hostd with an administrator's rights, which the system asks the person for.
+#[cfg(desktop)]
 fn elevated(program: &Path, args: &[&str]) -> Result<(), String> {
     let program = program.to_string_lossy();
     let output = elevated_command(&program, args).output().map_err(|e| e.to_string())?;
@@ -432,6 +440,11 @@ fn elevated(program: &Path, args: &[&str]) -> Result<(), String> {
             said => said.to_owned(),
         })
     }
+}
+
+#[cfg(mobile)]
+fn elevated(_program: &Path, _args: &[&str]) -> Result<(), String> {
+    Err("Phones and tablets do not serve.".into())
 }
 
 #[cfg(target_os = "macos")]

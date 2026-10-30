@@ -6,7 +6,8 @@ to 25, so its new ADRs start at 26. Where it is not sure what Tauri, a crate or 
 it says so, and the first stage exists to find out.
 
 Decisions for Aaron are in [section 8](#8-open-questions-for-aaron), each with a recommended
-default. On 2026-10-30 Aaron accepted every default, with backups on and three kept.
+default. On 2026-10-30 Aaron accepted every default, with backups on and three kept. Stage 1 is built
+([ADR 26](../adr/0026-mobile-builds.md)).
 
 ## Summary
 
@@ -302,7 +303,7 @@ Sizes as in the phase 2 plan: S under 500 lines changed, M 500 to 1,500, L 1,500
 
 | # | Stage | Contents | Useful on its own | Size |
 | --- | --- | --- | --- | --- |
-| 1 | **Mobile builds** | Crate types and the mobile entry point, `#[cfg(desktop)]` on hosting, updater and dialogs; `tauri android init` and `tauri ios init`; SQLCipher with vendored OpenSSL on all mobile targets (or the fallback, below); CI jobs that build an Android APK and an iOS simulator app, and cross-compile `core` and `sync`. Checks the file input and the camera in both webviews. ADR 26. | Proves the stack before any screen work. | M |
+| 1 | **Mobile builds** | Crate types and the mobile entry point, `#[cfg(desktop)]` on hosting, updater and dialogs; `tauri android init` and `tauri ios init`; SQLCipher with vendored OpenSSL on all mobile targets (or the fallback, below); CI jobs that build an Android APK and an iOS simulator app, and cross-compile `core` and `sync`. Checks the file input and the camera in both webviews. ADR 26. **Built**: the mobile projects are made by `tauri init` on CI rather than checked in, until stage 2 changes them; mobile builds are checked on CI only; picked files on Android are `content://` addresses, left to stages 6 and 7. | Proves the stack before any screen work. | M |
 | 2 | **The vault on a phone** | Folder, file protection, backup exclusion, the snapshot cover and `FLAG_SECURE`, locking in the background, the `platform` command, Argon2 timing on a real or emulated phone. | The security edges, done first. | M |
 | 3 | **A vault of its own** | Setup on a phone, daily `.gvbackup` files in `backups/`, iCloud and Auto Backup rules, the 25 MB fallback and saving a backup through the file picker, the setting, restoring at setup. | People with only a phone can use it, safely. | M |
 | 4 | **Joining from a phone** | The QR code on "Pair a computer" and the scanner; the fingerprint check; the typed path; the local network permission on iOS, explained and detected; the system browsers for discovery; protocol version ranges (3.5). ADR 27. | A phone syncs with a host. | M |

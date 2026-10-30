@@ -1,6 +1,6 @@
 //! The network around the sync (docs/adr/0021-transport-and-pairing.md): TLS 1.3 with pinned
 //! Ed25519 keys and no certificate authority, pairing a new computer with a short code by SPAKE2,
-//! finding the host by mDNS, and the server that `hostd` runs.
+//! finding the host by mDNS on desktops, and the server that `hostd` runs.
 
 mod client;
 mod conn;
@@ -15,7 +15,9 @@ pub use client::{
     revoke_device, sync, sync_holding, sync_shared, watch,
 };
 pub use conn::Conn;
-pub use discover::{Advertised, Found, SERVICE, advertise, browse, vault_tag};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use discover::{Advertised, advertise};
+pub use discover::{Found, SERVICE, browse, vault_tag};
 pub use pairing::{CODE_LIFETIME, fingerprint};
 pub use server::{Server, serve};
 pub use tls::{client_config, server_config};

@@ -121,6 +121,104 @@ jobs:
           GLAZE_PASSWORD: smoke test password
         run: bash .github/host-service.sh
 
+  # Phones and tablets (docs/adr/0026-mobile-builds.md): the core and sync crates built for each
+  # target, then the app as an unsigned Android APK and an iOS app for the simulator. The mobile
+  # projects (crates/app/gen/android and gen/apple) are made fresh by `tauri init` each time.
+  mobile:
+    name: Mobile (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Android
+            os: ubuntu-latest
+            targets: aarch64-linux-android,x86_64-linux-android
+          - name: iOS
+            os: macos-latest
+            targets: aarch64-apple-ios,aarch64-apple-ios-sim
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mobile
+
+      - name: Java for Gradle
+        if: runner.os == 'Linux'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # The runner has the Android SDK and NDKs; Tauri looks for the NDK in NDK_HOME, and plain
+      # cargo needs the NDK's clang named for the target.
+      - name: Use the runner's Android NDK
+        if: runner.os == 'Linux'
+        run: |
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME"
+            echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
+            echo "AR_aarch64_linux_android=$bin/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang"
+          } >> "$GITHUB_ENV"
+
+      - name: Core and sync for Android
+        if: runner.os == 'Linux'
+        run: cargo build --locked -p glaze-vault-core -p glaze-vault-sync --target aarch64-linux-android
+
+      - name: Core and sync for iOS
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --locked -p glaze-vault-core -p glaze-vault-sync --target aarch64-apple-ios
+          cargo build --locked -p glaze-vault-core -p glaze-vault-sync --target aarch64-apple-ios-sim
+
+      - name: XcodeGen for the iOS project
+        if: runner.os == 'macOS'
+        run: brew install xcodegen
+
+      - run: npm ci
+
+      - name: Android APK
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          npx tauri android init --ci
+          npx tauri android build --ci --apk --target aarch64 x86_64 2>&1 | tee build.log || {
+            node .github/annotate.cjs build.log "tauri android build failed"
+            exit 1
+          }
+
+      - name: iOS app for the simulator
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -o pipefail
+          npx tauri ios init --ci
+          npx tauri ios build --ci --debug --target aarch64-sim 2>&1 | tee build.log || {
+            node .github/annotate.cjs build.log "tauri ios build failed"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: Glaze Vault Android
+          if-no-files-found: error
+          retention-days: 14
+          path: crates/app/gen/android/app/build/outputs/apk/**/*.apk
+
   # Unsigned installers for every push, to try on each system. Releases are built by release.yml.
   bundle:
     name: Installers (${{ matrix.name }})
