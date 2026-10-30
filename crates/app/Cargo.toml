@@ -20,6 +20,7 @@ serde_json = "1.0.154"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }
 uuid = { version = "1.28.0", features = ["serde"] }
 zeroize = "1.9.1"
 

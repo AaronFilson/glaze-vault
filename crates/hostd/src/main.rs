@@ -4,6 +4,8 @@
 //!   hostd install --from <staging-dir> [--port N] [--name NAME]     elevated
 //!   hostd uninstall [--keep-data]                                   elevated
 //!   hostd status
+//!   hostd backups [--dir <host-dir>]
+//!   hostd restore <backup-folder | file.gvhost> [--dir <host-dir>]  elevated
 //!
 //! `run` serves in the foreground. `install` moves a host's store, made by the app, into the
 //! system's data folder and runs this same binary there as a service from boot.
@@ -19,7 +21,9 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: hostd run <host-dir> [--port N] [--port-file FILE] [--name NAME] [--no-mdns]
        hostd install --from <staging-dir> [--port N] [--name NAME]
        hostd uninstall [--keep-data]
-       hostd status";
+       hostd status
+       hostd backups [--dir <host-dir>]
+       hostd restore <backup-folder | file.gvhost> [--dir <host-dir>]";
 
 /// The name the host is advertised by when none is given.
 pub const DEFAULT_NAME: &str = "Glaze Vault host";
@@ -48,6 +52,38 @@ pub fn run_options(dir: PathBuf, mut args: impl Iterator<Item = String>) -> Resu
         }
     }
     Ok(options)
+}
+
+/// `--dir`, or where the installed service keeps the store.
+fn host_dir(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String> {
+    match (args.next().as_deref(), args.next()) {
+        (None, _) => Ok(service::data_dir()),
+        (Some("--dir"), Some(dir)) => Ok(PathBuf::from(dir)),
+        _ => Err(USAGE.into()),
+    }
+}
+
+/// Puts the host's store back as a backup had it. A running service is asked to, and restarts
+/// itself to; otherwise it is done now.
+fn restore(dir: &std::path::Path, backup: &std::path::Path) -> Result<(), String> {
+    let mut backup = backup
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", backup.display()))?;
+    // A file an admin's computer saved goes in among the backups first; it must be this host's.
+    if backup.is_file() {
+        let host = glaze_vault_core::HostStore::open(dir).map_err(|e| e.to_string())?;
+        let name = host.import_backup(&backup).map_err(|e| e.to_string())?;
+        backup = dir.join(serve::BACKUPS).join(name);
+    }
+    if service::running() && dir == service::data_dir() {
+        std::fs::write(dir.join(serve::RESTORE_FILE), backup.to_string_lossy().as_bytes())
+            .map_err(|e| e.to_string())?;
+        println!("the service restores it as it starts again, in a few seconds");
+        return Ok(());
+    }
+    glaze_vault_core::HostStore::restore(dir, &backup).map_err(|e| e.to_string())?;
+    println!("restored: computers send again what the backup lacks when they next sync");
+    Ok(())
 }
 
 fn main() -> ExitCode {
@@ -96,6 +132,20 @@ fn main() -> ExitCode {
             Some(_) => Err(USAGE.into()),
         },
         "status" => service::status().map(|status| println!("{status}")),
+        "backups" => host_dir(&mut args).and_then(|dir| {
+            let mut made: Vec<_> = std::fs::read_dir(dir.join(serve::BACKUPS))
+                .map_err(|e| e.to_string())?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_dir())
+                .collect();
+            made.sort();
+            made.iter().for_each(|p| println!("{}", p.display()));
+            Ok(())
+        }),
+        "restore" => match args.next() {
+            Some(backup) => host_dir(&mut args).and_then(|dir| restore(&dir, &PathBuf::from(backup))),
+            None => Err(USAGE.into()),
+        },
         _ => Err(USAGE.into()),
     };
     match done {

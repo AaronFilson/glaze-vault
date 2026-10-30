@@ -1,7 +1,7 @@
 // The firing log (docs/adr/0014-firing-log-and-photos.md): every firing of the recipes this person
 // can open, newest first, and one at a time to fill in, with a test bar's readings and photos.
 import { useEffect, useRef, useState } from 'react';
-import { api, errorText, type Access, type RecipeHead } from '../api';
+import { api, errorCode, errorText, onEvent, type Access, type RecipeHead, type VaultChanged } from '../api';
 import { isBody } from '../body';
 import {
   barResults,
@@ -28,6 +28,8 @@ import {
 } from '../firing';
 import { lotsForFiring, mixSummary, type Mix } from '../mix';
 import { PhotoError, smallerPhoto } from '../photos';
+import { CheckoutBar } from './CheckoutBar';
+import { ForkChoice } from './ForkChoice';
 import { ATMOSPHERES, isFormed, SURFACES, TRANSPARENCIES } from '../recipeFields';
 import { EMPTY_SLIP, hasSlipReadings, isSlip, type SlipReadings } from '../slip';
 import { canEdit, editableCollections } from '../team';
@@ -393,6 +395,24 @@ function FiringEditor({
 
   return (
     <>
+      {current && (
+        <ForkChoice
+          kind="firing"
+          head={current}
+          name={current.content.recipeName}
+          readOnly={readOnly}
+          onResolved={(saved) => {
+            if (saved.deleted) {
+              onErased(saved.recordId);
+              onEdit(null);
+            } else {
+              onSaved(saved);
+              onEdit({ current: saved, draft: saved.content });
+            }
+          }}
+        />
+      )}
+      {current && <CheckoutBar kind="firing" record={current.recordId} readOnly={readOnly} />}
       {readOnly && current && (
         <p className="hint" role="status">
           You can read this firing, but not change it.
@@ -743,7 +763,7 @@ function FiringEditor({
                 {urls[photo.id] ? (
                   <img src={urls[photo.id]} alt={photo.caption || `Photo ${i + 1}`} />
                 ) : (
-                  <div className="photo-loading">Opening…</div>
+                  <div className="photo-loading">{urls[photo.id] === '' ? 'Photo not synced yet' : 'Opening…'}</div>
                 )}
                 <figcaption>
                   <input
@@ -820,9 +840,19 @@ export function Fold({ open, children }: { open: boolean; children: React.ReactN
   );
 }
 
-/** Pictures for the photos, opened from the vault as they are needed and let go when done. */
+/** Pictures for the photos, opened from the vault as they are needed and let go when done. A
+ * photo whose bytes have not come from the host yet has an empty picture, is asked for, and is
+ * tried again when a sync brings photos. */
 function usePhotoUrls(photos: Photo[]): Record<string, string> {
   const [urls, setUrls] = useState<Record<string, string>>({});
+  const [fetched, setFetched] = useState(0);
+  useEffect(
+    () =>
+      onEvent<VaultChanged>('vault-changed', (changed) => {
+        if (changed.fetched) setFetched((n) => n + 1);
+      }),
+    []
+  );
   // Each photo's picture once opened; a photo being opened has none yet.
   const made = useRef<Record<string, string | null>>({});
   const mounted = useRef(true);
@@ -846,8 +876,15 @@ function usePhotoUrls(photos: Photo[]): Record<string, string> {
           made.current[photo.id] = url;
           setUrls((now) => ({ ...now, [photo.id]: url }));
         })
-        .catch(() => delete made.current[photo.id]);
+        .catch((e) => {
+          delete made.current[photo.id];
+          if (mounted.current && errorCode(e) === 'not-fetched') {
+            setUrls((now) => ({ ...now, [photo.id]: '' }));
+            // Someone is looking at it: it comes first, or at all with photos on demand.
+            api.wantPhoto(photo.id).catch(() => {});
+          }
+        });
     }
-  }, [photos.map((p) => p.id).join()]);
+  }, [photos.map((p) => p.id).join(), fetched]);
   return urls;
 }

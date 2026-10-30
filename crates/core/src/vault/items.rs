@@ -299,9 +299,11 @@ pub(super) fn verify_revision(trust: &Trust, vault: &Uuid, item: &RevisionItem) 
     Ok(())
 }
 
+/// Checks an attachment as a replica does. One pulled without its bytes checks by its signature
+/// alone: its bytes are checked against its hash when they arrive.
 pub(super) fn verify_attachment(trust: &Trust, vault: &Uuid, item: &AttachmentItem) -> Result<()> {
     let signed = signed_by(&item.signed).map_err(|_| Error::BadSignature)?;
-    if store::attachment_hash(&item.nonce, &item.ciphertext) != item.sha256
+    if !item.ciphertext.is_empty() && store::attachment_hash(&item.nonce, &item.ciphertext) != item.sha256
         || bad(trust, &signed, &attachment_payload(vault, item, &signed))
     {
         return Err(Error::BadSignature);
@@ -438,4 +440,49 @@ pub(super) fn exists(conn: &Connection, table: &str, id: &Uuid) -> Result<bool> 
         )
         .optional()?
         .is_some())
+}
+
+/// The most of an attachment's ciphertext one piece carries (plan section 3.7).
+pub const CHUNK_BYTES: usize = 1024 * 1024;
+
+/// How much of an attachment's ciphertext has arrived in pieces, and from which computer: on a
+/// replica, from the host, which is none.
+pub(super) fn staged_length(conn: &Connection, id: &Uuid) -> Result<(u64, Option<String>)> {
+    Ok(conn.query_row(
+        "SELECT coalesce(sum(length(bytes)), 0), max(device_id) FROM incoming_attachments WHERE id = ?1",
+        params![id.to_string()],
+        |row| Ok((row.get::<_, i64>(0)? as u64, row.get(1)?)),
+    )?)
+}
+
+/// Keeps the next piece of an attachment's ciphertext.
+pub(super) fn stage(conn: &Connection, id: &Uuid, device: Option<Uuid>, offset: u64, bytes: &[u8]) -> Result<()> {
+    conn.execute(
+        "INSERT INTO incoming_attachments (id, device_id, offset, bytes, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            id.to_string(),
+            device.map(|d| d.to_string()),
+            offset as i64,
+            bytes,
+            super::now_ms()
+        ],
+    )?;
+    Ok(())
+}
+
+/// The pieces of an attachment's ciphertext that have arrived, joined.
+pub(super) fn staged(conn: &Connection, id: &Uuid) -> Result<Vec<u8>> {
+    let pieces = conn
+        .prepare("SELECT bytes FROM incoming_attachments WHERE id = ?1 ORDER BY offset")?
+        .query_map(params![id.to_string()], |row| row.get::<_, Vec<u8>>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(pieces.concat())
+}
+
+pub(super) fn unstage(conn: &Connection, id: &Uuid) -> Result<()> {
+    conn.execute(
+        "DELETE FROM incoming_attachments WHERE id = ?1",
+        params![id.to_string()],
+    )?;
+    Ok(())
 }

@@ -2,7 +2,17 @@ import { useState } from 'react';
 import { api, errorText } from '../api';
 import { NewPassword } from './NewPassword';
 
-export function Setup({ onCreated, onRestore }: { onCreated: (words: string[]) => void; onRestore: () => void }) {
+export function Setup({
+  notice,
+  onCreated,
+  onRestore,
+  onJoin
+}: {
+  notice?: string;
+  onCreated: (words: string[]) => void;
+  onRestore: () => void;
+  onJoin: () => void;
+}) {
   const [password, setPassword] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -23,6 +33,11 @@ export function Setup({ onCreated, onRestore }: { onCreated: (words: string[]) =
   return (
     <main className="center">
       <form className="card" onSubmit={create}>
+        {notice && (
+          <p className="notice" role="status">
+            {notice}
+          </p>
+        )}
         <h1>Set up your vault</h1>
         <p>
           Glaze Vault keeps your recipes encrypted on this computer. Choose a password: you will type it each time
@@ -35,6 +50,9 @@ export function Setup({ onCreated, onRestore }: { onCreated: (words: string[]) =
         </button>
         <button type="button" className="link" onClick={onRestore}>
           Restore from a backup
+        </button>
+        <button type="button" className="link" onClick={onJoin}>
+          Join a vault on this network
         </button>
       </form>
     </main>

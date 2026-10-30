@@ -25,6 +25,7 @@ import { isSlip, waterPer100 } from '../slip';
 import type { Editor } from '../useEditor';
 import { AnalysisPanel } from './AnalysisPanel';
 import { DeletedList, DeletedNotice } from './Deleted';
+import { CheckoutBar } from './CheckoutBar';
 import { ForkNotice } from './ForkNotice';
 import { RevisionHistory, ViewingNotice } from './RevisionHistory';
 
@@ -198,6 +199,7 @@ export function RecipeEditor({
             onCompare={onCompareFork}
           />
         )}
+        {current && !viewing && <CheckoutBar kind="recipe" record={current.recordId} readOnly={readOnly} />}
         {withoutChemistry && current ? (
           <p className="hint" role="status">
             You see this recipe’s name and details, and its firings, but not its materials, amounts or notes. An admin

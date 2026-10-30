@@ -81,6 +81,13 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm run e2e; else npm run e2e; fi
 
+      # Two apps, one serving the vault through a development hostd and the other joining it
+      # (docs/adr/0023-client-mode.md).
+      - name: End-to-end tests on the LAN
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a npm run e2e -- --suite lan; else npm run e2e -- --suite lan; fi
+
   # Installs hostd as a real service on each system, syncs with it, and removes it
   # (docs/adr/0022-host-mode.md): what `tauri dev` and the tests cannot reach.
   host-service:

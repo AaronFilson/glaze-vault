@@ -1,4 +1,5 @@
-//! The host's server: TLS connections from computers, each a sync session or a step of pairing.
+//! The host's server: TLS connections from computers, each a sync session, a step of pairing, a
+//! computer watching for news, or an admin's computer holding the directory while it changes it.
 //! The store is shared between connections behind a lock, held only while a message is handled.
 
 use super::conn::Conn;
@@ -23,6 +24,12 @@ use zeroize::Zeroizing;
 const HANDSHAKE: Duration = Duration::from_secs(15);
 /// How long a connection may be quiet between messages, except while it waits on pairing.
 const IDLE: Duration = Duration::from_secs(120);
+/// How often a watching computer hears from the host when nothing changes.
+const KEEPALIVE: Duration = Duration::from_secs(50);
+/// How long a computer waits for another to finish changing the directory.
+const DIRECTORY_WAIT: Duration = Duration::from_secs(30);
+/// The pieces a backup file goes in.
+const BACKUP_CHUNK: usize = 1024 * 1024;
 
 pub struct Server {
     host: Mutex<HostStore>,
@@ -31,6 +38,10 @@ pub struct Server {
     pairing: Mutex<Option<Pairing>>,
     /// Ticks whenever the pairing changes, for those waiting on it.
     changed: watch::Sender<()>,
+    /// Ticks whenever a computer pushes or checks something out, for those watching.
+    news: watch::Sender<()>,
+    /// Held by the one computer changing people, roles or collections (the plan's question 5).
+    directory: Arc<tokio::sync::Mutex<()>>,
 }
 
 struct Pairing {
@@ -49,9 +60,87 @@ enum Stage {
         device: Uuid,
         name: String,
         key: Vec<u8>,
+        /// For extension codes, kept once the computer is approved.
+        secret: Vec<u8>,
     },
     Approved(Box<JoinPackage>),
     Failed(String),
+}
+
+/// A backup file a connection is fetching or sending, kept in the host's folder until it ends.
+#[derive(Default)]
+struct Transfer {
+    path: Option<std::path::PathBuf>,
+    sending: bool,
+}
+
+impl Transfer {
+    fn path(&mut self, dir: &std::path::Path, what: &str) -> std::path::PathBuf {
+        self.clear();
+        let path = dir.join(format!("{what}-{}.gvhost", Uuid::new_v4()));
+        self.path = Some(path.clone());
+        path
+    }
+
+    fn read(&self, offset: u64) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = self.path.as_ref().filter(|_| !self.sending);
+        let mut file = std::fs::File::open(path.ok_or(std::io::ErrorKind::NotFound)?)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut bytes = Vec::with_capacity(BACKUP_CHUNK);
+        file.take(BACKUP_CHUNK as u64).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Adds a piece from `offset`, which must be where the file ends; the length after.
+    fn write(&mut self, dir: &std::path::Path, offset: u64, bytes: &[u8]) -> std::io::Result<u64> {
+        use std::io::Write;
+        if offset == 0 {
+            self.path(dir, "upload");
+            self.sending = true;
+        }
+        let path = self
+            .path
+            .as_ref()
+            .filter(|_| self.sending)
+            .ok_or(std::io::ErrorKind::NotFound)?;
+        let length = std::fs::metadata(path).map_or(0, |m| m.len());
+        if length != offset {
+            return Err(std::io::Error::other("a piece out of order"));
+        }
+        let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+        file.write_all(bytes)?;
+        Ok(length + bytes.len() as u64)
+    }
+
+    fn sent(&self) -> Option<std::path::PathBuf> {
+        self.path.clone().filter(|_| self.sending)
+    }
+
+    fn clear(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_file(path);
+        }
+        self.sending = false;
+    }
+}
+
+impl Drop for Transfer {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+/// The directory, held by one connection: let go when it ends.
+struct Holding {
+    server: Arc<Server>,
+    _lock: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for Holding {
+    fn drop(&mut self) {
+        self.server.host().set_directory_holder(None);
+    }
 }
 
 fn refused(reason: impl Into<String>) -> HostMsg {
@@ -65,14 +154,26 @@ fn now_ms() -> i64 {
 }
 
 impl Server {
-    pub fn new(host: HostStore) -> Arc<Server> {
+    pub fn new(mut host: HostStore) -> Arc<Server> {
+        // Over the network, directory changes come only from the computer holding it.
+        host.guard_directory();
         let identity = Zeroizing::new(**host.identity_seed());
         Arc::new(Server {
             host: Mutex::new(host),
             identity,
             pairing: Mutex::new(None),
             changed: watch::Sender::new(()),
+            news: watch::Sender::new(()),
+            directory: Arc::new(tokio::sync::Mutex::new(())),
         })
+    }
+
+    /// Says hostd will stop to put a backup back, which it does once it sees the file asking.
+    fn restoring(&self, asked: std::result::Result<(), glaze_vault_core::Error>) -> HostMsg {
+        match asked {
+            Ok(()) => HostMsg::Restoring,
+            Err(e) => refused(e.to_string()),
+        }
     }
 
     /// The store, for what runs beside the server.
@@ -86,6 +187,15 @@ impl Server {
 
     fn set_stage(&self, stage: Stage) {
         if let Some(pairing) = self.pairing().as_mut() {
+            pairing.stage = stage;
+        }
+        self.changed.send_replace(());
+    }
+
+    /// As `set_stage`, only if the pairing open is still the one with `code`: a computer trying
+    /// an old code does not finish or end one an admin started since.
+    fn set_stage_of(&self, code: &str, stage: Stage) {
+        if let Some(pairing) = self.pairing().as_mut().filter(|p| p.code == code) {
             pairing.stage = stage;
         }
         self.changed.send_replace(());
@@ -121,6 +231,10 @@ impl Server {
         let mut session = device.map(HostSession::new);
         let mut conn = Conn::new(stream);
         let mut spake = None;
+        // The directory, while this computer holds it; let go when the connection ends.
+        let mut _directory = None;
+        // A backup file this connection is fetching or sending, removed when it ends.
+        let mut transfer = Transfer::default();
         let outcome = loop {
             let message = match timeout(IDLE, conn.recv::<ClientMsg>()).await {
                 Err(_) => break Ok(()),
@@ -131,16 +245,16 @@ impl Server {
                 ClientMsg::Pair { spake: theirs } => match self.claim() {
                     Ok(code) => {
                         let (ours, message) = pairing::start_host(&code);
-                        spake = Some((ours, theirs));
+                        spake = Some((ours, theirs, code));
                         HostMsg::PairChallenge { spake: message }
                     }
                     Err(reason) => refused(reason),
                 },
                 ClientMsg::PairConfirm { mac, device, name } => {
-                    let Some((ours, theirs)) = spake.take() else {
+                    let Some((ours, theirs, code)) = spake.take() else {
                         break Err(Error::Protocol("a confirmation before pairing".into()));
                     };
-                    let answer = self.confirm(ours, &theirs, &exporter, &mac, device, name, &key);
+                    let answer = self.confirm(&code, ours, &theirs, &exporter, &mac, device, name, &key);
                     let joining = matches!(answer, HostMsg::PairConfirmed { .. });
                     conn.send(&answer).await?;
                     if joining {
@@ -149,9 +263,110 @@ impl Server {
                     }
                     break Ok(());
                 }
+                ClientMsg::Watch => {
+                    if session.is_none() {
+                        conn.send(&refused("this computer is not paired with the host")).await?;
+                        break Ok(());
+                    }
+                    break self.watch(&mut conn).await;
+                }
+                ClientMsg::LockDirectory => {
+                    let active = session
+                        .as_ref()
+                        .is_some_and(|s| self.host().is_active_device(s.device()).unwrap_or(false));
+                    if !active {
+                        refused("this computer is not paired with the host")
+                    } else {
+                        match timeout(DIRECTORY_WAIT, self.directory.clone().lock_owned()).await {
+                            Ok(held) => {
+                                let device = session.as_ref().map(HostSession::device);
+                                self.host().set_directory_holder(device);
+                                _directory = Some(Holding {
+                                    server: self.clone(),
+                                    _lock: held,
+                                });
+                                HostMsg::DirectoryLocked
+                            }
+                            Err(_) => refused("someone else is changing the team: try again in a moment"),
+                        }
+                    }
+                }
                 ClientMsg::StartPairing => self.start_pairing(session.as_ref()),
                 ClientMsg::AwaitPairing => self.await_pairing(session.as_ref()).await,
                 ClientMsg::ApproveDevice { certificate } => self.approve(session.as_ref(), &certificate),
+                ClientMsg::ExtensionCode { device, days } => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer gives extension codes"),
+                    Some(_) => {
+                        let code = self.host().extension_code(device, days);
+                        match code {
+                            Ok(code) => HostMsg::ExtensionCode { code },
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
+                ClientMsg::RevokeDevice { device, lost } => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer revokes computers"),
+                    Some(admin) if admin == device => refused("a computer cannot revoke itself"),
+                    Some(_) => {
+                        let revoked = {
+                            let mut host = self.host();
+                            host.revoke_device(device, lost).and_then(|_| host.devices())
+                        };
+                        match revoked {
+                            Ok(devices) => {
+                                self.news.send_replace(());
+                                HostMsg::Devices(devices)
+                            }
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
+                ClientMsg::ListBackups => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer lists the host's backups"),
+                    Some(_) => self
+                        .host()
+                        .backups()
+                        .map_or_else(|e| refused(e.to_string()), HostMsg::Backups),
+                },
+                ClientMsg::RestoreBackup { name } => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer restores the host"),
+                    Some(_) => self.restoring(self.host().ask_restore(&name)),
+                },
+                ClientMsg::RequestBackup => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer fetches the host's backups"),
+                    Some(_) => {
+                        let path = transfer.path(self.host().dir(), "download");
+                        let made = self.host().export_backup(&path);
+                        match made.and_then(|made| Ok((std::fs::metadata(&path)?.len(), made))) {
+                            Ok((bytes, made_at)) => HostMsg::BackupReady { bytes, made_at },
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
+                ClientMsg::GetBackupChunk { offset } => match transfer.read(offset) {
+                    Ok(bytes) => HostMsg::BackupChunk { bytes },
+                    Err(e) => refused(e.to_string()),
+                },
+                ClientMsg::PutBackupChunk { offset, bytes } => match self.admin(session.as_ref()) {
+                    None => refused("only an admin's computer restores the host"),
+                    Some(_) => {
+                        let dir = self.host().dir().to_owned();
+                        match transfer.write(&dir, offset, &bytes) {
+                            Ok(next) => HostMsg::ChunkTaken { next },
+                            Err(e) => refused(e.to_string()),
+                        }
+                    }
+                },
+                ClientMsg::RestoreSent => match (self.admin(session.as_ref()), transfer.sent()) {
+                    (None, _) => refused("only an admin's computer restores the host"),
+                    (Some(_), None) => refused("no backup was sent"),
+                    (Some(_), Some(path)) => {
+                        let host = self.host();
+                        let asked = host.import_backup(&path).and_then(|name| host.ask_restore(&name));
+                        drop(host);
+                        self.restoring(asked)
+                    }
+                },
                 ClientMsg::ListDevices => match self.admin(session.as_ref()) {
                     None => refused("only an admin's computer lists computers"),
                     Some(_) => {
@@ -167,7 +382,14 @@ impl Server {
                         conn.send(&refused("this computer is not paired with the host")).await?;
                         break Ok(());
                     };
+                    let news = matches!(
+                        message,
+                        ClientMsg::Push { .. } | ClientMsg::CheckOut { .. } | ClientMsg::Release { .. }
+                    );
                     let handled = session.handle(&mut self.host(), message);
+                    if news && handled.is_ok() {
+                        self.news.send_replace(());
+                    }
                     match handled {
                         Ok(Some(answer)) => answer,
                         Ok(None) => break Ok(()),
@@ -184,13 +406,39 @@ impl Server {
                 break Ok(());
             }
         };
-        if spake.is_some() {
-            self.set_stage(Stage::Failed(
-                "the computer went away before it confirmed the code".into(),
-            ));
+        if let Some((_, _, code)) = &spake {
+            self.set_stage_of(
+                code,
+                Stage::Failed("the computer went away before it confirmed the code".into()),
+            );
         }
         conn.close().await;
         outcome
+    }
+
+    /// Tells a watching computer whenever something changes, and every so often anyway, until it
+    /// says goodbye or goes.
+    async fn watch(&self, conn: &mut Conn<TlsStream<TcpStream>>) -> Result<()> {
+        let mut news = self.news.subscribe();
+        news.mark_unchanged();
+        loop {
+            tokio::select! {
+                changed = news.changed() => {
+                    if changed.is_err() {
+                        return Ok(());
+                    }
+                }
+                _ = tokio::time::sleep(KEEPALIVE) => {}
+                said = conn.recv::<ClientMsg>() => {
+                    return match said {
+                        Ok(ClientMsg::Bye) | Err(Error::Closed) => Ok(()),
+                        Ok(_) => Err(Error::Protocol("a message while watching".into())),
+                        Err(e) => Err(e),
+                    };
+                }
+            }
+            conn.send(&HostMsg::News).await?;
+        }
     }
 
     /// Takes the code's one attempt.
@@ -213,6 +461,7 @@ impl Server {
     #[allow(clippy::too_many_arguments)]
     fn confirm(
         &self,
+        code: &str,
         ours: spake2::Spake2<spake2::Ed25519Group>,
         theirs: &[u8],
         exporter: &[u8; 32],
@@ -224,27 +473,31 @@ impl Server {
         let shared = match pairing::finish(ours, theirs) {
             Ok(shared) => shared,
             Err(e) => {
-                self.set_stage(Stage::Failed(e.to_string()));
+                self.set_stage_of(code, Stage::Failed(e.to_string()));
                 return refused(e.to_string());
             }
         };
         if !pairing::confirms(&shared, exporter, false, mac) {
             // One attempt: a wrong code ends the pairing, so a code cannot be guessed online.
-            self.set_stage(Stage::Failed("the code was wrong".into()));
+            self.set_stage_of(code, Stage::Failed("the code was wrong".into()));
             return refused("the code was wrong: the admin must start again");
         }
         match self.host().device_with_key(key) {
             Ok(None) => {}
             _ => {
-                self.set_stage(Stage::Failed("the computer is paired already".into()));
+                self.set_stage_of(code, Stage::Failed("the computer is paired already".into()));
                 return refused("this computer is paired already");
             }
         }
-        self.set_stage(Stage::Finished {
-            device,
-            name,
-            key: key.to_vec(),
-        });
+        self.set_stage_of(
+            code,
+            Stage::Finished {
+                device,
+                name,
+                key: key.to_vec(),
+                secret: pairing::offline_secret(&shared),
+            },
+        );
         HostMsg::PairConfirmed {
             mac: pairing::confirmation(&shared, exporter, true),
         }
@@ -302,7 +555,7 @@ impl Server {
             |pairing| match pairing.as_ref() {
                 Some(p) if p.admin != admin => Some(refused("another admin started a pairing since")),
                 Some(Pairing {
-                    stage: Stage::Finished { device, name, key },
+                    stage: Stage::Finished { device, name, key, .. },
                     ..
                 }) => Some(HostMsg::PairingFinished {
                     device: *device,
@@ -328,25 +581,28 @@ impl Server {
         let Some(admin) = self.admin(session) else {
             return refused("only an admin's computer can pair another");
         };
-        let matches = match self.pairing().as_ref() {
+        let secret = match self.pairing().as_ref() {
             Some(Pairing {
                 admin: started,
-                stage: Stage::Finished { device, key, .. },
+                stage: Stage::Finished {
+                    device, key, secret, ..
+                },
                 ..
-            }) => *started == admin && *device == certificate.device && *key == certificate.signing_key,
-            _ => false,
+            }) if *started == admin && *device == certificate.device && *key == certificate.signing_key => {
+                secret.clone()
+            }
+            _ => return refused("the certificate is not for the computer waiting to pair"),
         };
-        if !matches {
-            return refused("the certificate is not for the computer waiting to pair");
-        }
         let package = {
             let mut host = self.host();
             host.add_device(certificate)
+                .and_then(|()| host.set_offline_secret(certificate.device, &secret))
                 .and_then(|()| host.join_package(certificate.device))
         };
         match package {
             Ok(package) => {
                 self.set_stage(Stage::Approved(Box::new(package)));
+                self.news.send_replace(());
                 HostMsg::Approved
             }
             Err(e) => refused(e.to_string()),

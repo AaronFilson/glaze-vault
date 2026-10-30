@@ -24,11 +24,11 @@ const BENS_PASSWORD = 'bens own password';
 const ADMIN_PASSWORD = 'back in again';
 const NEW_PASSWORD = 'bisque cone nine';
 
-const quote = (text: string) => JSON.stringify(text);
+export const quote = (text: string) => JSON.stringify(text);
 const fileIn = (app: App, name: string) => join(app.files, name);
 
 /** Types a recipe's lines into the editor, adding rows as needed. */
-function recipeLines(lines: [string, string][]): string[] {
+export function recipeLines(lines: [string, string][]): string[] {
   return lines.flatMap(([material, amount], i) => [
     ...(i > 0 ? ['click "Add material"'] : []),
     `type "Material ${i + 1}" ${quote(material)}`,
@@ -37,7 +37,7 @@ function recipeLines(lines: [string, string][]): string[] {
 }
 
 /** Reads the recovery words off the sheet on screen, and types back the ones the check asks for. */
-async function newRecoveryKey(app: App, sheet: string): Promise<string[]> {
+export async function newRecoveryKey(app: App, sheet: string): Promise<string[]> {
   const words = [...sheet.matchAll(/^ *- (\d+) ([a-z]+)$/gm)].map((match) => match[2]);
   if (words.length !== 24) throw new Error(`Expected 24 recovery words:\n\n${sheet}`);
   const check = await app.run(

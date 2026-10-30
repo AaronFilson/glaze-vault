@@ -1,6 +1,7 @@
 # 20. The sync core: a blind host, replicas, and what they send each other
 
-Proposed, 2026-10-21. Changes how [ADR 19](0019-signatures-and-audit-log.md) decides a
+Proposed, 2026-10-21. Photos travel apart from their items, in pieces, and directory changes on a
+replica wait for the host, since [ADR 23](0023-client-mode.md). Changes how [ADR 19](0019-signatures-and-audit-log.md) decides a
 certificate is trusted: by order in the change log, not by time. Stage 4 of [the LAN host plan](../plans/phase-2-lan-host.md#7-staged-delivery),
 its section 3, with no network yet: the host's store, replicas, the messages between them and
 the two sides of a sync, tested in one process. Replaces [ADR 5](0005-lan-host-and-replicas.md)'s

@@ -459,6 +459,46 @@ impl Vault {
         self.load_collections()
     }
 
+    /// After a computer was lost or stolen (plan section 3.11), for an admin: every collection
+    /// any of its people could read gets a new key, so what is saved from now on is out of reach
+    /// of the keys on it, and each of its people but this admin gets new keys and a one-time
+    /// password, which is returned to pass on, since their private keys are on it under their
+    /// passwords.
+    pub fn secure_after_lost(&mut self, people: &[Uuid]) -> Result<Vec<(Uuid, String)>> {
+        self.admin()?;
+        let any_admin = people.iter().any(|p| self.directory.is_admin(*p));
+        let mut collections: Vec<Uuid> = if any_admin {
+            self.directory.collections.iter().map(|c| c.id).collect()
+        } else {
+            self.directory
+                .grants
+                .iter()
+                .filter(|g| people.contains(&g.person))
+                .map(|g| g.collection)
+                .collect()
+        };
+        collections.sort();
+        collections.dedup();
+        let tx = self.conn.unchecked_transaction()?;
+        for collection in &collections {
+            self.new_epoch_in(&tx, collection)?;
+        }
+        tx.commit()?;
+        self.load_collections()?;
+        let mut passwords = Vec::new();
+        let reset: Vec<Uuid> = people
+            .iter()
+            .copied()
+            .filter(|p| *p != self.user_id && self.directory.person(*p).is_some())
+            .collect();
+        for person in &reset {
+            let password = one_time_password();
+            self.reset_person(*person, &password)?;
+            passwords.push((*person, password));
+        }
+        Ok(passwords)
+    }
+
     /// Makes someone an admin: the organization key is sealed to them.
     pub fn make_admin(&mut self, person: Uuid) -> Result<()> {
         let organization = self.admin()?;
@@ -1037,13 +1077,26 @@ fn rekey_person(
         signer,
         signatures::organization_certificate(&vault_id, organization, person, &signing_key, &keys.public),
     )?;
-    let old = keyring.user(&person)?.clone();
-    let mut user = new_user(&vault_id, person, old.name, keys, password, database_key);
+    // On a replica the key file may not have their entry (ADR 20): the directory has their name,
+    // and the new entry is kept only until it reaches the host.
+    let old = keyring.user(&person).ok().cloned();
+    let (name, admin, elsewhere) = match &old {
+        Some(old) => (old.name.clone(), old.organization_key.is_some(), old.elsewhere),
+        None => {
+            let member = directory.person(person).ok_or(Error::NoSuchPerson)?;
+            (member.name.clone(), member.admin, true)
+        }
+    };
+    let mut user = new_user(&vault_id, person, name, keys, password, database_key);
     user.must_set_password = one_time;
-    if old.organization_key.is_some() {
+    user.elsewhere = elsewhere;
+    if admin {
         user.organization_key = Some(seal_organization_key(&vault_id, &user, organization));
     }
-    *super::user_mut(keyring, &person) = user;
+    match old {
+        Some(_) => *super::user_mut(keyring, &person) = user,
+        None => keyring.users.push(user),
+    }
     Ok(())
 }
 
@@ -1141,7 +1194,7 @@ pub(super) fn organization_collections(
 }
 
 pub(super) fn people(keyring: &Keyring) -> Vec<Person> {
-    let mut people: Vec<Person> = keyring.users.iter().map(person).collect();
+    let mut people: Vec<Person> = keyring.users.iter().filter(|u| !u.elsewhere).map(person).collect();
     people.sort_by_key(|p| p.name.to_lowercase());
     people
 }
@@ -1190,6 +1243,7 @@ fn new_user(
         public_key: keys.public.clone(),
         organization_key: None,
         must_set_password: true,
+        elsewhere: false,
     }
 }
 
@@ -1339,6 +1393,17 @@ fn organization_grant_info(vault_id: &Uuid, collection_id: &Uuid, epoch: i64) ->
         epoch_words(epoch)
     )
     .into_bytes()
+}
+
+/// A one-time password to read out: three groups of four letters, about 56 bits.
+fn one_time_password() -> String {
+    const LETTERS: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+    let bytes: [u8; 12] = crypto::random();
+    let letters: String = bytes
+        .iter()
+        .map(|b| LETTERS[*b as usize % LETTERS.len()] as char)
+        .collect();
+    format!("{}-{}-{}", &letters[..4], &letters[4..8], &letters[8..])
 }
 
 #[cfg(test)]

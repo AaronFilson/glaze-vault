@@ -55,6 +55,18 @@ export function useEditor<Content>(empty: Content, same: (a: Content, b: Content
       return { ...prev, current: revision, draft: edited ? update(prev.draft) : revision.content };
     });
 
+  /**
+   * Moves the editor on to its record's newest revision in `heads`, as after a sync brought one
+   * from another computer, unless there are unsaved edits, which a save then makes a fork of.
+   */
+  const follow = (heads: Revision<Content>[]) =>
+    setState((prev) => {
+      if (!prev.current || prev.viewing || !same(prev.draft, prev.current.content)) return prev;
+      const head = heads.find((h) => h.recordId === prev.current?.recordId);
+      if (!head || head.revisionId === prev.current.revisionId) return prev;
+      return { ...prev, current: head, draft: head.content };
+    });
+
   /** Drops the unsaved edits. */
   const discard = () => setState((prev) => ({ ...prev, draft: prev.current?.content ?? empty, viewing: null }));
 
@@ -66,7 +78,7 @@ export function useEditor<Content>(empty: Content, same: (a: Content, b: Content
     ? { recordId: current?.recordId ?? null, revisionId: current?.revisionId ?? null, content: draft }
     : undefined;
 
-  return { current, draft, setDraft, changed, viewing, setViewing, show, open, look, edit, rebase, discard, part };
+  return { current, draft, setDraft, changed, viewing, setViewing, show, open, look, edit, rebase, follow, discard, part };
 }
 
 export type Editor<Content> = ReturnType<typeof useEditor<Content>>;

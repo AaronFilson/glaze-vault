@@ -1,28 +1,39 @@
-//! Host mode in the app (docs/adr/0022-host-mode.md): serving the vault from this computer, which
-//! keeps working on it as the host's first computer, a replica over loopback; pairing other
-//! computers; and stopping. The service itself is `hostd`, installed beside the app, set up by
-//! an administrator's prompt from the system.
+//! The network in the app. Host mode (docs/adr/0022-host-mode.md): serving the vault from this
+//! computer, which keeps working on it as the host's first computer, a replica over loopback;
+//! pairing other computers; and stopping. The service itself is `hostd`, installed beside the
+//! app, set up by an administrator's prompt from the system. Client mode
+//! (docs/adr/0023-client-mode.md): joining a vault a host serves, checking records out, changing
+//! the directory through the host, and leaving; syncing itself is syncing.rs.
 
+use crate::syncing::{SyncStatus, Syncing};
 use crate::{AppState, CommandError, CommandResult, locked};
-use glaze_vault_core::sync::DeviceInfo;
-use glaze_vault_core::{HostStore, Vault};
+use glaze_vault_core::sync::{Checkout, DeviceInfo, DeviceKey};
+use glaze_vault_core::{
+    Error, HOST_BACKUP_EXTENSION, HostBackup, HostStore, Kind, Note, OfflinePolicy, OfflineStatus, Vault,
+};
 use glaze_vault_sync::net::{self, AdminPairing, DEFAULT_PORT, Finished};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::State;
+use tauri::{AppHandle, State, WebviewWindow};
 use uuid::Uuid;
 
-/// What host mode keeps between commands.
+/// What the network keeps between commands.
 #[derive(Default)]
 pub struct Network {
     /// A pairing this admin started, and the computer that used its code, once one has.
     pairing: Mutex<Option<(AdminPairing, Option<Finished>)>>,
+    /// Counts pairings started and cancelled, so a wait for one that was cancelled, or replaced,
+    /// stops and does not put it back.
+    pairings: std::sync::atomic::AtomicU64,
+    cancelled: tokio::sync::Notify,
     /// hostd as a child process, in development with GLAZE_VAULT_HOST_NO_SERVICE.
     child: Mutex<Option<Child>>,
+    /// The key this computer made to join a vault, shown to the admin as a fingerprint.
+    joining: Mutex<Option<DeviceKey>>,
 }
 
 impl Drop for Network {
@@ -37,13 +48,24 @@ fn network_error(error: impl std::fmt::Display) -> CommandError {
     CommandError::new("network", error.to_string())
 }
 
-/// Runs network work to its end on a thread of its own, outside the command's runtime, on the
-/// app's runtime for connections that outlive one command (a pairing).
-/// The work is made on that thread, so what it borrows need only be Send.
+/// Runs network work to its end on a thread of its own, outside the command's runtime, on a
+/// runtime kept for the network, for connections that outlive one command (a pairing). Not the
+/// app's: commands waiting for the vault this work holds could take all its workers, and then
+/// nothing would drive the connection. The work is made on that thread, so what it borrows need
+/// only be Send.
 fn on_network<T: Send, F: Future<Output = T>>(work: impl FnOnce() -> F + Send) -> T {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    let runtime = RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("network")
+            .enable_all()
+            .build()
+            .expect("a runtime for the network")
+    });
     std::thread::scope(|scope| {
         scope
-            .spawn(|| tauri::async_runtime::block_on(work()))
+            .spawn(|| runtime.block_on(work()))
             .join()
             .expect("the network thread")
     })
@@ -76,6 +98,8 @@ pub struct NetworkStatus {
     /// Whether this app can serve: hostd is installed beside it.
     can_host: bool,
     default_port: u16,
+    /// This computer, as the host knows it.
+    device: Option<Uuid>,
 }
 
 #[tauri::command(async)]
@@ -89,6 +113,7 @@ pub fn network_status(state: State<AppState>) -> CommandResult<NetworkStatus> {
         host_address,
         can_host: hostd().is_some(),
         default_port: DEFAULT_PORT,
+        device: vault.device().ok(),
     })
 }
 
@@ -100,22 +125,92 @@ pub struct SyncReport {
     refused: usize,
 }
 
+impl From<glaze_vault_sync::Report> for SyncReport {
+    fn from(report: glaze_vault_sync::Report) -> Self {
+        SyncReport {
+            pulled: report.pulled + report.fetched,
+            accepted: report.accepted,
+            refused: report.refused.len(),
+        }
+    }
+}
+
+/// A sync while this command holds the vault, as in starting and stopping serving.
 fn sync(vault: &mut Vault) -> CommandResult<SyncReport> {
     let address = vault
         .host_address()?
         .ok_or_else(|| network_error("This vault has no host."))?;
     let report = on_network(move || async move { net::sync(vault, &address).await }).map_err(network_error)?;
-    Ok(SyncReport {
-        pulled: report.pulled,
-        accepted: report.accepted,
-        refused: report.refused.len(),
-    })
+    Ok(report.into())
+}
+
+/// Syncs now, as the background sync would, and waits for it.
+#[tauri::command(async)]
+pub fn sync_now(app: AppHandle, syncing: State<Arc<Syncing>>) -> CommandResult<SyncReport> {
+    let syncing = syncing.inner().clone();
+    let report = on_network(|| async move { syncing.sync(&app).await }).map_err(network_error)?;
+    Ok(report.into())
 }
 
 #[tauri::command(async)]
-pub fn sync_now(state: State<AppState>) -> CommandResult<SyncReport> {
+pub fn sync_status(syncing: State<Arc<Syncing>>) -> SyncStatus {
+    syncing.status()
+}
+
+/// Whether this computer fetches photos only when someone opens them (the plan's question 9).
+#[tauri::command(async)]
+pub fn photos_on_demand(state: State<AppState>) -> CommandResult<bool> {
+    crate::with_vault(&state, |vault| Ok(vault.is_replica() && vault.photos_on_demand()?))
+}
+
+#[tauri::command(async)]
+pub fn set_photos_on_demand(state: State<AppState>, syncing: State<Arc<Syncing>>, on: bool) -> CommandResult<()> {
+    crate::with_vault(&state, |vault| vault.set_photos_on_demand(on))?;
+    syncing.poke();
+    Ok(())
+}
+
+/// Fetches a photo someone opened that has not come from the host yet, before any other.
+#[tauri::command(async)]
+pub fn want_photo(state: State<AppState>, syncing: State<Arc<Syncing>>, id: Uuid) -> CommandResult<()> {
+    crate::with_vault(&state, |vault| vault.want_photo(id))?;
+    syncing.poke();
+    Ok(())
+}
+
+/// Runs a change to people, roles or collections (the plan's question 5). On a computer that
+/// syncs with a host, it needs the host: this computer holds the directory there, so no other
+/// changes it meanwhile, catches up, makes the change, and sends it before letting go.
+pub(crate) fn with_host<T: Send>(
+    state: &AppState,
+    action: impl FnOnce(&mut Vault) -> Result<T, Error> + Send,
+) -> CommandResult<T> {
     let mut vault = state.vault.lock().unwrap();
-    sync(vault.as_mut().ok_or_else(locked)?)
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    if !vault.is_replica() {
+        return Ok(action(vault)?);
+    }
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move {
+        let held = net::hold_directory(vault, &address).await;
+        let held = match held {
+            Ok(held) => held,
+            Err(glaze_vault_sync::Error::Protocol(reason)) => return Err(network_error(reason)),
+            Err(_) => return Err(Error::NeedsHost.into()),
+        };
+        if net::sync_holding(vault, &address, &held).await.is_err() {
+            held.release().await;
+            return Err(Error::NeedsHost.into());
+        }
+        let done = action(vault).map_err(CommandError::from);
+        if done.is_ok() {
+            // If this fails the change waits here, and goes with the next sync, which holds the
+            // directory again to send it.
+            let _ = net::sync_holding(vault, &address, &held).await;
+        }
+        held.release().await;
+        done
+    })
 }
 
 /// Serves this vault on the network from this computer, on `port`, advertised as `name`: makes
@@ -242,6 +337,7 @@ pub fn start_pairing(state: State<AppState>, network: State<Network>) -> Command
         code: pairing.code.clone(),
         expires_at: pairing.expires_at,
     };
+    network.cancel();
     *network.pairing.lock().unwrap() = Some((pairing, None));
     Ok(code)
 }
@@ -261,7 +357,17 @@ pub fn wait_for_pairing(network: State<Network>) -> CommandResult<PairingCompute
     let Some((mut pairing, _)) = taken else {
         return Err(network_error("No pairing is open."));
     };
-    let finished = on_network(|| async { pairing.wait().await }).map_err(network_error)?;
+    let started = network.pairings.load(std::sync::atomic::Ordering::SeqCst);
+    let cancelled = network.cancelled.notified();
+    let finished = on_network(|| async {
+        tokio::select! {
+            finished = pairing.wait() => finished.map_err(network_error),
+            () = cancelled => Err(network_error("The pairing was cancelled.")),
+        }
+    })?;
+    if network.pairings.load(std::sync::atomic::Ordering::SeqCst) != started {
+        return Err(network_error("The pairing was cancelled."));
+    }
     let computer = PairingComputer {
         device: finished.device,
         name: finished.name.clone(),
@@ -285,7 +391,16 @@ pub fn approve_pairing(state: State<AppState>, network: State<Network>, people: 
 
 #[tauri::command(async)]
 pub fn cancel_pairing(network: State<Network>) {
+    network.cancel();
     *network.pairing.lock().unwrap() = None;
+}
+
+impl Network {
+    /// Ends a wait for a pairing, if one is running.
+    fn cancel(&self) {
+        self.pairings.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.cancelled.notify_waiters();
+    }
 }
 
 /// The computers that sync with the host, for an admin.
@@ -356,4 +471,342 @@ fn elevated_command(program: &str, args: &[&str]) -> Command {
     let mut command = Command::new("powershell");
     command.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
     command
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundHost {
+    name: String,
+    address: String,
+}
+
+/// The hosts serving a vault on this network, as they advertise themselves.
+#[tauri::command(async)]
+pub fn discover_hosts() -> CommandResult<Vec<FoundHost>> {
+    let found = net::browse(Duration::from_secs(3)).map_err(network_error)?;
+    Ok(found
+        .into_iter()
+        .filter_map(|host| {
+            let ip = host.addresses.iter().find(|a| a.is_ipv4()).or(host.addresses.first())?;
+            let address = match ip {
+                std::net::IpAddr::V6(ip) => format!("[{ip}]:{}", host.port),
+                ip => format!("{ip}:{}", host.port),
+            };
+            Some(FoundHost {
+                name: host.name,
+                address,
+            })
+        })
+        .collect())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Joining {
+    /// For the admin to check against what their screen shows.
+    fingerprint: String,
+    /// This computer's name, for the admin to see.
+    suggested_name: String,
+}
+
+/// Makes the key this computer joins with, and shows its fingerprint, before the code is typed.
+#[tauri::command(async)]
+pub fn prepare_join(state: State<AppState>, network: State<Network>) -> CommandResult<Joining> {
+    if Vault::exists(&state.dir) {
+        return Err(Error::VaultExists.into());
+    }
+    let mut joining = network.joining.lock().unwrap();
+    let device = joining.get_or_insert_with(DeviceKey::generate);
+    Ok(Joining {
+        fingerprint: net::fingerprint(&device.public()),
+        suggested_name: computer_name(),
+    })
+}
+
+/// What the system calls this computer, if it says.
+fn computer_name() -> String {
+    Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|name| name.trim().trim_end_matches(".local").to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "A computer".to_owned())
+}
+
+/// Joins the vault served at `address` with the code an admin read out: waits until the admin
+/// approves this computer, then it is a replica, locked, for its people to sign in to.
+#[tauri::command(async)]
+pub fn join_vault(
+    state: State<AppState>,
+    network: State<Network>,
+    address: String,
+    code: String,
+    name: String,
+) -> CommandResult<()> {
+    let Some(device) = network.joining.lock().unwrap().take() else {
+        return Err(network_error("Start joining again."));
+    };
+    let address = match address.trim() {
+        a if a.contains(':') => a.to_owned(),
+        a => format!("{a}:{DEFAULT_PORT}"),
+    };
+    let name = match name.trim() {
+        "" => computer_name(),
+        name => name.to_owned(),
+    };
+    let dir = state.dir.clone();
+    let cancelled = network.cancelled.notified();
+    let joined = on_network(|| async {
+        tokio::select! {
+            joined = net::pair(&address, code.trim(), &name, &dir, &device) => joined,
+            () = cancelled => Err(glaze_vault_sync::Error::Pairing("joining was cancelled".into())),
+        }
+    });
+    if let Err(e) = joined {
+        // The same key again, so the fingerprint the admin may have noted still holds.
+        *network.joining.lock().unwrap() = Some(device);
+        return Err(match e {
+            glaze_vault_sync::Error::Core(e) => e.into(),
+            e => network_error(e),
+        });
+    }
+    Ok(())
+}
+
+/// Stops waiting for the admin to approve this computer.
+#[tauri::command(async)]
+pub fn cancel_join(network: State<Network>) {
+    network.cancel();
+}
+
+/// Takes this computer out of the vault: its copy is written over and removed. What it has not
+/// synced is lost; the page says how much first.
+#[tauri::command(async)]
+pub fn leave_vault(state: State<AppState>) -> CommandResult<()> {
+    let mut vault = state.vault.lock().unwrap();
+    let open = vault.as_ref().ok_or_else(locked)?;
+    if !open.is_replica() {
+        return Err(Error::NotAllowed.into());
+    }
+    if open.host_address()?.is_some_and(|a| a.starts_with("127.0.0.1:")) {
+        return Err(CommandError::new(
+            "host-here",
+            "This computer serves the vault: stop serving instead.",
+        ));
+    }
+    Ok(vault.take().expect("open").leave()?)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutView {
+    record: Uuid,
+    person: Uuid,
+    name: String,
+    mine: bool,
+    since: i64,
+    expires: i64,
+}
+
+fn views(vault: &Vault, checkouts: Vec<Checkout>) -> Vec<CheckoutView> {
+    let me = vault.me().id;
+    checkouts
+        .into_iter()
+        .map(|c| CheckoutView {
+            record: c.record,
+            person: c.person,
+            name: vault.name_of(c.person).unwrap_or_else(|| "Someone".to_owned()),
+            mine: c.person == me,
+            since: c.since,
+            expires: c.expires,
+        })
+        .collect()
+}
+
+/// Who is changing what, as the host said at the last sync; nothing if this computer has not
+/// heard from it lately, or does not sync.
+#[tauri::command(async)]
+pub fn checkouts(state: State<AppState>) -> CommandResult<Vec<CheckoutView>> {
+    let vault = state.vault.lock().unwrap();
+    let vault = vault.as_ref().ok_or_else(locked)?;
+    Ok(views(vault, vault.checkouts()))
+}
+
+/// Checks a record out for the person signed in, so others see they are changing it, or takes
+/// it over from whoever has it, which the audit log notes.
+#[tauri::command(async)]
+pub fn check_out(
+    state: State<AppState>,
+    syncing: State<Arc<Syncing>>,
+    kind: Kind,
+    record: Uuid,
+    take_over: bool,
+) -> CommandResult<Vec<CheckoutView>> {
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    let before = vault.checkouts().into_iter().find(|c| c.record == record);
+    let asking = &mut *vault;
+    let after = on_network(move || async move { net::check_out(asking, &address, record, take_over).await })
+        .map_err(|_| Error::NeedsHost)?;
+    let me = vault.me().id;
+    if let Some(before) = before
+        && before.person != me
+        && after.iter().any(|c| c.record == record && c.person == me)
+    {
+        vault.note(Note::TookOver {
+            kind,
+            record,
+            from: before.person,
+        })?;
+    }
+    vault.set_checkouts(after.clone());
+    syncing.poke();
+    Ok(views(vault, after))
+}
+
+#[tauri::command(async)]
+pub fn release_checkout(state: State<AppState>, record: Uuid) -> CommandResult<Vec<CheckoutView>> {
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    let asking = &mut *vault;
+    let after = on_network(move || async move { net::release(asking, &address, record).await })
+        .map_err(|_| Error::NeedsHost)?;
+    vault.set_checkouts(after.clone());
+    Ok(views(vault, after))
+}
+
+/// How this computer stands against the vault's rule for computers away from the host (ADR 24).
+#[tauri::command(async)]
+pub fn offline_status(state: State<AppState>) -> CommandResult<OfflineStatus> {
+    let vault = state.vault.lock().unwrap();
+    Ok(vault.as_ref().ok_or_else(locked)?.offline_status()?)
+}
+
+/// Takes an extension code an admin read out.
+#[tauri::command(async)]
+pub fn extend_offline(state: State<AppState>, code: String) -> CommandResult<OfflineStatus> {
+    let mut vault = state.vault.lock().unwrap();
+    Ok(vault.as_mut().ok_or_else(locked)?.extend(&code)?)
+}
+
+#[tauri::command(async)]
+pub fn offline_policy(state: State<AppState>) -> CommandResult<OfflinePolicy> {
+    let vault = state.vault.lock().unwrap();
+    Ok(vault.as_ref().ok_or_else(locked)?.offline_policy())
+}
+
+#[tauri::command(async)]
+pub fn set_offline_policy(state: State<AppState>, policy: OfflinePolicy) -> CommandResult<()> {
+    with_host(&state, move |vault| vault.set_offline_policy(&policy))
+}
+
+/// A code for a computer that has gone too long without syncing, from the host, for an admin.
+#[tauri::command(async)]
+pub fn extension_code(state: State<AppState>, device: Uuid, days: u32) -> CommandResult<String> {
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move { net::extension_code(vault, &address, device, days).await }).map_err(network_error)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revoked {
+    devices: Vec<DeviceInfo>,
+    /// For a computer lost: each of its people's new one-time password, to pass on.
+    passwords: Vec<(Uuid, String)>,
+}
+
+/// Stops a computer syncing, for an admin (plan section 3.11). One lost or stolen also gives new
+/// keys to everything it could read, and new keys and one-time passwords to its people.
+#[tauri::command(async)]
+pub fn revoke_device(state: State<AppState>, device: Uuid, lost: bool) -> CommandResult<Revoked> {
+    let devices = {
+        let mut vault = state.vault.lock().unwrap();
+        let vault = vault.as_mut().ok_or_else(locked)?;
+        let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+        on_network(move || async move { net::revoke_device(vault, &address, device, lost).await })
+            .map_err(network_error)?
+    };
+    let people = devices
+        .iter()
+        .find(|d| d.id == device)
+        .map(|d| d.people.clone())
+        .unwrap_or_default();
+    let passwords = if lost {
+        with_host(&state, move |vault| vault.secure_after_lost(&people))?
+    } else {
+        Default::default()
+    };
+    Ok(Revoked { devices, passwords })
+}
+
+/// The host computer's own backups, newest first, for an admin
+/// (docs/adr/0025-host-backups-from-the-app.md).
+#[tauri::command(async)]
+pub fn host_backups(state: State<AppState>) -> CommandResult<Vec<HostBackup>> {
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move { net::host_backups(vault, &address).await }).map_err(network_error)
+}
+
+/// Has the host put one of its backups back: it starts again in a few seconds, and computers
+/// send again what it lacks as they sync.
+#[tauri::command(async)]
+pub fn restore_host_backup(state: State<AppState>, name: String) -> CommandResult<()> {
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move { net::restore_host_backup(vault, &address, &name).await }).map_err(network_error)
+}
+
+/// Asks where to keep a backup of the host, then fetches one made now. None if the person
+/// cancelled; otherwise when it was made.
+#[tauri::command(async)]
+pub fn save_host_backup(
+    window: WebviewWindow,
+    state: State<AppState>,
+    suggested_name: String,
+) -> CommandResult<Option<i64>> {
+    let Some(path) = crate::save_dialog(
+        &window,
+        &suggested_name,
+        "Glaze Vault host backup",
+        HOST_BACKUP_EXTENSION,
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    let made = on_network(move || async move { net::download_host_backup(vault, &address, &path).await })
+        .map_err(network_error)?;
+    Ok(Some(made))
+}
+
+/// Asks for a backup of the host kept elsewhere, checks it is this vault's, and sends it to the
+/// host to put back. None if the person cancelled; otherwise when it was made.
+#[tauri::command(async)]
+pub fn restore_host_from_file(window: WebviewWindow, state: State<AppState>) -> CommandResult<Option<i64>> {
+    let Some(path) = crate::open_dialog(
+        &window,
+        "Choose a backup of the host",
+        "Glaze Vault host backup",
+        &[HOST_BACKUP_EXTENSION],
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let made = vault.check_host_backup(&path)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    on_network(move || async move { net::restore_host_from_file(vault, &address, &path).await })
+        .map_err(network_error)?;
+    Ok(Some(made))
 }

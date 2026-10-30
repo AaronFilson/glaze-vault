@@ -101,6 +101,8 @@ pub(crate) struct Directory {
     pub vault: Uuid,
     /// The organization's signing key now, which issues certificates: at most one.
     pub organization_keys: Vec<Vec<u8>>,
+    /// The rule for computers away from the host (ADR 24).
+    pub offline_policy: crate::vault::OfflinePolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +221,9 @@ impl Directory {
             .prepare("SELECT signing_key FROM organization_keys WHERE retired_at IS NULL ORDER BY added_at")?
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<Vec<u8>>>>()?;
+        let offline_policy: Option<String> = conn
+            .query_row("SELECT policy FROM offline_policy WHERE id = 1", [], |row| row.get(0))
+            .optional()?;
         Ok(Directory {
             people,
             collections,
@@ -226,6 +231,10 @@ impl Directory {
             roles,
             vault: vault.as_deref().map(parse_id).transpose()?.unwrap_or_default(),
             organization_keys,
+            offline_policy: offline_policy
+                .map(|p| serde_json::from_str(&p))
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 
@@ -578,6 +587,11 @@ impl Directory {
                     return Err(Error::NoSuchRole);
                 }
                 self.check_role(role)
+            }
+            Body::OfflinePolicySet { policy } => {
+                in_charge()?;
+                team()?;
+                policy.check()
             }
             Body::RoleDeleted { role } => {
                 in_charge()?;

@@ -50,6 +50,7 @@ export function Settings({
   access,
   onShared,
   onTeamChanged,
+  onLeft,
   limitFormulas,
   prices
 }: {
@@ -77,6 +78,8 @@ export function Settings({
   onShared: (organizationWords: string[]) => void;
   /** People or collections changed: reads this person's access again. */
   onTeamChanged: () => void;
+  /** This computer left the vault it synced. */
+  onLeft: () => void;
   /** The person's own limit formulas (Limits.tsx). */
   limitFormulas?: React.ReactNode;
   /** The price list (Prices.tsx). */
@@ -143,9 +146,9 @@ export function Settings({
           partly={[recipes, materials, firings].some((list) => exportable<{ collectionId?: string }>(list).length < list.length)}
         />
       )}
-      {admin && team && (
+      {team && (
         <Section title="Network">
-          <Network people={status.people} onChanged={onTeamChanged} />
+          <Network people={status.people} admin={admin} onChanged={onTeamChanged} onLeft={onLeft} />
         </Section>
       )}
       {admin && access && (

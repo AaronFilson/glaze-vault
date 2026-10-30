@@ -13,6 +13,8 @@ import {
   type LimitsContent
 } from '../limits';
 import { ConfirmNotice } from './Deleted';
+import { ForkChoice } from './ForkChoice';
+import { CheckoutBar } from './CheckoutBar';
 
 const CHOICE_KEY = 'glaze-vault.limits';
 
@@ -199,6 +201,24 @@ export function LimitSets({
           ))}
         </div>
       )}
+      {editing?.current && (
+        <ForkChoice
+          kind="limits"
+          head={editing.current}
+          name={editing.current.content.name}
+          readOnly={!canCreate}
+          onResolved={(saved) => {
+            if (saved.deleted) {
+              onDeleted(saved.recordId);
+              setEditing(null);
+            } else {
+              onSaved(saved);
+              start(saved, saved.content);
+            }
+          }}
+        />
+      )}
+      {editing?.current && <CheckoutBar kind="limits" record={editing.current.recordId} readOnly={!canCreate} />}
       {editing && (
         <form className="notice" onSubmit={save}>
           <fieldset>

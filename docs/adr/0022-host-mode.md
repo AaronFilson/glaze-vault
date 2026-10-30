@@ -1,6 +1,7 @@
 # 22. Host mode: hostd as a service, and the host computer's app as its first replica
 
-Proposed, 2026-10-21. Stage 6 of [the LAN host plan](../plans/phase-2-lan-host.md#7-staged-delivery),
+Proposed, 2026-10-21. Syncing from the page is replaced by [ADR 23](0023-client-mode.md)'s
+background sync. Stage 6 of [the LAN host plan](../plans/phase-2-lan-host.md#7-staged-delivery),
 its sections 2.3 and 2.5, on [ADR 20](0020-sync-core.md)'s blind host and [ADR 21](0021-transport-and-pairing.md)'s
 transport. Notes [ADR 6](0006-one-person-first.md)'s "go back to one person", which needs the
 host stopped first. Adds `crates/sync` and `crates/hostd` to [ADR 1](0001-tauri-rust-react.md)'s

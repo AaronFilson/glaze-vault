@@ -3,7 +3,8 @@
 Proposed, 2026-10-14. Made concrete in stages: the directory as events
 ([ADR 18](0018-directory-events.md)), signatures ([ADR 19](0019-signatures-and-audit-log.md)), and
 the host, replicas and what they send ([ADR 20](0020-sync-core.md)), which replaces "batch logs,
-firing logs and notes are events".
+firing logs and notes are events"; the transport, host and client modes (ADRs 21 to 23); and the
+offline limits, revoking computers and the host's backups ([ADR 24](0024-offline-limits-and-revocation.md)).
 
 ## Context
 

@@ -2,8 +2,9 @@
 //! as CBOR, which is compact for bytes and lets fields be added later (plan section 3.8).
 
 use crate::{Error, Result};
+use glaze_vault_core::HostBackup;
 use glaze_vault_core::sync::{
-    Batch, DeviceCertificate, DeviceInfo, Item, JoinPackage, Level, PushResult, Scope, Welcome,
+    Batch, Checkout, Chunk, DeviceCertificate, DeviceInfo, Item, JoinPackage, Level, PushResult, Scope, Welcome,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,30 @@ pub enum ClientMsg {
         items: Vec<Item>,
     },
     Bye,
+    /// A piece of an attachment's bytes from `offset` (plan section 3.7).
+    GetChunk {
+        id: Uuid,
+        offset: u64,
+    },
+    /// A piece of the bytes of an attachment the computer will push.
+    PutChunk(Chunk),
+    /// Who is changing what (plan section 3.5).
+    ListCheckouts,
+    /// Checks a record out for one of the computer's people, or takes it over from whoever has it.
+    CheckOut {
+        record: Uuid,
+        person: Uuid,
+        take_over: bool,
+    },
+    Release {
+        record: Uuid,
+        person: Uuid,
+    },
+    /// Keeps the connection open to hear when there is something new to sync.
+    Watch,
+    /// An admin's computer waits until no other is changing people, roles or collections, and
+    /// holds that until it closes the connection, so their changes cannot clash.
+    LockDirectory,
     /// An admin's computer asks for a pairing code (plan section 4.3).
     StartPairing,
     /// The admin's computer waits for a new computer to use the code.
@@ -44,6 +69,37 @@ pub enum ClientMsg {
     },
     /// An admin's computer asks which computers sync.
     ListDevices,
+    /// An admin's computer asks for a code that lets a computer take changes for `days` more,
+    /// though it has gone too long without syncing (ADR 24).
+    ExtensionCode {
+        device: Uuid,
+        days: u32,
+    },
+    /// An admin's computer stops a computer syncing, as retired or as lost.
+    RevokeDevice {
+        device: Uuid,
+        lost: bool,
+    },
+    /// An admin's computer asks which backups hostd keeps (docs/adr/0025-host-backups-from-the-app.md).
+    ListBackups,
+    /// An admin's computer has hostd put one of them back: it restarts to.
+    RestoreBackup {
+        name: String,
+    },
+    /// An admin's computer asks for a backup of the store now, as one file, to keep elsewhere.
+    RequestBackup,
+    /// A piece of that file from `offset`.
+    GetBackupChunk {
+        offset: u64,
+    },
+    /// A piece of a backup file an admin's computer kept, to put back, from `offset`.
+    PutBackupChunk {
+        offset: u64,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    /// Puts back the backup file just sent.
+    RestoreSent,
     /// A new computer's first SPAKE2 message, from the code.
     Pair {
         #[serde(with = "serde_bytes")]
@@ -65,6 +121,17 @@ pub enum HostMsg {
     Welcome(Welcome),
     Batch(Batch),
     PushResult(PushResult),
+    /// The piece asked for; none if the host has no such attachment for the computer.
+    Chunk(Option<Chunk>),
+    /// How much of the attachment's bytes the host has now.
+    ChunkTaken {
+        next: u64,
+    },
+    Checkouts(Vec<Checkout>),
+    /// Something changed since the computer last heard: time to sync. Also sent now and then, so
+    /// a quiet connection is seen to be alive.
+    News,
+    DirectoryLocked,
     /// The pairing code to read out, and until when it works (ms since the epoch).
     PairingCode {
         code: String,
@@ -79,6 +146,22 @@ pub enum HostMsg {
     },
     Approved,
     Devices(Vec<DeviceInfo>),
+    ExtensionCode {
+        code: String,
+    },
+    Backups(Vec<HostBackup>),
+    /// hostd stops to put the backup back, and starts again in a few seconds.
+    Restoring,
+    /// A backup file is ready to fetch, this long.
+    BackupReady {
+        bytes: u64,
+        made_at: i64,
+    },
+    /// A piece of it; empty past its end.
+    BackupChunk {
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
     /// The host's SPAKE2 message.
     PairChallenge {
         #[serde(with = "serde_bytes")]

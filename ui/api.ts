@@ -1,6 +1,7 @@
 // The Rust core's commands (crates/app/src/lib.rs). The UI makes no access decisions: it shows
 // what these return.
 import { invoke as tauriInvoke, type InvokeArgs, type InvokeOptions } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { BatchSheet } from './batch';
 import type { Firing, FiringContent } from './firing';
 import type { LimitsContent } from './limits';
@@ -260,12 +261,52 @@ export interface NetworkStatus {
   /** hostd is installed beside the app. */
   canHost: boolean;
   defaultPort: number;
+  /** This computer, as the host knows it. */
+  device: string | null;
 }
 
 export interface SyncReport {
   pulled: number;
   accepted: number;
   refused: number;
+}
+
+/** How the background sync stands (docs/adr/0023-client-mode.md), sent as `sync-status`. */
+export interface SyncStatus {
+  replica: boolean;
+  syncing: boolean;
+  /** When the last sync worked, in ms since the epoch. */
+  lastSynced: number | null;
+  error: string | null;
+  /** Whether this computer hears from the host now. */
+  watching: boolean;
+  /** Saved here and not at the host yet. */
+  waiting: number;
+  /** What the host would not take. */
+  refused: number;
+  photosWaiting: number;
+}
+
+/** A host serving a vault on this network, as it advertises itself. */
+export interface FoundHost {
+  name: string;
+  address: string;
+}
+
+export interface Joining {
+  /** This computer's key, for the admin to check. */
+  fingerprint: string;
+  suggestedName: string;
+}
+
+/** Someone changing a record on some computer (plan section 3.5). */
+export interface Checkout {
+  record: string;
+  person: string;
+  name: string;
+  mine: boolean;
+  since: number;
+  expires: number;
 }
 
 export interface PairingCode {
@@ -287,6 +328,42 @@ export interface Device {
   people: string[];
   issuedAt: number;
   revoked: boolean;
+  /** Revoked as lost or stolen. */
+  lost: boolean;
+}
+
+/** The vault's rule for computers that go without reaching the host (docs/adr/0024-offline-limits-and-revocation.md). */
+/** One of the backups hostd keeps on the host computer. */
+export interface HostBackup {
+  name: string;
+  madeAt: number;
+  bytes: number;
+}
+
+export interface OfflinePolicy {
+  nagDays: number;
+  /** Null: changes never stop. */
+  limitDays: number | null;
+  byRole: { role: Role; nagDays: number; limitDays: number | null }[];
+}
+
+/** How this computer stands against that rule. */
+export interface OfflineStatus {
+  applies: boolean;
+  lastSynced: number | null;
+  days: number;
+  nagDays: number;
+  limitDays: number | null;
+  extendedUntil: number | null;
+  nag: boolean;
+  readOnly: boolean;
+  clockBack: boolean;
+}
+
+/** A computer revoked; for one lost, its people's new one-time passwords. */
+export interface Revoked {
+  devices: Device[];
+  passwords: [string, string][];
 }
 
 export const api = {
@@ -385,7 +462,39 @@ export const api = {
   waitForPairing: () => invoke<PairingComputer>('wait_for_pairing'),
   approvePairing: (people: string[]) => invoke<void>('approve_pairing', { people }),
   cancelPairing: () => invoke<void>('cancel_pairing'),
+  /** Stops waiting for the admin to approve this computer. */
+  cancelJoin: () => invoke<void>('cancel_join'),
   devices: () => invoke<Device[]>('devices'),
+  syncStatus: () => invoke<SyncStatus>('sync_status'),
+  /** The hosts that answer on this network within a few seconds. */
+  discoverHosts: () => invoke<FoundHost[]>('discover_hosts'),
+  prepareJoin: () => invoke<Joining>('prepare_join'),
+  /** Waits until an admin approves this computer, then it holds a locked vault to sign in to. */
+  joinVault: (address: string, code: string, name: string) => invoke<void>('join_vault', { address, code, name }),
+  /** Removes this computer's copy of the vault. */
+  leaveVault: () => invoke<void>('leave_vault'),
+  checkouts: () => invoke<Checkout[]>('checkouts'),
+  checkOut: (kind: Kind, record: string, takeOver: boolean) =>
+    invoke<Checkout[]>('check_out', { kind, record, takeOver }),
+  releaseCheckout: (record: string) => invoke<Checkout[]>('release_checkout', { record }),
+  offlineStatus: () => invoke<OfflineStatus>('offline_status'),
+  extendOffline: (code: string) => invoke<OfflineStatus>('extend_offline', { code }),
+  offlinePolicy: () => invoke<OfflinePolicy>('offline_policy'),
+  setOfflinePolicy: (policy: OfflinePolicy) => invoke<void>('set_offline_policy', { policy }),
+  /** For an admin: a code another computer types to take changes for `days` more. */
+  extensionCode: (device: string, days: number) => invoke<string>('extension_code', { device, days }),
+  revokeDevice: (device: string, lost: boolean) => invoke<Revoked>('revoke_device', { device, lost }),
+  /** On a computer that syncs: photos only when opened, rather than all (the plan's question 9). */
+  photosOnDemand: () => invoke<boolean>('photos_on_demand'),
+  setPhotosOnDemand: (on: boolean) => invoke<void>('set_photos_on_demand', { on }),
+  /** Fetches a photo that has not come yet at the next sync, first. */
+  wantPhoto: (id: string) => invoke<void>('want_photo', { id }),
+  /** For an admin on a computer that syncs (docs/adr/0025-host-backups-from-the-app.md). */
+  hostBackups: () => invoke<HostBackup[]>('host_backups'),
+  restoreHostBackup: (name: string) => invoke<void>('restore_host_backup', { name }),
+  /** Null if the person cancelled; otherwise when the backup was made. */
+  saveHostBackup: (suggestedName: string) => invoke<number | null>('save_host_backup', { suggestedName }),
+  restoreHostFromFile: () => invoke<number | null>('restore_host_from_file'),
   auditLog: (limit: number | null) => invoke<AuditLog>('audit_log', { limit }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),
@@ -418,6 +527,39 @@ export const api = {
   /** Downloads, locks the vault, installs and restarts. */
   installUpdate: () => invoke<void>('install_update')
 };
+
+/** Hears an event from the core until the returned function is called. Pages run without one in
+ * tests, where nothing is heard. */
+export function onEvent<T>(name: 'sync-status' | 'vault-changed' | 'vault-removed', handler: (payload: T) => void): () => void {
+  let stop: (() => unknown) | null = null;
+  let stopped = false;
+  // The page may be going, with the app's event system: then nothing is left to stop.
+  const quietly = (unlisten: () => unknown) => {
+    try {
+      Promise.resolve(unlisten()).catch(() => {});
+    } catch {
+      // As above.
+    }
+  };
+  listen<T>(name, (event) => handler(event.payload)).then(
+    (unlisten) => (stopped ? quietly(unlisten) : (stop = unlisten)),
+    () => {}
+  );
+  return () => {
+    stopped = true;
+    if (stop) quietly(stop);
+  };
+}
+
+/** What a sync that brought something sends with `vault-changed`. */
+export interface VaultChanged {
+  pulled: number;
+  fetched: number;
+}
+
+export function errorCode(error: unknown): string | null {
+  return error && typeof error === 'object' && 'code' in error ? String((error as CommandError).code) : null;
+}
 
 export function errorText(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) return String((error as CommandError).message);

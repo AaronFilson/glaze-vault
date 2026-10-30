@@ -4,10 +4,10 @@
 //! computer what its people may read, from metadata alone.
 
 use super::events::{self, Body, SignedBy};
-use super::items;
+use super::items::{self, CHUNK_BYTES};
 use super::signatures::Trust;
 use super::team::PENDING_ORGANIZATION;
-use super::{DATABASE_FILE, Held, Kind, Vault, now_ms, parse_id};
+use super::{DATABASE_FILE, Held, Kind, MAX_ATTACHMENT_BYTES, Vault, now_ms, parse_id};
 use crate::access::Directory;
 use crate::crypto::{self, KeyPair, SealedBox};
 use crate::error::{Error, Result};
@@ -15,8 +15,8 @@ use crate::keyring::PersonEntry;
 use crate::signing::{self, As};
 use crate::store;
 use crate::sync::{
-    Batch, DeviceCertificate, DeviceInfo, EntryItem, Item, JoinPackage, Level, OrganizationEntry, Pulled, PushResult,
-    Refusal, Scope, Welcome,
+    Batch, Checkout, Chunk, DeviceCertificate, DeviceInfo, EntryItem, Item, JoinPackage, Level, OrganizationEntry,
+    Pulled, PushResult, Refusal, Scope, Welcome,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -27,11 +27,13 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 /// The host's secret, from which its X25519 key comes (plan section 2.2).
-const HOST_KEY: &str = "host.key";
+pub(super) const HOST_KEY: &str = "host.key";
 /// The host's database key, sealed to that key.
-const HOST_FILE: &str = "host.json";
+pub(super) const HOST_FILE: &str = "host.json";
 /// How many change log entries a pull reads at a time.
 const PAGE: i64 = 500;
+/// How long a checkout lasts (plan section 3.5).
+const CHECKOUT_MS: i64 = 8 * 60 * 60 * 1000;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +45,17 @@ struct HostFile {
     port: Option<u16>,
 }
 
+/// The host's key from `key_dir`, and the host file and database from `dir`, opened.
+fn open_files(key_dir: &Path, dir: &Path) -> Result<(KeyPair, HostFile, Connection)> {
+    let secret = Zeroizing::new(fs::read(key_dir.join(HOST_KEY))?);
+    let host = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the host key is not valid".into()))?;
+    let file: HostFile = serde_json::from_slice(&fs::read(dir.join(HOST_FILE))?)?;
+    let database_key = crypto::open_key(&host, &file.database_key, &host_info(&file.vault_id))
+        .ok_or_else(|| Error::Corrupt("the host's database key does not open".into()))?;
+    let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
+    Ok((host, file, conn))
+}
+
 fn host_info(vault_id: &Uuid) -> Vec<u8> {
     format!("glaze-vault v1 database-key vault {vault_id} host").into_bytes()
 }
@@ -52,15 +65,22 @@ pub(super) const MODE: &str = "mode";
 
 pub struct HostStore {
     dir: PathBuf,
-    conn: Connection,
+    pub(super) conn: Connection,
     vault: Uuid,
     /// The seed of its TLS key.
     identity: Zeroizing<[u8; 32]>,
     port: Option<u16>,
+    /// Who is changing what, kept only while the host runs: a checkout is advisory, and one lost
+    /// when the host restarts is taken again at the next save.
+    checkouts: Vec<Checkout>,
+    /// Over the network, the computer holding the directory, if any; directory changes from any
+    /// other are refused. None until `guard_directory`: in one process there is nothing to clash.
+    directory_holder: Option<Option<Uuid>>,
 }
 
 /// A computer the host syncs with, from its certificate.
 struct Device {
+    id: Uuid,
     people: Vec<Uuid>,
     revoked: bool,
 }
@@ -269,12 +289,7 @@ fn sent(levels: &[Level], kind: Kind, attachment: bool) -> Option<bool> {
 
 impl HostStore {
     pub fn open(dir: &Path) -> Result<HostStore> {
-        let secret = Zeroizing::new(fs::read(dir.join(HOST_KEY))?);
-        let host = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the host key is not valid".into()))?;
-        let file: HostFile = serde_json::from_slice(&fs::read(dir.join(HOST_FILE))?)?;
-        let database_key = crypto::open_key(&host, &file.database_key, &host_info(&file.vault_id))
-            .ok_or_else(|| Error::Corrupt("the host's database key does not open".into()))?;
-        let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
+        let (host, file, conn) = open_files(dir, dir)?;
         let mode: Option<String> = conn
             .query_row("SELECT value FROM meta WHERE name = ?1", params![MODE], |row| {
                 row.get(0)
@@ -289,7 +304,15 @@ impl HostStore {
             vault: file.vault_id,
             identity: Zeroizing::new(signing::host_key(&host).to_bytes()),
             port: file.port,
+            checkouts: Vec::new(),
+            directory_holder: None,
         })
+    }
+
+    /// Fails unless the store in `backup`, a folder as `back_up` makes, opens with the key of the
+    /// host in `dir`.
+    pub(super) fn check_backup(dir: &Path, backup: &Path) -> Result<()> {
+        open_files(dir, backup).map(|_| ())
     }
 
     pub fn dir(&self) -> &Path {
@@ -338,6 +361,11 @@ impl HostStore {
     }
 
     /// Whether one of a computer's people is an admin now, so it may pair others.
+    /// Whether a computer is paired and not revoked.
+    pub fn is_active_device(&self, device: Uuid) -> Result<bool> {
+        Ok(!self.device(device)?.revoked)
+    }
+
     pub fn is_admin_device(&self, device: Uuid) -> Result<bool> {
         let device = self.device(device)?;
         let directory = Directory::load(&self.conn)?;
@@ -376,7 +404,9 @@ impl HostStore {
     /// Every computer added, revoked ones too, oldest first.
     pub fn devices(&self) -> Result<Vec<DeviceInfo>> {
         self.conn
-            .prepare("SELECT id, name, people, issued_at, revoked_at IS NOT NULL FROM devices ORDER BY issued_at")?
+            .prepare(
+                "SELECT id, name, people, issued_at, revoked_at IS NOT NULL, lost FROM devices ORDER BY issued_at",
+            )?
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -384,16 +414,18 @@ impl HostStore {
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, bool>(4)?,
+                    row.get::<_, bool>(5)?,
                 ))
             })?
             .map(|row| {
-                let (id, name, people, issued_at, revoked) = row?;
+                let (id, name, people, issued_at, revoked, lost) = row?;
                 Ok(DeviceInfo {
                     id: parse_id(&id)?,
                     name,
                     people: serde_json::from_str(&people)?,
                     issued_at,
                     revoked,
+                    lost,
                 })
             })
             .collect()
@@ -410,6 +442,7 @@ impl HostStore {
             .optional()?
             .ok_or(Error::Revoked)?;
         Ok(Device {
+            id,
             people: serde_json::from_str(&people)?,
             revoked,
         })
@@ -482,7 +515,10 @@ impl HostStore {
             });
         }
         let now = levels(&Directory::load(&self.conn)?, &device.people);
-        let mut welcome = Welcome::default();
+        let mut welcome = Welcome {
+            generation: self.generation()?,
+            ..Welcome::default()
+        };
         for (scope, before) in known {
             let Scope::Collection(collection) = scope else {
                 continue;
@@ -579,8 +615,13 @@ impl HostStore {
                 Some(stripped) => Some(Item::Revision(items::revision_item(&self.conn, id, stripped)?)),
                 None => None,
             },
+            // Its bytes follow in pieces, when the computer asks for them (plan section 3.7).
             ("attachment", Some(kind)) => match sent(held, kind, true) {
-                Some(_) => Some(Item::Attachment(items::attachment_item(&self.conn, id)?)),
+                Some(_) => {
+                    let mut attachment = items::attachment_item(&self.conn, id)?;
+                    attachment.ciphertext = Vec::new();
+                    Some(Item::Attachment(attachment))
+                }
                 None => None,
             },
             ("event", _) => {
@@ -655,7 +696,8 @@ impl HostStore {
                 Some((id, refusal)) => {
                     self.conn.execute_batch("ROLLBACK TO items; RELEASE items")?;
                     for item in group {
-                        let why = if item.id() == id {
+                        // The rest wait with it if it is only to be sent again.
+                        let why = if item.id() == id || refusal == Refusal::DirectoryNotHeld {
                             refusal.clone()
                         } else {
                             invalid("it was made with a change that was refused")
@@ -729,6 +771,28 @@ impl HostStore {
                 if elsewhere.is_some() {
                     return Ok(Err(invalid("its record is in another collection")));
                 }
+                // A fork's resolution sets aside only revisions of its own record.
+                for superseded in r
+                    .supersedes
+                    .iter()
+                    .flat_map(|list| list.split(','))
+                    .filter(|id| !id.is_empty())
+                {
+                    let of: Option<(String, String)> = conn
+                        .query_row(
+                            "SELECT record_id, kind FROM revisions WHERE id = ?1",
+                            params![superseded],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )
+                        .optional()?;
+                    match of {
+                        None => return Ok(Err(Refusal::ParentUnknown)),
+                        Some((record, kind)) if record != r.record.to_string() || kind != r.kind.as_str() => {
+                            return Ok(Err(invalid("it sets aside another record's revision")));
+                        }
+                        Some(_) => {}
+                    }
+                }
                 items::store_revision(conn, r)?;
                 let seq = items::log(conn, "revision", &r.id, &r.collection, r.kind, None)?;
                 self.numbered(conn, &r.id)?;
@@ -738,6 +802,24 @@ impl HostStore {
                 if items::exists(conn, "attachments", &a.id)? {
                     return self.again(conn, "attachments", &a.id, &a.signed.signature);
                 }
+                // Sent without its bytes, which came before it in pieces.
+                let whole;
+                let a = if a.ciphertext.is_empty() {
+                    let (_, from) = items::staged_length(conn, &a.id)?;
+                    if from != Some(device.id.to_string()) {
+                        return Ok(Err(Refusal::BytesMissing));
+                    }
+                    let mut joined = a.clone();
+                    joined.ciphertext = items::staged(conn, &a.id)?;
+                    whole = joined;
+                    if store::attachment_hash(&whole.nonce, &whole.ciphertext) != whole.sha256 {
+                        items::unstage(conn, &a.id)?;
+                        return Ok(Err(Refusal::BytesMissing));
+                    }
+                    &whole
+                } else {
+                    a
+                };
                 let signed = match items::check_attachment(&trust, &self.vault, a) {
                     Ok(signed) => signed,
                     Err(refusal) => return Ok(Err(refusal)),
@@ -766,6 +848,7 @@ impl HostStore {
                     return Ok(Err(Refusal::ParentUnknown));
                 }
                 items::store_attachment(conn, a)?;
+                items::unstage(conn, &a.id)?;
                 let seq = items::log(conn, "attachment", &a.id, &a.collection, a.kind, None)?;
                 self.numbered(conn, &a.id)?;
                 Ok(Ok(seq))
@@ -779,6 +862,10 @@ impl HostStore {
                     Err(refusal) => return Ok(Err(refusal)),
                 };
                 let signed = event.signed.clone().expect("event_of signs");
+                if self.directory_holder.is_some_and(|holder| holder != Some(device.id)) && event.body.needs_directory()
+                {
+                    return Ok(Err(Refusal::DirectoryNotHeld));
+                }
                 let Some(actor) = event.actor else {
                     return Ok(Err(Refusal::NotAllowed));
                 };
@@ -792,10 +879,24 @@ impl HostStore {
                 if let Err(error) = directory.check(actor, &event.body) {
                     return Ok(Err(refusal_for(error)));
                 }
-                if let Body::Erased { record, kind, .. } = &event.body
-                    && !all_heads_deleted(conn, record, *kind)?
+                if let Body::Erased {
+                    record,
+                    kind,
+                    collection,
+                } = &event.body
                 {
-                    return Ok(Err(Refusal::ChangedElsewhere));
+                    // The collection it names, which the check allowed, must be the record's own.
+                    let elsewhere: bool = conn.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM revisions WHERE record_id = ?1 AND kind = ?2 AND collection_id != ?3)",
+                        params![record.to_string(), kind.as_str(), collection.to_string()],
+                        |row| row.get(0),
+                    )?;
+                    if elsewhere {
+                        return Ok(Err(Refusal::NotAllowed));
+                    }
+                    if !all_heads_deleted(conn, record, *kind)? {
+                        return Ok(Err(Refusal::ChangedElsewhere));
+                    }
                 }
                 events::apply(conn, &event)?;
                 self.numbered(conn, &event.id).map(Ok)
@@ -923,6 +1024,313 @@ impl HostStore {
             params![id.to_string()],
             |row| row.get(0),
         )?)
+    }
+}
+
+impl HostStore {
+    /// A piece of an attachment's ciphertext from `offset`, if the computer's people may read the
+    /// attachment; none if not, or if the host does not have it.
+    pub fn chunk(&self, device: Uuid, id: Uuid, offset: u64) -> Result<Option<Chunk>> {
+        let device = self.device(device)?;
+        if device.revoked {
+            return Err(Error::Revoked);
+        }
+        let row: Option<(String, String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT kind, collection_id, length(ciphertext) FROM attachments WHERE id = ?1",
+                params![id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((kind, collection, total)) = row else {
+            return Ok(None);
+        };
+        let kind = Kind::parse(&kind).ok_or_else(|| Error::Corrupt(format!("unknown kind {kind}")))?;
+        let levels = levels(&Directory::load(&self.conn)?, &device.people);
+        let held = levels.get(&parse_id(&collection)?).map_or(&[][..], Vec::as_slice);
+        if sent(held, kind, true).is_none() || offset > total as u64 {
+            return Ok(None);
+        }
+        let bytes: Vec<u8> = self.conn.query_row(
+            "SELECT substr(ciphertext, ?2, ?3) FROM attachments WHERE id = ?1",
+            params![id.to_string(), offset as i64 + 1, CHUNK_BYTES as i64],
+            |row| row.get(0),
+        )?;
+        Ok(Some(Chunk {
+            id,
+            offset,
+            total: total as u64,
+            bytes,
+        }))
+    }
+
+    /// Keeps a piece of an attachment a computer is sending, before the attachment itself, and
+    /// says how much of it the host has: a piece from further on is not kept, and one it has
+    /// already is skipped, so a sending that broke off goes on from where it got to.
+    pub fn take_chunk(&mut self, device: Uuid, chunk: &Chunk) -> Result<u64> {
+        let device = self.device(device)?;
+        if device.revoked {
+            return Err(Error::Revoked);
+        }
+        if items::exists(&self.conn, "attachments", &chunk.id)? {
+            return Ok(chunk.total);
+        }
+        if chunk.bytes.len() > CHUNK_BYTES || chunk.total > (MAX_ATTACHMENT_BYTES + 1024) as u64 {
+            return Err(Error::TooLarge);
+        }
+        let (had, from) = items::staged_length(&self.conn, &chunk.id)?;
+        if from.is_some_and(|from| from != device.id.to_string()) {
+            return Err(Error::NotAllowed);
+        }
+        if chunk.offset != had || chunk.bytes.is_empty() {
+            return Ok(had);
+        }
+        if had + chunk.bytes.len() as u64 > chunk.total {
+            return Err(Error::TooLarge);
+        }
+        items::stage(&self.conn, &chunk.id, Some(device.id), chunk.offset, &chunk.bytes)?;
+        Ok(had + chunk.bytes.len() as u64)
+    }
+
+    /// Checks a record out to a person at a computer, who may change it, unless someone else has
+    /// it and `take_over` is not asked; returns the checkouts the computer sees after.
+    /// Refuses changes to people, roles or collections from computers that do not hold the
+    /// directory, from now on; the network server calls it.
+    pub fn guard_directory(&mut self) {
+        self.directory_holder.get_or_insert(None);
+    }
+
+    /// The computer that holds the directory now, or none.
+    pub fn set_directory_holder(&mut self, device: Option<Uuid>) {
+        self.directory_holder = Some(device);
+    }
+
+    pub fn check_out(&mut self, device: Uuid, person: Uuid, record: Uuid, take_over: bool) -> Result<Vec<Checkout>> {
+        let found = self.device(device)?;
+        if found.revoked {
+            return Err(Error::Revoked);
+        }
+        let (kind, collection): (String, String) = self
+            .conn
+            .query_row(
+                "SELECT kind, collection_id FROM revisions WHERE record_id = ?1 LIMIT 1",
+                params![record.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        let kind = Kind::parse(&kind).ok_or_else(|| Error::Corrupt(format!("unknown kind {kind}")))?;
+        if !found.people.contains(&person)
+            || !Directory::load(&self.conn)?.may_change(person, parse_id(&collection)?, kind)
+        {
+            return Err(Error::NotAllowed);
+        }
+        self.prune_checkouts();
+        let held = self.checkouts.iter().position(|c| c.record == record);
+        if let Some(at) = held {
+            if self.checkouts[at].person != person && !take_over {
+                return self.checkouts(device);
+            }
+            self.checkouts.remove(at);
+        }
+        let now = now_ms();
+        self.checkouts.push(Checkout {
+            record,
+            person,
+            device,
+            since: now,
+            expires: now + CHECKOUT_MS,
+        });
+        self.checkouts(device)
+    }
+
+    /// Ends a person's checkout of a record.
+    pub fn release(&mut self, device: Uuid, person: Uuid, record: Uuid) -> Result<Vec<Checkout>> {
+        let found = self.device(device)?;
+        if found.revoked || !found.people.contains(&person) {
+            return Err(Error::NotAllowed);
+        }
+        self.checkouts.retain(|c| !(c.record == record && c.person == person));
+        self.checkouts(device)
+    }
+
+    /// The checkouts of records a computer's people read.
+    pub fn checkouts(&mut self, device: Uuid) -> Result<Vec<Checkout>> {
+        let found = self.device(device)?;
+        if found.revoked {
+            return Err(Error::Revoked);
+        }
+        self.prune_checkouts();
+        let levels = levels(&Directory::load(&self.conn)?, &found.people);
+        let mut seen = Vec::new();
+        for checkout in &self.checkouts {
+            let row: Option<(String, String)> = self
+                .conn
+                .query_row(
+                    "SELECT collection_id, kind FROM revisions WHERE record_id = ?1 LIMIT 1",
+                    params![checkout.record.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let Some((collection, kind)) = row else { continue };
+            let held = levels.get(&parse_id(&collection)?).map_or(&[][..], Vec::as_slice);
+            if Kind::parse(&kind).is_some_and(|kind| sent(held, kind, false).is_some()) {
+                seen.push(checkout.clone());
+            }
+        }
+        Ok(seen)
+    }
+
+    fn prune_checkouts(&mut self) {
+        let now = now_ms();
+        self.checkouts.retain(|c| c.expires > now);
+    }
+}
+
+/// The store's generation, in `meta`.
+const GENERATION: &str = "generation";
+/// How many of its daily backups the host keeps (the plan's question 12).
+pub const BACKUPS_KEPT: usize = 14;
+/// What a backup of the host's store holds, besides its database: the database key, sealed to
+/// the host's key, which stays where it is.
+pub(super) const BACKUP_PREFIX: &str = "backup-";
+
+impl HostStore {
+    /// The store's generation (plan section 3.9): new each time it is restored from a backup, so
+    /// computers know to send again what it lost. Made when first asked for.
+    pub fn generation(&self) -> Result<Uuid> {
+        let stored: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE name = ?1", params![GENERATION], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if let Some(stored) = stored {
+            return parse_id(&stored);
+        }
+        let generation = Uuid::new_v4();
+        self.conn.execute(
+            "INSERT INTO meta (name, value) VALUES (?1, ?2)",
+            params![GENERATION, generation.to_string()],
+        )?;
+        Ok(generation)
+    }
+
+    /// Keeps the secret a computer and the host share from pairing, which extension codes are
+    /// made with.
+    pub fn set_offline_secret(&mut self, device: Uuid, secret: &[u8]) -> Result<()> {
+        self.conn.execute(
+            "UPDATE devices SET offline_secret = ?1 WHERE id = ?2",
+            params![secret, device.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// A code that lets a computer take changes for `days` more from today, though it has gone
+    /// too long without syncing (ADR 24). Whoever asks must be an admin's computer: the server
+    /// checks.
+    pub fn extension_code(&self, device: Uuid, days: u32) -> Result<String> {
+        if !(1..=99).contains(&days) {
+            return Err(Error::InvalidSetting("An extension gives from 1 to 99 days."));
+        }
+        let (secret, revoked): (Option<Vec<u8>>, bool) = self
+            .conn
+            .query_row(
+                "SELECT offline_secret, revoked_at IS NOT NULL FROM devices WHERE id = ?1",
+                params![device.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        let secret = secret.filter(|_| !revoked).ok_or(Error::NotAllowed)?;
+        let today = now_ms().div_euclid(24 * 60 * 60 * 1000);
+        Ok(super::offline::extension_code(&secret, device, today, days))
+    }
+
+    /// Stops a computer syncing (plan section 3.11). At its next connection it is told so, and
+    /// removes its copy. One `lost` is marked so: its admin gives new keys to what it could read
+    /// and resets its people, from their own computer.
+    pub fn revoke_device(&mut self, device: Uuid, lost: bool) -> Result<DeviceInfo> {
+        let changed = self.conn.execute(
+            "UPDATE devices SET revoked_at = coalesce(revoked_at, ?1), lost = max(lost, ?2) WHERE id = ?3",
+            params![now_ms(), lost, device.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(Error::NotFound);
+        }
+        self.checkouts.retain(|c| c.device != device);
+        self.devices()?
+            .into_iter()
+            .find(|d| d.id == device)
+            .ok_or(Error::NotFound)
+    }
+
+    /// Copies the store into a new folder in `backups`, and keeps only the newest
+    /// [`BACKUPS_KEPT`]. The copy is as encrypted as the store, and opens with the host's key.
+    pub fn back_up(&mut self, backups: &Path) -> Result<PathBuf> {
+        self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        fs::create_dir_all(backups)?;
+        // Named by when, so they sort oldest first; two in one millisecond get a number after.
+        let at = now_ms();
+        let folder = (0..)
+            .map(|n| match n {
+                0 => backups.join(format!("{BACKUP_PREFIX}{at}")),
+                n => backups.join(format!("{BACKUP_PREFIX}{at}-{n}")),
+            })
+            .find(|folder| !folder.exists())
+            .expect("a free name");
+        let partial = folder.with_extension("partial");
+        fs::create_dir_all(&partial)?;
+        fs::copy(self.dir.join(DATABASE_FILE), partial.join(DATABASE_FILE))?;
+        fs::copy(self.dir.join(HOST_FILE), partial.join(HOST_FILE))?;
+        fs::rename(&partial, &folder)?;
+        let mut made: Vec<PathBuf> = fs::read_dir(backups)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.is_dir()
+                    && p.extension().is_none()
+                    && p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with(BACKUP_PREFIX))
+            })
+            .collect();
+        made.sort();
+        while made.len() > BACKUPS_KEPT {
+            fs::remove_dir_all(made.remove(0))?;
+        }
+        Ok(folder)
+    }
+
+    /// Puts the store in `dir` back as `backup` (a folder `back_up` made) had it, with a new
+    /// generation. What reached the host since is gone from it until computers send it again.
+    /// Computers paired since cannot sync, and pair again.
+    pub fn restore(dir: &Path, backup: &Path) -> Result<()> {
+        for file in [DATABASE_FILE, HOST_FILE] {
+            if !backup.join(file).is_file() {
+                return Err(Error::NotABackup);
+            }
+        }
+        // Copied beside the store first, so a copy that fails leaves the store as it was.
+        HostStore::check_backup(dir, backup)?;
+        let staged = |file: &str| dir.join(format!("{file}.restoring"));
+        for file in [DATABASE_FILE, HOST_FILE] {
+            if let Err(e) = fs::copy(backup.join(file), staged(file)) {
+                let _ = fs::remove_file(staged(DATABASE_FILE));
+                let _ = fs::remove_file(staged(HOST_FILE));
+                return Err(e.into());
+            }
+        }
+        for stale in ["-wal", "-shm"] {
+            let _ = fs::remove_file(dir.join(format!("{DATABASE_FILE}{stale}")));
+        }
+        fs::rename(staged(DATABASE_FILE), dir.join(DATABASE_FILE))?;
+        fs::rename(staged(HOST_FILE), dir.join(HOST_FILE))?;
+        let host = HostStore::open(dir)?;
+        host.conn.execute(
+            "INSERT INTO meta (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+            params![GENERATION, Uuid::new_v4().to_string()],
+        )?;
+        Ok(())
     }
 }
 

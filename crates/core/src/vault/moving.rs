@@ -20,6 +20,7 @@ impl Vault {
         if records.len() > MAX_BATCH {
             return Err(Error::TooLarge);
         }
+        self.writable()?;
         let tx = self.conn.unchecked_transaction()?;
         for &(kind, record_id) in records {
             let from: String = tx

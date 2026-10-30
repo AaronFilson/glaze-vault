@@ -25,6 +25,18 @@ impl Vault {
     /// for it (HostStore::join_package) and its own key. It holds nothing until it first syncs;
     /// its people sign in with the passwords they have.
     pub fn join(dir: &Path, package: &JoinPackage, device: &DeviceKey) -> Result<()> {
+        Vault::join_at(dir, package, device, None, None)
+    }
+
+    /// Joins as `join` does, keeping where the host was reached, to sync with it there, and the
+    /// secret this computer and the host share from pairing, for extension codes (ADR 24).
+    pub fn join_at(
+        dir: &Path,
+        package: &JoinPackage,
+        device: &DeviceKey,
+        address: Option<&str>,
+        offline_secret: Option<&[u8]>,
+    ) -> Result<()> {
         if Vault::exists(dir) {
             return Err(Error::VaultExists);
         }
@@ -77,6 +89,18 @@ impl Vault {
             ("host_key", hex::encode(&package.host_key)),
         ] {
             tx.execute("INSERT INTO meta (name, value) VALUES (?1, ?2)", params![name, value])?;
+        }
+        if let Some(address) = address {
+            tx.execute(
+                "INSERT INTO meta (name, value) VALUES ('host_address', ?1)",
+                params![address],
+            )?;
+        }
+        if let Some(secret) = offline_secret {
+            tx.execute(
+                "INSERT INTO meta (name, value) VALUES (?1, ?2)",
+                params![super::offline::SECRET, hex::encode(secret)],
+            )?;
         }
         for entry in &package.entries {
             put_entry(&tx, entry, false)?;
@@ -147,16 +171,69 @@ impl Vault {
             return Err(Error::Revoked);
         }
         let tx = self.conn.unchecked_transaction()?;
+        // The host was restored from a backup (plan section 3.9): pull everything again, and send
+        // again what this computer's people saved, which it may have lost. Others' computers send
+        // theirs; what was erased here stays erased.
+        if !welcome.generation.is_nil() {
+            let known: Option<String> = tx
+                .query_row("SELECT value FROM meta WHERE name = 'host_generation'", [], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            let generation = welcome.generation.to_string();
+            if known.as_deref().is_some_and(|known| known != generation) {
+                tx.execute("UPDATE sync_state SET cursor = 0", [])?;
+                tx.execute("DELETE FROM refused", [])?;
+                let people: Vec<String> = self.keyring.users.iter().map(|u| u.id.to_string()).collect();
+                let people = serde_json::to_string(&people)?;
+                tx.execute(
+                    "UPDATE changes SET host_seq = NULL WHERE
+                        (item = 'revision' AND item_id IN
+                            (SELECT id FROM revisions WHERE author_id IN (SELECT value FROM json_each(?1))))
+                     OR (item = 'attachment' AND item_id IN
+                            (SELECT id FROM attachments WHERE length(ciphertext) > 0
+                             AND author_id IN (SELECT value FROM json_each(?1))))
+                     OR (item = 'event' AND item_id IN
+                            (SELECT id FROM events WHERE actor_id IN (SELECT value FROM json_each(?1))))",
+                    params![people],
+                )?;
+            }
+            tx.execute(
+                "INSERT INTO meta (name, value) VALUES ('host_generation', ?1)
+                 ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+                params![generation],
+            )?;
+        }
         for scope in welcome.reset.iter().chain(&welcome.dropped) {
             if let Scope::Collection(collection) = scope {
                 let collection = collection.to_string();
-                tx.execute("DELETE FROM changes WHERE collection_id = ?1", params![collection])?;
-                for table in ["revisions", "attachments"] {
+                // Pulled again from the start; what was saved here and has not reached the host
+                // stays, to be sealed again and sent, unless this computer may no longer read it.
+                // With the revisions those build on, which the pull brings again anyway.
+                let keep = if welcome.reset.contains(scope) {
+                    "AND id NOT IN (WITH RECURSIVE kept(id) AS (
+                         SELECT item_id FROM changes WHERE collection_id = ?1 AND host_seq IS NULL
+                         UNION SELECT r.parent_id FROM revisions r JOIN kept ON r.id = kept.id
+                         WHERE r.parent_id IS NOT NULL)
+                     SELECT id FROM kept)"
+                } else {
+                    ""
+                };
+                for table in ["attachments", "revisions"] {
                     tx.execute(
-                        &format!("DELETE FROM {table} WHERE collection_id = ?1"),
+                        &format!("DELETE FROM {table} WHERE collection_id = ?1 {keep}"),
                         params![collection],
                     )?;
                 }
+                let keep_changes = if keep.is_empty() {
+                    ""
+                } else {
+                    "AND host_seq IS NOT NULL"
+                };
+                tx.execute(
+                    &format!("DELETE FROM changes WHERE collection_id = ?1 {keep_changes}"),
+                    params![collection],
+                )?;
                 tx.execute("DELETE FROM sync_state WHERE scope = ?1", params![collection])?;
             }
         }
@@ -275,6 +352,23 @@ impl Vault {
         Ok(pending)
     }
 
+    /// Whether changes to people, roles or collections made here wait for the host: a sync sends
+    /// them only while this computer holds the directory.
+    pub fn directory_waiting(&self) -> Result<bool> {
+        let bodies = self
+            .conn
+            .prepare(
+                "SELECT e.body FROM changes c JOIN events e ON e.id = c.item_id
+                 WHERE c.host_seq IS NULL AND c.item = 'event' AND c.item_id NOT IN (SELECT item_id FROM refused)",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(bodies
+            .iter()
+            .filter_map(|b| serde_json::from_str::<Body>(b).ok())
+            .any(|b| b.needs_directory()))
+    }
+
     /// The key file entries changed on this computer since the host last had them, signed by this
     /// person: their own, or anyone's for an admin.
     fn changed_entries(&self) -> Result<Vec<EntryItem>> {
@@ -318,6 +412,7 @@ impl Vault {
     /// stays here, set aside, to show.
     pub fn apply_push_result(&mut self, result: &PushResult, pushed: &[Item]) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        let mut gone_elsewhere = Vec::new();
         for (id, seq) in &result.accepted {
             tx.execute(
                 "UPDATE changes SET host_seq = ?1 WHERE item_id = ?2 AND host_seq IS NULL",
@@ -325,12 +420,14 @@ impl Vault {
             )?;
             if let Some(Item::Entry(entry)) = pushed.iter().find(|item| item.id() == *id) {
                 put_entry(&tx, entry, false)?;
+                gone_elsewhere.push(entry.person);
             }
         }
         for (id, refusal) in &result.refused {
             let id_text = id.to_string();
             match refusal {
-                Refusal::StaleEpoch { .. } => {}
+                // Sealed again, its bytes sent, or the directory held, before the next push.
+                Refusal::StaleEpoch { .. } | Refusal::BytesMissing | Refusal::DirectoryNotHeld => {}
                 Refusal::Erased => {
                     tx.execute("DELETE FROM changes WHERE item_id = ?1", params![id_text])?;
                     tx.execute("DELETE FROM attachments WHERE id = ?1", params![id_text])?;
@@ -367,6 +464,20 @@ impl Vault {
             }
         }
         tx.commit()?;
+        // An entry reset here for someone who signs in elsewhere has gone on to their computers.
+        if self
+            .keyring
+            .users
+            .iter()
+            .any(|u| u.elsewhere && gone_elsewhere.contains(&u.id))
+        {
+            let mut keyring = self.keyring.clone();
+            keyring
+                .users
+                .retain(|u| !(u.elsewhere && gone_elsewhere.contains(&u.id)));
+            keyring.write(&self.dir.join(KEYRING_FILE))?;
+            self.keyring = keyring;
+        }
         self.load_collections()
     }
 
@@ -508,6 +619,190 @@ impl Vault {
     }
 }
 
+/// How long what the host said of checkouts holds, unless a sync says it again: past that, this
+/// computer is taken to be offline, and saves as it would without a host (plan section 3.5).
+const CHECKOUTS_HOLD_MS: i64 = 2 * 60 * 1000;
+
+impl Vault {
+    /// The attachments pulled without their bytes, newest first, with how much of each has come.
+    pub fn missing_bytes(&self) -> Result<Vec<(Uuid, u64)>> {
+        let mut ids = self
+            .conn
+            .prepare("SELECT id FROM attachments WHERE length(ciphertext) = 0 ORDER BY created_at DESC")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // Those someone opened first; with photos on demand, only those.
+        let wanted = self.wanted_photos()?;
+        ids.sort_by_key(|id| !wanted.contains(id));
+        if self.photos_on_demand()? {
+            ids.retain(|id| wanted.contains(id));
+        }
+        ids.iter()
+            .map(|id| {
+                let id = parse_id(id)?;
+                Ok((id, items::staged_length(&self.conn, &id)?.0))
+            })
+            .collect()
+    }
+
+    /// Whether this computer fetches photos only when someone opens them (the plan's question 9),
+    /// rather than all of them, which is the default: for a laptop short of room.
+    pub fn photos_on_demand(&self) -> Result<bool> {
+        Ok(self.meta(PHOTOS_ON_DEMAND)?.as_deref() == Some("1"))
+    }
+
+    pub fn set_photos_on_demand(&mut self, on: bool) -> Result<()> {
+        self.set_meta(PHOTOS_ON_DEMAND, if on { "1" } else { "0" })
+    }
+
+    fn wanted_photos(&self) -> Result<Vec<String>> {
+        Ok(self
+            .meta(PHOTOS_WANTED)?
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or_default())
+    }
+
+    /// Fetches this photo at the next sync, before any other: someone opened it.
+    pub fn want_photo(&mut self, id: Uuid) -> Result<()> {
+        let missing: Vec<String> = self
+            .conn
+            .prepare("SELECT id FROM attachments WHERE length(ciphertext) = 0")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut wanted = self.wanted_photos()?;
+        wanted.retain(|w| missing.contains(w));
+        let id = id.to_string();
+        if missing.contains(&id) && !wanted.contains(&id) {
+            wanted.push(id);
+        }
+        self.set_meta(PHOTOS_WANTED, &serde_json::to_string(&wanted)?)
+    }
+
+    /// Keeps a piece of an attachment's bytes from the host. Once they have all come they are
+    /// checked against the hash its signature covers, and kept with it. Whether it is whole now.
+    pub fn take_chunk(&mut self, chunk: &crate::sync::Chunk) -> Result<bool> {
+        let row: Option<(Vec<u8>, Vec<u8>, i64)> = self
+            .conn
+            .query_row(
+                "SELECT nonce, sha256, length(ciphertext) FROM attachments WHERE id = ?1",
+                params![chunk.id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((nonce, sha256, length)) = row else {
+            items::unstage(&self.conn, &chunk.id)?;
+            return Ok(false);
+        };
+        if length > 0 {
+            return Ok(true);
+        }
+        let (had, _) = items::staged_length(&self.conn, &chunk.id)?;
+        if chunk.offset != had || had + chunk.bytes.len() as u64 > chunk.total {
+            return Err(Error::Corrupt("a piece of a photo came out of order".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        items::stage(&tx, &chunk.id, None, chunk.offset, &chunk.bytes)?;
+        let whole = had + chunk.bytes.len() as u64 == chunk.total;
+        if whole {
+            let ciphertext = items::staged(&tx, &chunk.id)?;
+            items::unstage(&tx, &chunk.id)?;
+            if store::attachment_hash(&nonce, &ciphertext) != sha256 {
+                tx.commit()?;
+                return Err(Error::BadSignature);
+            }
+            tx.execute(
+                "UPDATE attachments SET ciphertext = ?1 WHERE id = ?2",
+                params![ciphertext, chunk.id.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(whole)
+    }
+
+    /// An attachment's ciphertext, to send to the host in pieces.
+    pub fn attachment_bytes(&self, id: Uuid) -> Result<Vec<u8>> {
+        Ok(self.conn.query_row(
+            "SELECT ciphertext FROM attachments WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// How many things saved here wait to reach the host, leaving out what it would not take.
+    pub fn waiting(&self) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT count(DISTINCT item_id) FROM changes WHERE host_seq IS NULL
+             AND item IN ('revision', 'attachment', 'event') AND item_id NOT IN (SELECT item_id FROM refused)",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// The organization's signing key, which the host advertises a tag of (ADR 21), so this
+    /// computer can find its host again when its address changes.
+    pub fn organization_signing_key(&self) -> Option<Vec<u8>> {
+        self.directory.organization_keys.last().cloned()
+    }
+
+    /// What the host just said of who is changing what.
+    pub fn set_checkouts(&mut self, checkouts: Vec<crate::sync::Checkout>) {
+        self.checkouts = Some((now_ms(), checkouts));
+    }
+
+    /// Who is changing what, as the host said in the last little while; nothing if it has not.
+    pub fn checkouts(&self) -> Vec<crate::sync::Checkout> {
+        match &self.checkouts {
+            Some((at, checkouts)) if now_ms() - at < CHECKOUTS_HOLD_MS => checkouts.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The name of someone in the vault.
+    pub fn name_of(&self, person: Uuid) -> Option<String> {
+        self.directory.person(person).map(|p| p.name.clone())
+    }
+
+    /// The name of whoever else has a record checked out, if someone has.
+    pub(super) fn checked_out_by(&self, record: Uuid) -> Option<String> {
+        self.checkouts()
+            .into_iter()
+            .find(|c| c.record == record && c.person != self.user_id)
+            .map(|c| {
+                self.directory
+                    .person(c.person)
+                    .map_or_else(|| "Someone".to_owned(), |p| p.name.clone())
+            })
+    }
+
+    /// Takes this computer out of the vault (plan section 2.3): the replica's files are written
+    /// over and removed. What was not synced is lost; the screen says so first.
+    pub fn leave(self) -> Result<()> {
+        if !self.is_replica() {
+            return Err(Error::NotAllowed);
+        }
+        let dir = self.dir.clone();
+        drop(self);
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_file() {
+                let length = fs::metadata(&path)?.len();
+                let mut file = fs::OpenOptions::new().write(true).open(&path)?;
+                let zeros = vec![0u8; 64 * 1024];
+                let mut left = length;
+                while left > 0 {
+                    let n = left.min(zeros.len() as u64) as usize;
+                    std::io::Write::write_all(&mut file, &zeros[..n])?;
+                    left -= n as u64;
+                }
+                file.sync_all()?;
+            }
+        }
+        fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+}
+
 /// Whether a record has a tombstone here.
 fn erased_here(conn: &Connection, record: &Uuid) -> Result<bool> {
     Ok(conn
@@ -526,7 +821,36 @@ fn take_entry(conn: &Connection, keyring: &mut Keyring, database_key: &crypto::K
     let entry = item
         .parsed()
         .ok_or_else(|| Error::Corrupt(format!("the key file entry of {} does not read", item.person)))?;
+    // Only an entry with the keys the directory, whose events are each checked, gives the person:
+    // a host that was tampered with cannot put other keys in this computer's key file.
+    let public_key: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT public_key FROM people WHERE id = ?1",
+            params![item.person.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if entry.id != item.person || public_key.as_ref() != Some(&entry.public_key) {
+        return Err(Error::Corrupt(format!(
+            "the key file entry of {} does not match the directory",
+            item.person
+        )));
+    }
     let vault_id = keyring.vault_id;
+    // An entry changed here that has not reached the host yet, such as a password chosen at a
+    // first sign-in, stays: it is pushed after this pull, and the host keeps the newer.
+    if let Some(user) = keyring.users.iter().find(|u| u.id == entry.id) {
+        let known: Option<String> = conn
+            .query_row(
+                "SELECT entry FROM key_entries WHERE person_id = ?1",
+                params![entry.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if known.is_some_and(|known| known != serde_json::to_string(&PersonEntry::of(user)).unwrap_or_default()) {
+            return Ok(());
+        }
+    }
     let sealed = match keyring.users.iter().find(|u| u.id == entry.id) {
         Some(user) if user.public_key == entry.public_key => user.database_key.clone(),
         _ => crypto::seal_key(
@@ -543,10 +867,15 @@ fn take_entry(conn: &Connection, keyring: &mut Keyring, database_key: &crypto::K
     put_entry(conn, item, false)
 }
 
+/// Where a replica keeps whether it fetches photos only when opened, and which were (meta).
+const PHOTOS_ON_DEMAND: &str = "photos_on_demand";
+const PHOTOS_WANTED: &str = "photos_wanted";
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::access::Role;
+    use crate::vault::items::CHUNK_BYTES;
     use crate::vault::{Capabilities, HostStore, Kind};
     use serde_json::json;
     use tempfile::TempDir;
@@ -567,6 +896,14 @@ mod tests {
             vault.apply_batch(&batch).unwrap();
             if !batch.more {
                 break;
+            }
+        }
+        for (id, mut offset) in vault.missing_bytes().unwrap() {
+            while let Some(chunk) = host.chunk(device, id, offset).unwrap() {
+                offset += chunk.bytes.len() as u64;
+                if vault.take_chunk(&chunk).unwrap() {
+                    break;
+                }
             }
         }
         let pending = vault.pending(usize::MAX).unwrap();
@@ -1039,6 +1376,455 @@ mod tests {
                 "SELECT count(*) FROM collections WHERE name = 'Glazes'"
             ),
             0
+        );
+    }
+
+    #[test]
+    fn a_directory_change_waits_until_its_computer_holds_the_directory() {
+        let mut t = team();
+        t.host.guard_directory();
+        t.computers[0].create_collection("Glazes").unwrap();
+        assert!(t.computers[0].directory_waiting().unwrap());
+        // Another computer holds it: the collection waits, not set aside.
+        let device = t.computers[1].device().unwrap();
+        t.host.set_directory_holder(Some(device));
+        let result = sync(&mut t.computers[0], &mut t.host);
+        assert!(
+            result.refused.iter().all(|(_, why)| *why == Refusal::DirectoryNotHeld),
+            "{:?}",
+            result.refused
+        );
+        assert!(t.computers[0].directory_waiting().unwrap());
+        let ana = t.computers[0].device().unwrap();
+        t.host.set_directory_holder(Some(ana));
+        let result = sync(&mut t.computers[0], &mut t.host);
+        assert!(result.refused.is_empty(), "{:?}", result.refused);
+        assert!(!t.computers[0].directory_waiting().unwrap());
+        assert_eq!(t.computers[0].waiting().unwrap(), 0);
+    }
+
+    #[test]
+    fn both_computers_list_the_version_the_host_took_last_first() {
+        let mut t = team();
+        let shino = head(&t.computers[0], t.recipe).revision_id;
+        // Ben saves first by the clock, but reaches the host last.
+        t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "Ben's", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        t.computers[0]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "Ana's", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[0], &mut t.host);
+        sync(&mut t.computers[1], &mut t.host);
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(head(&t.computers[0], t.recipe).content["name"], "Ben's");
+        assert_eq!(head(&t.computers[1], t.recipe).content["name"], "Ben's");
+    }
+
+    #[test]
+    fn a_collection_pulled_again_keeps_what_was_saved_here_and_not_sent() {
+        let mut t = team();
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let saved = t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "Offline", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        // As when the host says what Ben holds there changed.
+        let device = t.computers[1].device().unwrap();
+        let (_, levels) = t.computers[1].sync_state().unwrap();
+        let mut welcome = t.host.hello(device, &levels).unwrap();
+        welcome.reset.push(Scope::Collection(t.shared));
+        t.computers[1].apply_welcome(&welcome).unwrap();
+        assert_eq!(t.computers[1].waiting().unwrap(), 1);
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(
+            result.accepted.iter().any(|(id, _)| *id == saved.revision_id),
+            "{result:?}"
+        );
+        assert_eq!(head(&t.computers[1], t.recipe).content["name"], "Offline");
+    }
+
+    #[test]
+    fn with_photos_on_demand_a_computer_fetches_only_those_opened() {
+        let mut t = team();
+        t.computers[0].set_photos_on_demand(true).unwrap();
+        let first = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/jpeg", b"first")
+            .unwrap();
+        let second = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/jpeg", b"second")
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+        sync(&mut t.computers[0], &mut t.host);
+        assert!(matches!(t.computers[0].attachment(first.id), Err(Error::NotFetched)));
+        assert!(matches!(t.computers[0].attachment(second.id), Err(Error::NotFetched)));
+        assert!(t.computers[0].missing_bytes().unwrap().is_empty());
+
+        t.computers[0].want_photo(first.id).unwrap();
+        assert_eq!(t.computers[0].missing_bytes().unwrap(), vec![(first.id, 0)]);
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(&t.computers[0].attachment(first.id).unwrap().1[..], b"first");
+        assert!(matches!(t.computers[0].attachment(second.id), Err(Error::NotFetched)));
+
+        // All of them again, the one opened first.
+        t.computers[0].set_photos_on_demand(false).unwrap();
+        t.computers[0].want_photo(second.id).unwrap();
+        assert_eq!(t.computers[0].missing_bytes().unwrap()[0].0, second.id);
+    }
+
+    #[test]
+    fn a_photo_comes_in_pieces_after_its_firing() {
+        let mut t = team();
+        let big: Vec<u8> = (0..(2 * CHUNK_BYTES + 1000)).map(|i| (i % 251) as u8).collect();
+        let photo = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/jpeg", &big)
+            .unwrap();
+        // Sent whole, as the core's helper does, and pulled by Ana's computer without its bytes.
+        sync(&mut t.computers[1], &mut t.host);
+        let device = t.computers[0].device().unwrap();
+        let (_, levels) = t.computers[0].sync_state().unwrap();
+        t.computers[0]
+            .apply_welcome(&t.host.hello(device, &levels).unwrap())
+            .unwrap();
+        let (cursors, _) = t.computers[0].sync_state().unwrap();
+        let batch = t.host.pull(device, &cursors, usize::MAX).unwrap();
+        t.computers[0].apply_batch(&batch).unwrap();
+        assert!(matches!(t.computers[0].attachment(photo.id), Err(Error::NotFetched)));
+        let missing = t.computers[0].missing_bytes().unwrap();
+        assert_eq!(missing, vec![(photo.id, 0)]);
+
+        // A piece out of order is refused; then it comes, a piece at a time.
+        let first = t.host.chunk(device, photo.id, 0).unwrap().unwrap();
+        assert_eq!(first.bytes.len(), CHUNK_BYTES);
+        let mut skipped = t.host.chunk(device, photo.id, CHUNK_BYTES as u64).unwrap().unwrap();
+        assert!(t.computers[0].take_chunk(&skipped).is_err());
+        assert!(!t.computers[0].take_chunk(&first).unwrap());
+        assert_eq!(
+            t.computers[0].missing_bytes().unwrap(),
+            vec![(photo.id, CHUNK_BYTES as u64)]
+        );
+        assert!(!t.computers[0].take_chunk(&skipped).unwrap());
+        skipped = t.host.chunk(device, photo.id, 2 * CHUNK_BYTES as u64).unwrap().unwrap();
+        assert!(t.computers[0].take_chunk(&skipped).unwrap());
+        assert_eq!(*t.computers[0].attachment(photo.id).unwrap().1, big);
+        assert!(t.computers[0].missing_bytes().unwrap().is_empty());
+
+        // Cleo's computer, which has no firings, is sent none of it.
+        let cleo = t.computers[2].device().unwrap();
+        assert!(t.host.chunk(cleo, photo.id, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_attachment_sent_in_pieces_is_taken_once_they_have_all_come() {
+        let mut t = team();
+        let bytes: Vec<u8> = (0..(CHUNK_BYTES + 10)).map(|i| (i % 7) as u8).collect();
+        let photo = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/png", &bytes)
+            .unwrap();
+        let device = t.computers[1].device().unwrap();
+        let pending = t.computers[1].pending(usize::MAX).unwrap();
+        let stripped: Vec<Item> = pending
+            .iter()
+            .cloned()
+            .map(|item| match item {
+                Item::Attachment(mut a) => {
+                    a.ciphertext = Vec::new();
+                    Item::Attachment(a)
+                }
+                other => other,
+            })
+            .collect();
+        // Without its bytes it is not taken, but not refused for good either.
+        let result = t.host.accept(device, stripped.clone()).unwrap();
+        assert_eq!(result.refused, vec![(photo.id, Refusal::BytesMissing)]);
+        t.computers[1].apply_push_result(&result, &stripped).unwrap();
+        assert_eq!(t.computers[1].waiting().unwrap(), 1);
+
+        let ciphertext = t.computers[1].attachment_bytes(photo.id).unwrap();
+        let piece = |offset: usize| crate::sync::Chunk {
+            id: photo.id,
+            offset: offset as u64,
+            total: ciphertext.len() as u64,
+            bytes: ciphertext[offset..(offset + CHUNK_BYTES).min(ciphertext.len())].to_vec(),
+        };
+        assert_eq!(t.host.take_chunk(device, &piece(0)).unwrap(), CHUNK_BYTES as u64);
+        // Sent again after a break, the host says how far it got.
+        assert_eq!(t.host.take_chunk(device, &piece(0)).unwrap(), CHUNK_BYTES as u64);
+        // Another computer cannot add to it.
+        let ana = t.computers[0].device().unwrap();
+        assert!(t.host.take_chunk(ana, &piece(CHUNK_BYTES)).is_err());
+        assert_eq!(
+            t.host.take_chunk(device, &piece(CHUNK_BYTES)).unwrap(),
+            ciphertext.len() as u64
+        );
+        let result = t.host.accept(device, stripped.clone()).unwrap();
+        assert_eq!(result.accepted.len(), 1);
+        t.computers[1].apply_push_result(&result, &stripped).unwrap();
+        assert_eq!(t.computers[1].waiting().unwrap(), 0);
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(*t.computers[0].attachment(photo.id).unwrap().1, bytes);
+    }
+
+    #[test]
+    fn a_record_checked_out_elsewhere_cannot_be_saved_until_it_is_taken_over() {
+        let mut t = team();
+        let (ana, ben) = (t.computers[0].device().unwrap(), t.computers[1].device().unwrap());
+        // Ben's computer cannot check out for Ana, nor Cleo's change a recipe.
+        assert!(t.host.check_out(ben, t.ana, t.recipe, false).is_err());
+        let cleo = t.computers[2].device().unwrap();
+        assert!(t.host.check_out(cleo, t.cleo, t.recipe, false).is_err());
+
+        let held = t.host.check_out(ana, t.ana, t.recipe, false).unwrap();
+        assert_eq!(held.len(), 1);
+        // Ben asks, and Ana still has it.
+        let seen = t.host.check_out(ben, t.ben, t.recipe, false).unwrap();
+        assert_eq!(seen[0].person, t.ana);
+        t.computers[1].set_checkouts(seen);
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let content = json!({ "name": "Ben's", "lines": [], "notes": "" });
+        match t.computers[1].save(Kind::Recipe, Some(shino), &content) {
+            Err(Error::CheckedOut(by)) => assert_eq!(by, "Ana"),
+            other => panic!("saved anyway: {:?}", other.map(|r| r.revision_id)),
+        }
+        // Ana's own computer saves as before; Cleo's sees nothing of the recipe.
+        t.computers[0].set_checkouts(t.host.checkouts(ana).unwrap());
+        let anas = head(&t.computers[0], t.recipe).revision_id;
+        t.computers[0].save(Kind::Recipe, Some(anas), &content).unwrap();
+        assert!(t.host.checkouts(cleo).unwrap().is_empty());
+
+        let taken = t.host.check_out(ben, t.ben, t.recipe, true).unwrap();
+        assert_eq!(taken[0].person, t.ben);
+        t.computers[1].set_checkouts(taken);
+        t.computers[1].save(Kind::Recipe, Some(shino), &content).unwrap();
+        assert!(t.host.release(ben, t.ben, t.recipe).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_resolution_cannot_set_aside_another_records_revision() {
+        let mut t = team();
+        let recipe = head(&t.computers[1], t.recipe).revision_id;
+        let other = t.computers[1]
+            .save_in(
+                Kind::Recipe,
+                t.shared,
+                &json!({ "name": "Other", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+        // As if a computer had saved a resolution that names a revision of another record.
+        let resolution = t.computers[1]
+            .add_revision(
+                Kind::Recipe,
+                Some(recipe),
+                None,
+                &json!({ "name": "Shino", "lines": [], "notes": "" }),
+                false,
+                &[other.revision_id],
+            )
+            .unwrap();
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(matches!(
+            result.refused.iter().find(|(id, _)| *id == resolution.revision_id),
+            Some((_, Refusal::Invalid { .. }))
+        ));
+    }
+
+    /// Sets when a computer last synced, as if it were `days` ago.
+    fn synced_days_ago(vault: &Vault, days: i64) {
+        let at = now_ms() - days * 24 * 60 * 60 * 1000 - 1000;
+        vault.set_meta("offline_last_synced", &at.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_computer_away_too_long_takes_no_changes_until_an_extension_code() {
+        let mut t = team();
+        let policy = crate::vault::OfflinePolicy {
+            nag_days: 3,
+            limit_days: Some(7),
+            by_role: Vec::new(),
+        };
+        // Only an admin sets the rule, and it reaches the other computers.
+        assert!(t.computers[1].set_offline_policy(&policy).is_err());
+        t.computers[0].set_offline_policy(&policy).unwrap();
+        sync(&mut t.computers[0], &mut t.host);
+        sync(&mut t.computers[1], &mut t.host);
+        let ben = &mut t.computers[1];
+        assert_eq!(ben.offline_policy(), policy);
+
+        synced_days_ago(ben, 4);
+        let status = ben.offline_status().unwrap();
+        assert!(status.nag && !status.read_only);
+        synced_days_ago(ben, 8);
+        assert!(ben.offline_status().unwrap().read_only);
+        let shino = head(ben, t.recipe).revision_id;
+        let content = json!({ "name": "Away", "lines": [], "notes": "" });
+        assert!(matches!(
+            ben.save(Kind::Recipe, Some(shino), &content),
+            Err(Error::OfflineTooLong)
+        ));
+        // Drafts are still kept.
+        ben.save_draft(&json!({ "recipe": null })).unwrap();
+
+        // A code from the host, for this computer, with the secret they share from pairing.
+        let device = ben.device().unwrap();
+        ben.set_meta(super::super::offline::SECRET, &hex::encode(b"shared at pairing"))
+            .unwrap();
+        t.host.set_offline_secret(device, b"shared at pairing").unwrap();
+        let code = t.host.extension_code(device, 5).unwrap();
+        let other = t.computers[2].device().unwrap();
+        t.host.set_offline_secret(other, b"another secret").unwrap();
+        let ben = &mut t.computers[1];
+        assert!(matches!(
+            ben.extend(&t.host.extension_code(other, 5).unwrap()),
+            Err(Error::WrongExtensionCode)
+        ));
+        assert!(!ben.extend(&code).unwrap().read_only);
+        ben.save(Kind::Recipe, Some(shino), &content).unwrap();
+
+        // A clock set back more than a day counts as too long.
+        synced_days_ago(ben, 0);
+        ben.set_meta("offline_extended_until", "0").unwrap();
+        let ahead = now_ms() + 3 * 24 * 60 * 60 * 1000;
+        ben.set_meta("offline_latest_seen", &ahead.to_string()).unwrap();
+        assert!(ben.offline_status().unwrap().clock_back);
+        assert!(ben.offline_status().unwrap().read_only);
+    }
+
+    #[test]
+    fn a_revoked_computer_is_told_so_and_a_lost_ones_people_get_new_keys() {
+        let mut t = team();
+        let ben = t.computers[1].device().unwrap();
+        let cleo = t.computers[2].device().unwrap();
+        let retired = t.host.revoke_device(cleo, false).unwrap();
+        assert!(retired.revoked && !retired.lost);
+        let (_, levels) = t.computers[2].sync_state().unwrap();
+        let welcome = t.host.hello(cleo, &levels).unwrap();
+        assert!(matches!(t.computers[2].apply_welcome(&welcome), Err(Error::Revoked)));
+
+        assert!(t.host.revoke_device(ben, true).unwrap().lost);
+        let epoch = t.computers[0]
+            .collections()
+            .iter()
+            .find(|c| c.id == t.shared)
+            .map(|_| t.computers[0].directory.collection(t.shared).unwrap().epoch)
+            .unwrap();
+        // Ana's computer has only her own key file entry, and resets Ben all the same.
+        let passwords = t.computers[0].secure_after_lost(&[t.ben]).unwrap();
+        assert_eq!(passwords.iter().map(|p| p.0).collect::<Vec<_>>(), vec![t.ben]);
+        assert!(t.computers[0].directory.collection(t.shared).unwrap().epoch > epoch);
+        // Production, which Ben could not read, keeps its key.
+        assert_eq!(t.computers[0].directory.collection(t.production).unwrap().epoch, 1);
+        // Ben cannot sign in on Ana's computer while his new entry waits there for the host.
+        let dir = t.computers[0].dir.clone();
+        assert!(Vault::people_in(&dir).unwrap().iter().all(|p| p.id != t.ben));
+        assert!(Vault::unlock_as(&dir, Some(t.ben), &passwords[0].1).is_err());
+        let result = sync(&mut t.computers[0], &mut t.host);
+        assert!(result.refused.is_empty(), "{:?}", result.refused);
+        // It reached the host, for his computers, and went from Ana's.
+        assert!(t.computers[0].keyring.user(&t.ben).is_err());
+        let entry: String = t
+            .host
+            .conn
+            .query_row(
+                "SELECT entry FROM key_entries WHERE person_id = ?1",
+                params![t.ben.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(serde_json::from_str::<PersonEntry>(&entry).unwrap().must_set_password);
+    }
+
+    #[test]
+    fn a_backup_of_the_host_kept_elsewhere_goes_back_to_it() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let file = kept.path().join("host.gvhost");
+        let made = t.host.export_backup(&file).unwrap();
+        // Ana's computer, with the organization's key, knows it; Ben's does not.
+        assert_eq!(t.computers[0].check_host_backup(&file).unwrap(), made);
+        assert!(t.computers[1].check_host_backup(&file).is_err());
+
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let saved = t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "After", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+
+        // A file changed anywhere is refused.
+        let mut changed = fs::read(&file).unwrap();
+        let last = changed.len() - 1;
+        changed[last] ^= 1;
+        let bad = kept.path().join("changed.gvhost");
+        fs::write(&bad, &changed).unwrap();
+        assert!(matches!(t.host.import_backup(&bad), Err(Error::NotABackup)));
+        assert!(t.host.backups().unwrap().is_empty());
+
+        let name = t.host.import_backup(&file).unwrap();
+        assert_eq!(t.host.backups().unwrap()[0].name, name);
+        t.host.ask_restore(&name).unwrap();
+        assert!(t.host.ask_restore("../elsewhere").is_err());
+        let dir = t.host.dir().to_owned();
+        let asked = fs::read_to_string(dir.join(super::super::RESTORE_FILE)).unwrap();
+        drop(t.host);
+        HostStore::restore(&dir, Path::new(&asked)).unwrap();
+        t.host = HostStore::open(&dir).unwrap();
+        assert!(!items::exists(&t.host.conn, "revisions", &saved.revision_id).unwrap());
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(result.accepted.iter().any(|(id, _)| *id == saved.revision_id));
+    }
+
+    #[test]
+    fn after_the_host_is_restored_each_computer_sends_again_what_its_people_saved() {
+        let mut t = team();
+        let backups = tempfile::tempdir().unwrap();
+        let backup = t.host.back_up(backups.path()).unwrap();
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let saved = t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "After", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+
+        // The host goes back to before Ben's save, with a new generation.
+        let dir = t.host.dir().to_owned();
+        let old = t.host.generation().unwrap();
+        drop(t.host);
+        HostStore::restore(&dir, &backup).unwrap();
+        t.host = HostStore::open(&dir).unwrap();
+        assert_ne!(t.host.generation().unwrap(), old);
+        assert!(!items::exists(&t.host.conn, "revisions", &saved.revision_id).unwrap());
+
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(result.accepted.iter().any(|(id, _)| *id == saved.revision_id));
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(head(&t.computers[0], t.recipe).content["name"], "After");
+
+        // Backups past the fourteenth go.
+        for _ in 0..20 {
+            t.host.back_up(backups.path()).unwrap();
+        }
+        assert_eq!(
+            fs::read_dir(backups.path()).unwrap().count(),
+            crate::vault::host::BACKUPS_KEPT
         );
     }
 }

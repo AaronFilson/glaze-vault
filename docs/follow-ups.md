@@ -34,23 +34,28 @@ Work decided on but not done yet, with the reason it waits.
   audit log ([ADR 19](adr/0019-signatures-and-audit-log.md)); and the sync core, a blind host and
   replicas tested without a network ([ADR 20](adr/0020-sync-core.md)); and the transport, pairing
   and `hostd` in the foreground ([ADR 21](adr/0021-transport-and-pairing.md)); and host mode in the
-  app ([ADR 22](adr/0022-host-mode.md)). Stage 7, client mode, is next.
+  app ([ADR 22](adr/0022-host-mode.md)); and client mode: joining, the background sync, checkouts
+  and photos in pieces ([ADR 23](adr/0023-client-mode.md)); and offline limits, revoking computers
+  and the host's backups ([ADR 24](adr/0024-offline-limits-and-revocation.md)). Phase 2 is built.
+- Left after stage 8 ([ADR 25](adr/0025-host-backups-from-the-app.md) built the rest): the LAN
+  update mirror (ADR 5, after stage 8 in the plan), which needs signed updates first; putting a
+  `.gvhost` file on a new host computer, opened with the organization's key; making someone an
+  admin or taking it away from a computer without their key file entry (from the host computer
+  for now); joining photo pieces with rusqlite's incremental BLOB writes rather than in memory.
+- From the review of 2026-10-29, not yet fixed: the host's backups (daily, saved for an admin and
+  put back) run under the store's lock, so syncs wait while they copy; a backup sent to put back
+  has no size cap; a backup put back from a file is named by when it was made, so the next daily
+  backup may prune it at once; network commands in the app hold the vault while they wait on the
+  host, so a slow host stalls the app's other commands and the background sync; the replica checks
+  a key file entry from the host against the directory's keys but not its signature.
 - Left from the transport and host mode: the organization certifying the host key at conversion;
-  the offline secret from pairing (stage 8); hostd under a user of its own on macOS
-  (`_glazevault`) and `host.key` under DPAPI on Windows; MSI updates on a computer that serves
-  (only the NSIS installer stops the service); trying the Windows service and updates on a real
-  install; `SMAppService` once macOS 12 support is dropped.
-- Left from the sync core, for the stages that need them: the host keeping and signing the audit
-  log (the computers' logs stay on them for now); a new organization recovery sheet or key reaching
-  every computer's key file; resetting someone, or making or taking an admin, from a computer that
-  does not have their key file entry (stage 6, from the host computer); directory changes on a
-  replica waiting for the host (stage 7, the plan's question 5), since one the host refuses leaves
-  the replica apart; listing a record's newest revisions by the host's order; and the host
-  checking that what a revision supersedes is its record's.
+  hostd under a user of its own on macOS (`_glazevault`) and `host.key` under DPAPI on Windows;
+  MSI updates on a computer that serves (only the NSIS installer stops the service); trying the
+  Windows service and updates on a real install; `SMAppService` once macOS 12 support is dropped.
+- Left from the sync core: the host keeping and signing the audit log (the computers' logs stay
+  on them for now); a new organization recovery sheet or key reaching every computer's key file.
 - The audit log notes opening recipes, materials, batch sheets and firings; mixes, limit sets and
   price lists could be noted too. Signatures of attachments are kept but not shown anywhere yet.
-- Before replicas (stage 7): the fork notice in the firing log, mix log, batch sheets, limit sets
-  and price lists, which show a forked record's newest for now; and a user guide page on forks.
 
 ## Clay bodies
 

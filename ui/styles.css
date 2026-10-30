@@ -1128,3 +1128,23 @@ input.short {
   letter-spacing: 0.1em;
   margin: 0.5rem 0;
 }
+
+/* How syncing stands, in the bar, with its details below it when opened. */
+.sync {
+  position: relative;
+  align-self: center;
+}
+
+.sync > button.warning {
+  color: var(--warn);
+}
+
+.sync-detail {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  width: 22rem;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+}

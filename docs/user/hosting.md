@@ -5,8 +5,7 @@ network: a studio desktop, say, for the laptops and the computer by the kilns. E
 keeps its own copy of what its people can see, and works on it without the network; they sync
 when they can reach the host.
 
-> Joining from the other computers comes in the next version of Glaze Vault. For now, this sets
-> up the computer that serves.
+The other computers then [join it](joining.md).
 
 ## Before you start
 
@@ -27,19 +26,71 @@ when they can reach the host.
    signed in.
 
 You keep working on this computer as before, and everyone in the vault can still sign in here.
-It syncs with the service every half minute, or when you choose **Sync now**.
+It syncs with the service by itself, as the other computers do ([Syncing](joining.md#syncing)).
 
 ## Pairing a computer
 
 1. Under **Network**, choose **Pair a computer…**. A code like `4821-0937` appears. It works
    once, for ten minutes.
-2. On the other computer, type the code where it asks to join a vault on this network.
+2. On the other computer, choose **Join a vault on this network**, and type the code
+   ([Joining](joining.md)).
 3. The other computer's name, and a short key such as `428b-ec49-9b19-3bd5`, appear here. Check
    that the other computer shows the same key.
 4. Tick who will use that computer, and choose **Approve**. Only they can sign in there, with
    their own passwords, and it holds only what they can see.
 
 A wrong code ends the pairing: start again for a new one. **Show the computers paired** lists them.
+
+## Computers away from the network
+
+Under **Computers away from the host**, choose after how many days without a sync a computer
+reminds its people (14 unless you change it), and, if you want, after how many it stops taking
+changes until it syncs. See [Away from the network](joining.md#away-from-the-network).
+
+To be stricter with some roles, such as testers who take a laptop to the kilns, choose **A
+stricter rule for a role…** and give that role its own days. Someone with more than one role has
+the strictest of their rules.
+
+To let a computer that is away take changes for a while, choose **Show the computers paired**,
+then **Extension code…** beside it. Choose the days, and read the code out to whoever is at it.
+
+## Retiring a computer, or one that was lost
+
+Choose **Show the computers paired**, then beside the computer:
+
+- **Retire…** when it is given away or replaced. It stops syncing, and removes its copy of the
+  vault the next time it reaches the host.
+- **Lost or stolen…** when someone else may have it. It stops syncing too, and every collection it
+  could read gets a new key, so what is saved from now on is out of its reach. Each of its people
+  gets a new one-time password, shown on screen to pass on: their keys are on the lost computer,
+  under their passwords. Their new keys go to their other computers through the host.
+
+Until a lost computer reaches the host, it still opens with its people's old passwords. What
+protects it is those passwords, and that it holds only what they can see.
+
+## The host's backups
+
+The computer that serves the vault backs it up by itself, each day, and keeps the last 14. The
+other computers do not need backups of their own: the host has everything that reached it.
+
+An admin, at any computer in the vault, finds them in Settings, Network, under **The host's
+backups**:
+
+- **Save a backup of the host…** fetches one made now, as a file to keep somewhere other than the
+  host computer, such as a USB drive or another building. It opens only with the host computer or
+  with the organization's key, which admins hold.
+- **Put this one back…**, beside one of the daily backups, puts the host back as it was then.
+- **Put back a backup saved elsewhere…** sends a file saved before to the host, and puts it back.
+  It must be a backup of this vault's host.
+
+Putting one back restarts the host, which takes a few seconds. Each computer then sends again, at
+its next sync, what its people saved since, so little is lost. Something erased since may come
+back, and computers paired after that backup was made pair again.
+
+On the host computer itself, an administrator can do the same with the `hostd` program installed
+beside Glaze Vault (inside the app on a Mac, in its folder on Windows): `hostd backups` lists the
+daily ones, and `hostd restore <folder or file>` puts one back, either a daily one or a file saved
+as above.
 
 ## Stopping
 

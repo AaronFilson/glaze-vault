@@ -48,6 +48,10 @@ pub struct KeyringUser {
     /// Added by an admin with a one-time password; they choose their own when they sign in.
     #[serde(default, skip_serializing_if = "is_false")]
     pub must_set_password: bool,
+    /// On a replica, the entry of someone who does not sign in here, which an admin reset here:
+    /// kept only until it reaches the host, which sends it on to their computers.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub elsewhere: bool,
 }
 
 /// What makes a vault a team's: the organization's key pair, which admins hold (ADR 3).
@@ -143,6 +147,7 @@ impl PersonEntry {
             public_key: self.public_key,
             organization_key: self.organization_key,
             must_set_password: self.must_set_password,
+            elsewhere: false,
         }
     }
 }

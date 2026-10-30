@@ -282,3 +282,79 @@ fn computers_that_save_delete_and_sync_at_random_end_up_the_same() {
         assert!(computer.pending(usize::MAX).unwrap().is_empty());
     }
 }
+
+#[test]
+fn a_photo_travels_in_pieces_both_ways() {
+    let mut t = team(&[("Ben", Role::Formulator)]);
+    let head = t.computers[1].heads(Kind::Recipe).unwrap().remove(0);
+    let photo: Vec<u8> = (0..3_500_000u32).map(|i| (i % 253) as u8).collect();
+    let attached = t.computers[1]
+        .add_attachment(Kind::Recipe, head.record_id, "image/jpeg", &photo)
+        .unwrap();
+    // Ben's computer sends it in pieces before the push that holds it.
+    let report = sync_in_process(&mut t.computers[1], &mut t.host).unwrap();
+    assert_eq!(report.accepted, 1);
+    assert!(report.refused.is_empty());
+    // Ana's pulls it without its bytes, then fetches them.
+    let report = sync_in_process(&mut t.computers[0], &mut t.host).unwrap();
+    assert_eq!(report.fetched, 1);
+    assert!(!report.more_photos);
+    assert_eq!(*t.computers[0].attachment(attached.id).unwrap().1, photo);
+    assert!(t.computers[0].missing_bytes().unwrap().is_empty());
+}
+
+#[test]
+fn each_sync_asks_who_is_changing_what() {
+    let mut t = team(&[("Ben", Role::Formulator)]);
+    let head = t.computers[1].heads(Kind::Recipe).unwrap().remove(0);
+    let ana_device = t.computers[0].device().unwrap();
+    t.host
+        .check_out(ana_device, t.people[0], head.record_id, false)
+        .unwrap();
+    sync_in_process(&mut t.computers[1], &mut t.host).unwrap();
+    assert_eq!(t.computers[1].checkouts().len(), 1);
+    assert!(matches!(
+        t.computers[1].save(
+            Kind::Recipe,
+            Some(head.revision_id),
+            &json!({ "name": "Ben's", "lines": [], "notes": "" })
+        ),
+        Err(glaze_vault_core::Error::CheckedOut(_))
+    ));
+}
+
+#[test]
+fn someone_who_first_signs_in_on_a_computer_that_joined_sees_what_they_were_given() {
+    let (vault_dir, host_dir, ben_dir) = (
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let (mut ana, _) = Vault::create(vault_dir.path(), PASSWORD).unwrap();
+    ana.save(
+        Kind::Recipe,
+        None,
+        &json!({ "name": "Shino", "lines": [], "notes": "" }),
+    )
+    .unwrap();
+    ana.grow_into_team("Ana").unwrap();
+    let shared = ana.collections().iter().find(|c| c.owner.is_none()).unwrap().id;
+    let ben = ana.add_person("Ben", ONE_TIME, &[]).unwrap().id;
+    ana.set_role(ben, shared, Some(Role::Formulator)).unwrap();
+    let mut host = ana.convert_to_host(host_dir.path(), "127.0.0.1:1").unwrap();
+    let device = DeviceKey::generate();
+    let certificate = ana
+        .certify_device(device.id, "laptop", &device.public(), &[ben])
+        .unwrap();
+    host.add_device(&certificate).unwrap();
+    Vault::join(ben_dir.path(), &host.join_package(device.id).unwrap(), &device).unwrap();
+    let mut laptop = Vault::unlock_as(ben_dir.path(), Some(ben), ONE_TIME).unwrap();
+    laptop.set_own_password(OWN).unwrap();
+    sync_in_process(&mut laptop, &mut host).unwrap();
+    assert_eq!(
+        laptop.heads(Kind::Recipe).unwrap().len(),
+        1,
+        "collections: {:?}",
+        laptop.collections().len()
+    );
+}
