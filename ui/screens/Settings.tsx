@@ -12,7 +12,8 @@ import {
   type UpdateInfo,
   type VaultStatus
 } from '../api';
-import { exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJson, exportMaterialsCsv } from '../export';
+import { exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJson, exportMaterialsCsv, exportMixesCsv } from '../export';
+import type { Mix } from '../mix';
 import type { Firing } from '../firing';
 import { ImportError, readImport, type ImportPlan } from '../importFormats';
 import { editableCollections, may } from '../team';
@@ -38,6 +39,7 @@ export function Settings({
   recipes,
   materials,
   firings,
+  mixes = [],
   status,
   update,
   onUpdate,
@@ -61,6 +63,8 @@ export function Settings({
   recipes: RecipeHead[];
   materials: MaterialHead[];
   firings: Firing[];
+  /** The mix log, for its export. */
+  mixes?: Mix[];
   status: VaultStatus;
   update: UpdateInfo | null;
   onUpdate: (update: UpdateInfo | null) => void;
@@ -142,8 +146,9 @@ export function Settings({
           recipes={exportable(recipes)}
           materials={exportable(materials)}
           firings={exportable(firings)}
+          mixes={exportable(mixes)}
           version={status.version}
-          partly={[recipes, materials, firings].some((list) => exportable<{ collectionId?: string }>(list).length < list.length)}
+          partly={[recipes, materials, firings, mixes].some((list) => exportable<{ collectionId?: string }>(list).length < list.length)}
         />
       )}
       {team && (
@@ -251,7 +256,7 @@ function SetAsideVaults({ onSwitch, error }: { onSwitch: (name: string) => void;
 }
 
 /** What an export held, for the audit log: the format and how many records. */
-function exported(kind: string, recipes: number, materials: number, firings: number): string {
+function exported(kind: string, recipes: number, materials: number, firings: number, mixes: number): string {
   switch (kind) {
     case 'json':
       return `${recipes} recipes and ${materials} materials as JSON`;
@@ -261,6 +266,8 @@ function exported(kind: string, recipes: number, materials: number, firings: num
       return `${materials} materials as CSV`;
     case 'firings-csv':
       return `${firings} firings as CSV`;
+    case 'mixes-csv':
+      return `${mixes} mixes as CSV`;
     default:
       return `${recipes} recipes as CSV`;
   }
@@ -400,19 +407,21 @@ function Export({
   recipes,
   materials,
   firings,
+  mixes,
   version,
   partly
 }: {
   recipes: RecipeHead[];
   materials: MaterialHead[];
   firings: Firing[];
+  mixes: Mix[];
   version: string;
   /** Some records are in collections this person may not export from, and are left out. */
   partly: boolean;
 }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const run = async (kind: 'csv' | 'json' | 'xml' | 'materials-csv' | 'firings-csv') => {
+  const run = async (kind: 'csv' | 'json' | 'xml' | 'materials-csv' | 'firings-csv' | 'mixes-csv') => {
     setMessage('');
     setError('');
     const now = new Date();
@@ -425,18 +434,22 @@ function Export({
             ? exportInsightXml(recipes)
             : kind === 'firings-csv'
               ? exportFiringsCsv(firings)
-              : exportMaterialsCsv(materials);
+              : kind === 'mixes-csv'
+                ? exportMixesCsv(mixes, recipes)
+                : exportMaterialsCsv(materials);
     const fileName =
       kind === 'materials-csv'
         ? exportFileName('csv', now, 'materials')
         : kind === 'firings-csv'
           ? exportFileName('csv', now, 'firing log')
-          : exportFileName(kind, now);
+          : kind === 'mixes-csv'
+            ? exportFileName('csv', now, 'mix log')
+            : exportFileName(kind, now);
     try {
       const saved = await api.saveExport(fileName, contents);
       if (saved) {
         setMessage(`Saved ${saved}.`);
-        const detail = exported(kind, recipes.length, materials.length, firings.length);
+        const detail = exported(kind, recipes.length, materials.length, firings.length, mixes.length);
         api.note({ action: 'exported', detail }).catch(() => {});
       }
     } catch (e) {
@@ -447,7 +460,7 @@ function Export({
     <Section title="Export">
       <p>
         Saves every recipe as a spreadsheet (CSV), or as Insight XML for Insight-live and Glazy, or everything as JSON
-        for other programs. Your own materials and the firing log each have a spreadsheet of their own.{' '}
+        for other programs. Your own materials, the firing log and the mix log each have a spreadsheet of their own.{' '}
         <strong>Exported files are not encrypted:</strong> anyone who gets the file can read your recipes. Use a
         backup to keep a safe copy.
       </p>
@@ -467,6 +480,9 @@ function Export({
         </button>
         <button type="button" disabled={!firings.length} onClick={() => run('firings-csv')}>
           Export firing log as CSV…
+        </button>
+        <button type="button" disabled={!mixes.length} onClick={() => run('mixes-csv')}>
+          Export mix log as CSV…
         </button>
       </div>
       {message && <p className="hint" role="status">{message}</p>}

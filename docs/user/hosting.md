@@ -81,7 +81,8 @@ backups**:
   with the organization's key, which admins hold.
 - **Put this one back…**, beside one of the daily backups, puts the host back as it was then.
 - **Put back a backup saved elsewhere…** sends a file saved before to the host, and puts it back.
-  It must be a backup of this vault's host.
+  It must be a backup of this vault's host, and is kept among the host's backups until another
+  is sent: the daily ones do not crowd it out.
 
 Putting one back restarts the host, which takes a few seconds. Each computer then sends again, at
 its next sync, what its people saved since, so little is lost. Something erased since may come

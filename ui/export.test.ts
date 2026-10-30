@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import type { MaterialHead, RecipeHead } from './api';
-import { csvField, exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJson, exportMaterialsCsv } from './export';
+import { csvField, exportCsv, exportFileName, exportFiringsCsv, exportInsightXml, exportJson, exportMaterialsCsv, exportMixesCsv } from './export';
+import type { Mix } from './mix';
 import { EMPTY_BAR, type Firing } from './firing';
 import { readImport } from './importFormats';
 
@@ -260,5 +261,43 @@ describe('Insight XML', () => {
   it('keeps line breaks in names, and leaves out what XML cannot hold', () => {
     const xml = exportInsightXml([recipe('Two\nlines\u0001', [['Silica', '1']])]);
     expect(readImport('r.xml', xml).recipes[0].name).toBe('Two\nlines');
+  });
+});
+
+describe('exportMixesCsv', () => {
+  it('writes a mix a row, oldest first, with its lots, steps and last readings', () => {
+    const mix = (mixedOn: string, more: Partial<Mix['content']> = {}): Mix => ({
+      recordId: 'm-' + mixedOn,
+      revisionId: 'mv-' + mixedOn,
+      number: 1,
+      savedAt: Date.UTC(2026, 9, 20, 9),
+      content: { sheet: 's', sheetNumber: 2, recipe: 'r', recipeNumber: 3, name: 'CP-1', mixedOn, notes: '', ...more }
+    });
+    const rows = exportMixesCsv(
+      [
+        mix('2026-10-19', {
+          size: '5000',
+          unit: 'g',
+          lots: ['G-12', '', 'S-3'],
+          water: '1900',
+          steps: [
+            { on: '2026-10-19', deflocculant: '25', water: '', gravity: '1.80', viscosity: '', gel: '' },
+            { on: '2026-10-21', deflocculant: '12.5', water: '100', gravity: '', viscosity: '41', gel: 'slight' }
+          ],
+          notes: 'Overnight, covered'
+        }),
+        mix('2026-10-01', { sheet: null, sheetNumber: null, name: '' })
+      ],
+      [{ recordId: 'r', revisionId: 'r-3', number: 3, savedAt: 1, content: { name: 'Casting porcelain', notes: '', lines: [] } }]
+    )
+      .slice(1)
+      .split('\r\n');
+    expect(rows[0].split(',').slice(0, 4)).toEqual(['Mixed', 'Mixed from', 'Its revision', 'Mixed on']);
+    expect(rows[1]).toBe('Casting porcelain,Recipe,3,2026-10-01,,,,,,,,,,,,1,2026-10-20T09:00:00.000Z');
+    expect(rows[2]).toBe(
+      'CP-1,Batch sheet,2,2026-10-19,5000,g,1: G-12; 3: S-3,1900,37.5,2000,' +
+        '"2026-10-19, deflocculant 25, SG 1.80; 2026-10-21, deflocculant 12.5, water 100, 41 s, gel slight",' +
+        '1.80,41,slight,"Overnight, covered",1,2026-10-20T09:00:00.000Z'
+    );
   });
 });

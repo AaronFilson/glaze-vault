@@ -1,11 +1,12 @@
 // Exports: every recipe and the person's own materials as CSV (for spreadsheets) or JSON (for
-// other programs), the recipes as Insight XML (for Insight-live and Glazy), and the firing log as
-// CSV. None is encrypted; the Settings screen says so before saving.
+// other programs), the recipes as Insight XML (for Insight-live and Glazy), and the firing log and
+// mix log as CSV. None is encrypted; the Settings screen says so before saving.
 import type { MaterialHead, RecipeHead } from './api';
 import { baseOf, usableLines } from './batch';
 import { MATERIAL_CATEGORIES } from './chemistry';
 import { barResults, FIT_RESULTS, FIT_TESTS, FLAWS, type Firing } from './firing';
 import { hasSheet } from './materialData';
+import { mixName, mixTotals, type Mix } from './mix';
 import {
   ATMOSPHERES,
   BODY_CLASSES,
@@ -266,6 +267,73 @@ export function exportFiringsCsv(firings: Firing[]): string {
     ]);
   }
   return '\uFEFF' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
+}
+
+const MIX_COLUMNS = [
+  'Mixed',
+  'Mixed from',
+  'Its revision',
+  'Mixed on',
+  'Dry batch size',
+  'Unit',
+  'Lots',
+  'Water at the start',
+  'Deflocculant in all',
+  'Water in all',
+  'Steps',
+  'Last specific gravity',
+  'Last Ford cup #4 (s)',
+  'Last gel',
+  'Notes',
+  'Revision',
+  'Saved'
+];
+
+/** One row per mix, oldest first: what was mixed and how much, the lots weighed, and for a slip
+ * the steps in one cell, with the last readings and what went in all told in their own. */
+export function exportMixesCsv(mixes: Mix[], recipes: RecipeHead[]): string {
+  const rows = [MIX_COLUMNS];
+  const sorted = [...mixes].sort((a, b) => a.content.mixedOn.localeCompare(b.content.mixedOn) || a.savedAt - b.savedAt);
+  for (const mix of sorted) {
+    const m = mix.content;
+    const steps = m.steps ?? [];
+    const totals = mixTotals(m);
+    const last = (key: 'gravity' | 'viscosity' | 'gel') => [...steps].reverse().find((step) => step[key])?.[key] ?? '';
+    rows.push([
+      mixName(m, recipes),
+      m.sheet ? 'Batch sheet' : 'Recipe',
+      String((m.sheet ? m.sheetNumber : m.recipeNumber) ?? ''),
+      m.mixedOn,
+      m.size ?? '',
+      m.size ? (m.unit ?? 'g') : '',
+      // By the order of the lines weighed.
+      (m.lots ?? []).map((lot, i) => (lot ? `${i + 1}: ${lot}` : '')).filter(Boolean).join('; '),
+      m.water ?? '',
+      totals.deflocculant ? String(totals.deflocculant.amount) : '',
+      totals.water ? String(totals.water.amount) : '',
+      steps
+        .map((step) =>
+          [
+            step.on,
+            step.deflocculant && `deflocculant ${step.deflocculant}`,
+            step.water && `water ${step.water}`,
+            step.gravity && `SG ${step.gravity}`,
+            step.viscosity && `${step.viscosity} s`,
+            step.gel && `gel ${step.gel}`
+          ]
+            .filter(Boolean)
+            .join(', ')
+        )
+        .join('; '),
+      last('gravity'),
+      last('viscosity'),
+      last('gel'),
+      m.notes,
+      String(mix.number),
+      new Date(mix.savedAt).toISOString()
+    ]);
+  }
+  return '﻿' + rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
 }
 
 /** Recipes as Insight XML, which Digitalfire's Insight-live and Glazy import (docs/adr/0010-importing.md).

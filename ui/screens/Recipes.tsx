@@ -1050,6 +1050,7 @@ export function Recipes({
           recipes={recipes}
           materials={materials}
           firings={firings}
+          mixes={mixes}
           status={status}
           update={update}
           onUpdate={(found) => {
@@ -1326,7 +1327,7 @@ export function Recipes({
         />
       )}
 
-      {view === 'blend' || view === 'fit' ? null : view === 'batches' && sheet ? (
+      {view === 'blend' || view === 'fit' || view === 'mixes' ? null : view === 'batches' && sheet ? (
         <PrintView job={printJob} content={sheet.content} saved={sheet} changed={false} analysis={null} sheet />
       ) : (
         <PrintView
