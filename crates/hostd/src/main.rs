@@ -72,7 +72,8 @@ fn restore(dir: &std::path::Path, backup: &std::path::Path) -> Result<(), String
     // A file an admin's computer saved goes in among the backups first; it must be this host's.
     if backup.is_file() {
         let host = glaze_vault_core::HostStore::open(dir).map_err(|e| e.to_string())?;
-        let name = host.import_backup(&backup).map_err(|e| e.to_string())?;
+        let name =
+            glaze_vault_core::HostStore::import_backup(dir, host.vault_id(), &backup).map_err(|e| e.to_string())?;
         backup = dir.join(serve::BACKUPS).join(name);
     }
     if service::running() && dir == service::data_dir() {

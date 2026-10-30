@@ -198,8 +198,8 @@ impl DirectoryHeld {
 }
 
 /// Asks the host one thing about checkouts, on a connection of its own.
-async fn ask_checkouts(vault: &Vault, address: &str, message: ClientMsg) -> Result<Vec<Checkout>> {
-    let mut conn = greeted(vault, address).await?;
+async fn ask_checkouts(asking: &Asking, address: &str, message: ClientMsg) -> Result<Vec<Checkout>> {
+    let mut conn = greeted(asking, address).await?;
     conn.send(&message).await?;
     let answered = answer(&mut conn).await;
     let _ = conn.send(&ClientMsg::Bye).await;
@@ -211,10 +211,10 @@ async fn ask_checkouts(vault: &Vault, address: &str, message: ClientMsg) -> Resu
 }
 
 /// Checks a record out for the person signed in, or takes it over; who has what after.
-pub async fn check_out(vault: &Vault, address: &str, record: Uuid, take_over: bool) -> Result<Vec<Checkout>> {
-    let person = vault.me().id;
+pub async fn check_out(asking: &Asking, address: &str, record: Uuid, take_over: bool) -> Result<Vec<Checkout>> {
+    let person = asking.person;
     ask_checkouts(
-        vault,
+        asking,
         address,
         ClientMsg::CheckOut {
             record,
@@ -225,14 +225,14 @@ pub async fn check_out(vault: &Vault, address: &str, record: Uuid, take_over: bo
     .await
 }
 
-pub async fn release(vault: &Vault, address: &str, record: Uuid) -> Result<Vec<Checkout>> {
-    let person = vault.me().id;
-    ask_checkouts(vault, address, ClientMsg::Release { record, person }).await
+pub async fn release(asking: &Asking, address: &str, record: Uuid) -> Result<Vec<Checkout>> {
+    let person = asking.person;
+    ask_checkouts(asking, address, ClientMsg::Release { record, person }).await
 }
 
 /// The computers that sync with the host, for an admin's computer.
-pub async fn devices(vault: &Vault, address: &str) -> Result<Vec<DeviceInfo>> {
-    let mut conn = greeted(vault, address).await?;
+pub async fn devices(asking: &Asking, address: &str) -> Result<Vec<DeviceInfo>> {
+    let mut conn = greeted(asking, address).await?;
     conn.send(&ClientMsg::ListDevices).await?;
     let answer = conn.recv().await?;
     let _ = conn.send(&ClientMsg::Bye).await;
@@ -244,8 +244,8 @@ pub async fn devices(vault: &Vault, address: &str) -> Result<Vec<DeviceInfo>> {
 }
 
 /// Asks the host one thing an admin's computer may ask, on a connection of its own.
-async fn ask_as_admin(vault: &Vault, address: &str, message: ClientMsg) -> Result<HostMsg> {
-    let mut conn = greeted(vault, address).await?;
+async fn ask_as_admin(asking: &Asking, address: &str, message: ClientMsg) -> Result<HostMsg> {
+    let mut conn = greeted(asking, address).await?;
     conn.send(&message).await?;
     let answered = answer(&mut conn).await;
     let _ = conn.send(&ClientMsg::Bye).await;
@@ -254,40 +254,40 @@ async fn ask_as_admin(vault: &Vault, address: &str, message: ClientMsg) -> Resul
 }
 
 /// A code an admin reads out to a computer that has gone too long without syncing (ADR 24).
-pub async fn extension_code(vault: &Vault, address: &str, device: Uuid, days: u32) -> Result<String> {
-    match ask_as_admin(vault, address, ClientMsg::ExtensionCode { device, days }).await? {
+pub async fn extension_code(asking: &Asking, address: &str, device: Uuid, days: u32) -> Result<String> {
+    match ask_as_admin(asking, address, ClientMsg::ExtensionCode { device, days }).await? {
         HostMsg::ExtensionCode { code } => Ok(code),
         other => Err(unexpected(other)),
     }
 }
 
 /// Stops a computer syncing, as retired or as lost; the computers after.
-pub async fn revoke_device(vault: &Vault, address: &str, device: Uuid, lost: bool) -> Result<Vec<DeviceInfo>> {
-    match ask_as_admin(vault, address, ClientMsg::RevokeDevice { device, lost }).await? {
+pub async fn revoke_device(asking: &Asking, address: &str, device: Uuid, lost: bool) -> Result<Vec<DeviceInfo>> {
+    match ask_as_admin(asking, address, ClientMsg::RevokeDevice { device, lost }).await? {
         HostMsg::Devices(devices) => Ok(devices),
         other => Err(unexpected(other)),
     }
 }
 
 /// The backups hostd keeps on the host computer, newest first, for an admin's computer.
-pub async fn host_backups(vault: &Vault, address: &str) -> Result<Vec<HostBackup>> {
-    match ask_as_admin(vault, address, ClientMsg::ListBackups).await? {
+pub async fn host_backups(asking: &Asking, address: &str) -> Result<Vec<HostBackup>> {
+    match ask_as_admin(asking, address, ClientMsg::ListBackups).await? {
         HostMsg::Backups(backups) => Ok(backups),
         other => Err(unexpected(other)),
     }
 }
 
 /// Has hostd put one of its backups back. It stops, and starts again in a few seconds.
-pub async fn restore_host_backup(vault: &Vault, address: &str, name: &str) -> Result<()> {
-    match ask_as_admin(vault, address, ClientMsg::RestoreBackup { name: name.into() }).await? {
+pub async fn restore_host_backup(asking: &Asking, address: &str, name: &str) -> Result<()> {
+    match ask_as_admin(asking, address, ClientMsg::RestoreBackup { name: name.into() }).await? {
         HostMsg::Restoring => Ok(()),
         other => Err(unexpected(other)),
     }
 }
 
 /// Saves a backup of the host now to `out`, as one file to keep elsewhere; when it was made.
-pub async fn download_host_backup(vault: &Vault, address: &str, out: &Path) -> Result<i64> {
-    let mut conn = greeted(vault, address).await?;
+pub async fn download_host_backup(asking: &Asking, address: &str, out: &Path) -> Result<i64> {
+    let mut conn = greeted(asking, address).await?;
     conn.send(&ClientMsg::RequestBackup).await?;
     let (bytes, made_at) = match answer(&mut conn).await? {
         HostMsg::BackupReady { bytes, made_at } => (bytes, made_at),
@@ -328,9 +328,9 @@ pub async fn download_host_backup(vault: &Vault, address: &str, out: &Path) -> R
 
 /// Sends a backup file kept elsewhere to the host, which puts it back: it stops, and starts
 /// again in a few seconds. The host refuses one that is not its own.
-pub async fn restore_host_from_file(vault: &Vault, address: &str, file: &Path) -> Result<()> {
+pub async fn restore_host_from_file(asking: &Asking, address: &str, file: &Path) -> Result<()> {
     use tokio::io::AsyncReadExt;
-    let mut conn = greeted(vault, address).await?;
+    let mut conn = greeted(asking, address).await?;
     let mut source = tokio::fs::File::open(file).await?;
     let mut buffer = vec![0u8; 1024 * 1024];
     let mut offset = 0u64;
@@ -359,11 +359,31 @@ pub async fn restore_host_from_file(vault: &Vault, address: &str, file: &Path) -
     sent
 }
 
+/// What a computer asks the host with, taken from its replica, so the vault is free for the
+/// app's other work while it waits for the host.
+pub struct Asking {
+    device: DeviceKey,
+    pin: Vec<u8>,
+    hello: ClientMsg,
+    person: Uuid,
+}
+
+impl Asking {
+    pub fn of(vault: &Vault) -> Result<Asking> {
+        let (_, hello) = ClientSession::start(vault)?;
+        Ok(Asking {
+            device: vault.device_key()?,
+            pin: vault.host_key()?,
+            hello,
+            person: vault.me().id,
+        })
+    }
+}
+
 /// A replica's connection, past hello.
-async fn greeted(vault: &Vault, address: &str) -> Result<Conn<Stream>> {
-    let mut conn = connect_replica(vault, address).await?;
-    let (_, hello) = ClientSession::start(vault)?;
-    conn.send(&hello).await?;
+async fn greeted(asking: &Asking, address: &str) -> Result<Conn<Stream>> {
+    let mut conn = connect_pinned(&asking.device, asking.pin.clone(), address).await?;
+    conn.send(&asking.hello).await?;
     match conn.recv().await? {
         HostMsg::Welcome(_) => Ok(conn),
         other => Err(unexpected(other)),
@@ -448,7 +468,7 @@ pub struct AdminPairing {
 
 impl AdminPairing {
     pub async fn start(vault: &Vault, address: &str) -> Result<AdminPairing> {
-        let mut conn = greeted(vault, address).await?;
+        let mut conn = greeted(&Asking::of(vault)?, address).await?;
         conn.send(&ClientMsg::StartPairing).await?;
         match conn.recv().await? {
             HostMsg::PairingCode { code, expires_at } => Ok(AdminPairing { conn, code, expires_at }),

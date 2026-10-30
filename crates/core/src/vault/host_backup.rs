@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::host::{BACKUP_PREFIX, HOST_FILE, HOST_KEY, HostStore};
+use super::host::{BACKUP_PREFIX, HOST_FILE, HOST_KEY, HostStore, SAVED_SUFFIX};
 
 /// The folder in the host's own where hostd keeps its backups.
 pub const BACKUPS: &str = "backups";
@@ -188,12 +188,18 @@ impl HostStore {
 
     /// Writes a backup of the store now to `out`, as one file for an admin's computer to keep.
     pub fn export_backup(&mut self, out: &Path) -> Result<i64> {
+        self.copy_for_export(out)?.write()
+    }
+
+    /// The part of [`export_backup`](Self::export_backup) that needs the store: its database
+    /// copied beside `out`, for [`ExportCopy::write`] to make into the file with the store free
+    /// for syncs again.
+    pub fn copy_for_export(&mut self, out: &Path) -> Result<ExportCopy> {
         let organization_key = self.organization_encryption_key()?;
         self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         let copy = out.with_extension("db.tmp");
-        fs::copy(self.dir().join(DATABASE_FILE), &copy)?;
-        let written = (|| {
-            let (database_bytes, sha256) = sha256_of(&copy)?;
+        let read = (|| {
+            fs::copy(self.dir().join(DATABASE_FILE), &copy)?;
             let secret = Zeroizing::new(fs::read(self.dir().join(HOST_KEY))?);
             let secret: crypto::Key = Zeroizing::new(
                 secret
@@ -201,44 +207,36 @@ impl HostStore {
                     .try_into()
                     .map_err(|_| Error::Corrupt("the host key is not valid".into()))?,
             );
-            let vault_id = self.vault_id();
-            let created_at = now_ms();
-            let header = Header {
-                format: FORMAT,
-                vault_id,
-                created_at,
-                host_key: crypto::seal_key(&organization_key, &secret, &host_key_info(&vault_id)),
-                organization_key,
-                host_file: fs::read_to_string(self.dir().join(HOST_FILE))?,
-                database_bytes,
-                sha256,
-            };
-            let header = serde_json::to_vec(&header)?;
-            let mut database = BufReader::new(File::open(&copy)?);
-            files::write_atomically_with(out, |file| {
-                let mut file = BufWriter::new(file);
-                file.write_all(MAGIC)?;
-                file.write_all(&(header.len() as u32).to_le_bytes())?;
-                file.write_all(&header)?;
-                std::io::copy(&mut database, &mut file)?;
-                file.flush()
-            })?;
-            Ok(created_at)
+            Ok((secret, fs::read_to_string(self.dir().join(HOST_FILE))?))
         })();
-        let _ = fs::remove_file(&copy);
-        written
+        match read {
+            Ok((secret, host_file)) => Ok(ExportCopy {
+                out: out.to_owned(),
+                copy,
+                vault_id: self.vault_id(),
+                organization_key,
+                secret,
+                host_file,
+            }),
+            Err(e) => {
+                let _ = fs::remove_file(&copy);
+                Err(e)
+            }
+        }
     }
 
-    /// Takes a backup file an admin's computer kept, as one of the host's backups, and returns
-    /// its name, for `ask_restore`. It must be of this vault, and open with this host's key.
-    pub fn import_backup(&self, file: &Path) -> Result<String> {
+    /// Takes a backup file an admin's computer kept, as one of the backups of the host in `dir`,
+    /// and returns its name, for `ask_restore`. It must be of the vault `vault_id`, and open with
+    /// this host's key. Only the latest one taken is kept. It needs only the host's folder, so
+    /// the store goes on syncing meanwhile.
+    pub fn import_backup(dir: &Path, vault_id: Uuid, file: &Path) -> Result<String> {
         let (header, mut database) = read_header(file)?;
-        if header.vault_id != self.vault_id() {
+        if header.vault_id != vault_id {
             return Err(Error::NotABackup);
         }
-        let backups = self.backups_dir();
+        let backups = dir.join(BACKUPS);
         fs::create_dir_all(&backups)?;
-        let name = format!("{BACKUP_PREFIX}{}-saved", header.created_at);
+        let name = format!("{BACKUP_PREFIX}{}{SAVED_SUFFIX}", header.created_at);
         let folder = backups.join(&name);
         let partial = folder.with_extension("partial");
         let _ = fs::remove_dir_all(&partial);
@@ -252,15 +250,69 @@ impl HostStore {
                 &header.sha256,
             )?;
             // It opens with this host's key, as a restore will open it.
-            HostStore::check_backup(self.dir(), &partial)?;
+            HostStore::check_backup(dir, &partial)?;
             let _ = fs::remove_dir_all(&folder);
             fs::rename(&partial, &folder)?;
             Ok(name)
         })();
-        if unpacked.is_err() {
-            let _ = fs::remove_dir_all(&partial);
+        match &unpacked {
+            Err(_) => {
+                let _ = fs::remove_dir_all(&partial);
+            }
+            Ok(name) => {
+                // Those sent before go: they are not pruned with the daily ones.
+                for path in fs::read_dir(&backups)?.filter_map(|e| e.ok().map(|e| e.path())) {
+                    let other = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                    if other.is_some_and(|n| n.ends_with(SAVED_SUFFIX) && &n != name) && path.is_dir() {
+                        let _ = fs::remove_dir_all(&path);
+                    }
+                }
+            }
         }
         unpacked
+    }
+}
+
+/// The store's database copied for a backup file, from [`HostStore::copy_for_export`].
+pub struct ExportCopy {
+    out: PathBuf,
+    copy: PathBuf,
+    vault_id: Uuid,
+    organization_key: Vec<u8>,
+    secret: crypto::Key,
+    host_file: String,
+}
+
+impl ExportCopy {
+    /// Writes the backup file, and returns when it was made.
+    pub fn write(self) -> Result<i64> {
+        let written = (|| {
+            let (database_bytes, sha256) = sha256_of(&self.copy)?;
+            let created_at = now_ms();
+            let header = Header {
+                format: FORMAT,
+                vault_id: self.vault_id,
+                created_at,
+                host_key: crypto::seal_key(&self.organization_key, &self.secret, &host_key_info(&self.vault_id)),
+                organization_key: self.organization_key.clone(),
+                host_file: self.host_file.clone(),
+                database_bytes,
+                sha256,
+            };
+            let header = serde_json::to_vec(&header)?;
+            let mut database = BufReader::new(File::open(&self.copy)?);
+            files::write_atomically_with(&self.out, |file| {
+                let mut file = BufWriter::new(file);
+                file.write_all(MAGIC)?;
+                file.write_all(&(header.len() as u32).to_le_bytes())?;
+                file.write_all(&header)?;
+                std::io::copy(&mut database, &mut file)?;
+                file.flush()
+            })?;
+            Ok(created_at)
+        })();
+        let _ = fs::remove_file(&self.copy);
+        written
     }
 }
 

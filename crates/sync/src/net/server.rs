@@ -92,8 +92,9 @@ impl Transfer {
         Ok(bytes)
     }
 
-    /// Adds a piece from `offset`, which must be where the file ends; the length after.
-    fn write(&mut self, dir: &std::path::Path, offset: u64, bytes: &[u8]) -> std::io::Result<u64> {
+    /// Adds a piece from `offset`, which must be where the file ends; the length after. A file
+    /// past `limit` bytes is refused, and goes.
+    fn write(&mut self, dir: &std::path::Path, offset: u64, bytes: &[u8], limit: u64) -> std::io::Result<u64> {
         use std::io::Write;
         if offset == 0 {
             self.path(dir, "upload");
@@ -107,6 +108,10 @@ impl Transfer {
         let length = std::fs::metadata(path).map_or(0, |m| m.len());
         if length != offset {
             return Err(std::io::Error::other("a piece out of order"));
+        }
+        if length + bytes.len() as u64 > limit {
+            self.clear();
+            return Err(std::io::Error::other("the backup is far larger than the host's store"));
         }
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
         file.write_all(bytes)?;
@@ -123,6 +128,12 @@ impl Transfer {
         }
         self.sending = false;
     }
+}
+
+/// The most a backup sent to the host may be: four times its store, and at least 1 GiB, so a
+/// computer cannot fill the host's disk.
+fn upload_limit(dir: &std::path::Path) -> u64 {
+    HostStore::store_bytes(dir).saturating_mul(4).max(1 << 30)
 }
 
 impl Drop for Transfer {
@@ -336,7 +347,14 @@ impl Server {
                     None => refused("only an admin's computer fetches the host's backups"),
                     Some(_) => {
                         let path = transfer.path(self.host().dir(), "download");
-                        let made = self.host().export_backup(&path);
+                        // Only the copy holds the store; syncs go on while the file is made.
+                        let copied = self.host().copy_for_export(&path);
+                        let made = match copied {
+                            Ok(copy) => tokio::task::spawn_blocking(move || copy.write())
+                                .await
+                                .unwrap_or_else(|e| Err(std::io::Error::other(e).into())),
+                            Err(e) => Err(e),
+                        };
                         match made.and_then(|made| Ok((std::fs::metadata(&path)?.len(), made))) {
                             Ok((bytes, made_at)) => HostMsg::BackupReady { bytes, made_at },
                             Err(e) => refused(e.to_string()),
@@ -351,7 +369,7 @@ impl Server {
                     None => refused("only an admin's computer restores the host"),
                     Some(_) => {
                         let dir = self.host().dir().to_owned();
-                        match transfer.write(&dir, offset, &bytes) {
+                        match transfer.write(&dir, offset, &bytes, upload_limit(&dir)) {
                             Ok(next) => HostMsg::ChunkTaken { next },
                             Err(e) => refused(e.to_string()),
                         }
@@ -361,9 +379,16 @@ impl Server {
                     (None, _) => refused("only an admin's computer restores the host"),
                     (Some(_), None) => refused("no backup was sent"),
                     (Some(_), Some(path)) => {
-                        let host = self.host();
-                        let asked = host.import_backup(&path).and_then(|name| host.ask_restore(&name));
-                        drop(host);
+                        let (dir, vault) = {
+                            let host = self.host();
+                            (host.dir().to_owned(), host.vault_id())
+                        };
+                        // Checked and unpacked with the store free for syncs.
+                        let imported =
+                            tokio::task::spawn_blocking(move || HostStore::import_backup(&dir, vault, &path))
+                                .await
+                                .unwrap_or_else(|e| Err(std::io::Error::other(e).into()));
+                        let asked = imported.and_then(|name| self.host().ask_restore(&name));
                         self.restoring(asked)
                     }
                 },
@@ -627,5 +652,20 @@ pub async fn serve(listener: TcpListener, server: Arc<Server>) -> Result<()> {
                 Err(_) => log::info!("{peer}: the TLS handshake took too long"),
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Transfer;
+
+    #[test]
+    fn a_backup_sent_past_its_limit_is_refused_and_goes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut transfer = Transfer::default();
+        assert_eq!(transfer.write(dir.path(), 0, b"abcd", 6).unwrap(), 4);
+        assert!(transfer.write(dir.path(), 4, b"efg", 6).is_err());
+        assert!(transfer.sent().is_none());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }
