@@ -10,11 +10,14 @@ default.
 
 ## Summary
 
-- **A phone is a replica, never a vault of its own and never a host.** It joins a LAN host the way
-  a laptop does ([ADR 23](../adr/0023-client-mode.md)), with the people an admin names when
+- **A phone holds a vault of its own, or is a replica; it is never a host.** Some people have
+  only a phone, so it has to be a whole vault for one person (ADR 6), set up, used and backed up
+  on the phone. Its backups are `.gvbackup` files (ADR 7) that the phone's own backup (iCloud,
+  Google) carries off the phone, so a lost phone is not a lost vault.
+- **As a replica**, a phone joins a LAN host the way a laptop does ([ADR 23](../adr/0023-client-mode.md)), with the people an admin names when
   pairing, the offline rules of [ADR 24](../adr/0024-offline-limits-and-revocation.md), and
   revocation when it is lost. ADR 5 already says "Phase 3 mobile is another client of the same
-  protocol". Nothing in the core, the protocol or `hostd` has to change for that.
+  protocol". Nothing in the core or `hostd` has to change for either.
 - **One app, the same code.** Tauri 2 builds the existing Rust and React for iOS and Android
   ([ADR 1](../adr/0001-tauri-rust-react.md)). The work is in the edges: what a phone cannot do
   (host, update itself, open a file dialog, print from the webview), what it does differently
@@ -29,7 +32,7 @@ default.
 - **App stores are last, and wait for Aaron.** Every stage before the last builds and tests on CI
   (Android emulator, iOS simulator) with no developer accounts. Signing, store listings and the
   export questions come at the end, like the desktop release work in docs/releasing.md.
-- Delivery is 7 stages, plus the store release.
+- Delivery is 8 stages, plus the store release.
 
 ---
 
@@ -83,9 +86,13 @@ default.
 - **The app switcher snapshot.** Both systems keep a picture of the last screen. A recipe would
   show there. iOS needs a cover view put up on `willResignActive`; Android needs `FLAG_SECURE`
   (which also blocks screenshots, see question 6).
-- **System backups.** iCloud backup and Android Auto Backup would copy the replica. It is
-  encrypted, but a replica restored onto a new phone from a system backup would be a copy of a
-  device key the admin never paired. The vault folder is excluded from both.
+- **System backups.** For someone with only a phone, iCloud backup and Android Auto Backup are
+  the backup they already have, and the one that survives losing the phone. But copying the live
+  vault folder is wrong in two ways: SQLite in WAL mode can be copied mid-write, and a replica
+  restored onto a new phone would be a copy of a device key the admin never paired. So the live
+  folder is excluded, and a separate backups folder, holding finished `.gvbackup` files, is
+  included (section 2.6). Android Auto Backup keeps at most 25 MB per app, which photos pass
+  quickly, so Android also needs a backup the person sends somewhere (2.6).
 - **Argon2id at 64 MiB and 3 passes** (`crates/core/src/crypto.rs`). Unlocking reads the stored
   parameters, so phones can unlock what desktops made. Speed on an older phone is unmeasured;
   likely around a second. Measured in stage 2; the parameters do not change unless it is much
@@ -122,7 +129,8 @@ feature, since it is the only part a client uses).
 
 `app_local_data_dir()/vault`, as on desktop. On iOS that is inside the app's container under
 `Library`, with `NSFileProtectionComplete` (unreadable while the phone is locked); on Android,
-the app's private storage. Excluded from system backups (1.2).
+the app's private storage. Excluded from system backups (1.2); the backups folder beside it
+(2.6) is not.
 
 ### 2.3 Locking
 
@@ -141,8 +149,9 @@ lock. Unlock is the person's password; biometric unlock is question 3.
 | Firing log, photos | yes | With the camera. |
 | Materials, data sheets | read only | |
 | Blends, fit, limits | read | Charts scroll sideways. |
-| Import, backups, restore | no | "Do this on a computer." |
-| Team, roles, network hosting, audit log | no | Same; admins still extend offline time with a code from the host. |
+| Import, backups, restore | own vault only | Import through the file picker; backups as in 2.6. |
+| Team, roles, audit log | own vault only | A replica's admin work is done on a computer. |
+| Network hosting | no | A phone never hosts. |
 | Join, unlock, offline notice, leave | yes | |
 
 Roles still decide what a person may do (ADR 4); this table only decides what the phone offers.
@@ -153,8 +162,31 @@ Roles still decide what a person may do (ADR 4); this table only decides what th
   sheet, so it can go to Files, mail or a printer app.
 - **Printing** (recipe, mix record, blend, recovery sheet): the page renders to PDF on the Rust
   side, or through the native print controller (`UIPrintInteractionController`,
-  Android `PrintManager`) given the webview. Stage 6 picks one after trying both. The recovery
-  sheet is never made on a phone anyway, since a phone does not set up vaults.
+  Android `PrintManager`) given the webview. Stage 7 picks one after trying both. The recovery
+  sheet matters most on a phone that is the only copy; it is also offered as a PDF to save.
+
+### 2.6 A phone's own vault, and its backups
+
+- **Setup on a phone** offers both "Start a vault" (ADR 6's one-person vault, with its recovery
+  sheet) and "Join a vault on this network". A phone's vault can grow into a team on the phone
+  (ADR 12), but cannot host; to share it on a LAN, it moves to a computer by a backup restored
+  there (ADR 7), and the phone then joins as a replica.
+- **Automatic backups.** A phone's own vault writes a `.gvbackup` (ADR 7's format, under the
+  person's password) into `backups/` beside the vault each day it is changed, keeping the newest
+  three. Writing a backup reads through SQLite, so the file is always whole; the system backup
+  copies finished files only.
+- **iCloud**: the `backups/` folder is in the app's container and included in the device backup,
+  with no size limit beyond the person's iCloud storage. Restoring a phone brings the folder back,
+  and the app offers "Restore from a backup on this phone" at setup.
+- **Android**: Auto Backup rules include `backups/` and exclude the vault. When the newest backup
+  is over 25 MB, Auto Backup would drop the app's whole backup, so the rules then hold only a
+  backup without photos, and the app asks the person to also save a full one through the system
+  file picker (Storage Access Framework), e.g. to Google Drive, and reminds them as ADR 7 does.
+- **The setting.** "Back up with this phone's backup" is on by default for a phone's own vault, and
+  can be turned off by someone who does not want even ciphertext in a cloud. What it means is said
+  plainly on screen: the file is encrypted under the password, so its safety in the cloud is the
+  password's strength (Argon2id, ADR 3), and the recovery key still opens it.
+- **A replica** never writes these: the host backs up (phase 2 question 12).
 
 ---
 
@@ -175,7 +207,7 @@ Typing an address and code stays, for a phone whose camera is refused.
 ### 3.2 Discovery
 
 None on phones at first: the QR code carries the address. A host whose address changes (DHCP)
-would leave a phone unable to find it; desktops have mDNS for that. Options, in stage 3: ask the
+would leave a phone unable to find it; desktops have mDNS for that. Options, in stage 4: ask the
 admin to give the host a fixed address (written up in docs/user), or browse with the system's own
 service (`NWBrowser` on iOS, which needs only the Bonjour key, not the multicast entitlement;
 `NsdManager` on Android). Recommend the system browsers, behind the same `browse` signature.
@@ -198,7 +230,7 @@ Store review means a phone may run a newer or older app than the host for days. 
 refuses every phone after it updates (or every phone after the phone updates) is a bad week.
 Proposal: the hello carries the lowest and highest protocol versions each side speaks; a host
 keeps speaking the previous version for one release after a change. This is a protocol change,
-the only one in this phase, and lands in stage 3 so desktops get it too.
+the only one in this phase, and lands in stage 4 so desktops get it too.
 
 ---
 
@@ -271,13 +303,14 @@ Sizes as in the phase 2 plan: S under 500 lines changed, M 500 to 1,500, L 1,500
 | # | Stage | Contents | Useful on its own | Size |
 | --- | --- | --- | --- | --- |
 | 1 | **Mobile builds** | Crate types and the mobile entry point, `#[cfg(desktop)]` on hosting, updater and dialogs; `tauri android init` and `tauri ios init`; SQLCipher with vendored OpenSSL on all mobile targets (or the fallback, below); CI jobs that build an Android APK and an iOS simulator app, and cross-compile `core` and `sync`. Checks the file input and the camera in both webviews. ADR 26. | Proves the stack before any screen work. | M |
-| 2 | **The vault on a phone** | Folder, file protection, backup exclusion, the snapshot cover and `FLAG_SECURE`, locking in the background, the `platform` command, Argon2 timing on a real or emulated phone. A phone can unlock a vault copied onto it, for development only. | The security edges, done first. | M |
-| 3 | **Joining from a phone** | The QR code on "Pair a computer" and the scanner; the fingerprint check; the typed path; the local network permission on iOS, explained and detected; the system browsers for discovery; protocol version ranges (3.5). ADR 27. | A phone syncs with a host. | M |
-| 4 | **Phone screens** | The layout of section 5, the bottom bar, what is hidden (2.4), the shop-floor screens first: recipe, batch sheet, mix log, firing log. | Usable on the shop floor. | L |
-| 5 | **Camera and photos** | "Take photo", HEIC to JPEG, scaling, EXIF stripped, photos on demand by default. | Test tiles from the kiln room. | S |
-| 6 | **Getting things out** | CSV through the share sheet; printing by PDF or the native controller. | Parity with desktop's exports. | M |
-| 7 | **Mobile end-to-end** | The emulator and simulator smoke suites in CI, the dev driver by file. Change ADR 11. | Keeps it working. | M |
-| 8 | **Store release** | Developer accounts, signing, App Store Connect and Play Console listings, privacy labels, export compliance answers, TestFlight and Play internal testing. Waits for Aaron (section 8, question 8). | Customers can install it. | — |
+| 2 | **The vault on a phone** | Folder, file protection, backup exclusion, the snapshot cover and `FLAG_SECURE`, locking in the background, the `platform` command, Argon2 timing on a real or emulated phone. | The security edges, done first. | M |
+| 3 | **A vault of its own** | Setup on a phone, daily `.gvbackup` files in `backups/`, iCloud and Auto Backup rules, the 25 MB fallback and saving a backup through the file picker, the setting, restoring at setup. | People with only a phone can use it, safely. | M |
+| 4 | **Joining from a phone** | The QR code on "Pair a computer" and the scanner; the fingerprint check; the typed path; the local network permission on iOS, explained and detected; the system browsers for discovery; protocol version ranges (3.5). ADR 27. | A phone syncs with a host. | M |
+| 5 | **Phone screens** | The layout of section 5, the bottom bar, what is hidden (2.4), the shop-floor screens first: recipe, batch sheet, mix log, firing log. | Usable on the shop floor. | L |
+| 6 | **Camera and photos** | "Take photo", HEIC to JPEG, scaling, EXIF stripped, photos on demand by default. | Test tiles from the kiln room. | S |
+| 7 | **Getting things out** | CSV through the share sheet; printing by PDF or the native controller. | Parity with desktop's exports. | M |
+| 8 | **Mobile end-to-end** | The emulator and simulator smoke suites in CI, the dev driver by file. Change ADR 11. | Keeps it working. | M |
+| 9 | **Store release** | Developer accounts, signing, App Store Connect and Play Console listings, privacy labels, export compliance answers, TestFlight and Play internal testing. Waits for Aaron (section 8, question 8). | Customers can install it. | — |
 
 **Fallback for stage 1:** if vendored OpenSSL will not build for a target, SQLCipher can use
 CommonCrypto on Apple platforms (`bundled-sqlcipher` with the system crypto) and a prebuilt
@@ -300,10 +333,9 @@ OpenSSL on Android. That would mean different features per target in `crates/cor
 
 Each has a recommended default.
 
-1. **Replica only.** Should a phone be able to hold a vault of its own, for a one-person studio
-   with no host? *Default: no, not in phase 3.* A phone vault has no backups (a phone cannot
-   reach a backup folder the way a desktop does), and a lost phone is the whole vault. Could come
-   later, with backups through the share sheet.
+1. **A phone's own vault.** *Decided 2026-10-30: yes,* since some people have only a phone. Backed
+   up through the phone's own backup, as in 2.6. Still open: *default on* for "Back up with this
+   phone's backup", and keeping the newest *three* backups.
 2. **Tablets.** *Default: the same app; at 768 px and wider the desktop layout comes back.* iPad
    and Android tablets on a stand in the glaze room are a likely use.
 3. **Biometric unlock** (Face ID, fingerprint). It would keep a key in the Keychain or Keystore,
@@ -319,17 +351,18 @@ Each has a recommended default.
    to screenshot a batch sheet; an admin setting could turn it off later.
 7. **App review.** *Default: a demo mode in review builds only*, a small vault built in, never
    joined to anything. The alternative, a public demo host, goes against ADR 5.
-8. **When to start stage 8.** It needs an Apple Developer account ($99 a year), a Google Play
+8. **When to start stage 9.** It needs an Apple Developer account ($99 a year), a Google Play
    account ($25 once), and the export counsel check already in docs/follow-ups.md. *Default:
-   after stage 7, when Aaron has time*, as with the desktop release.
-9. **Phase 3 or 4.** The goals say "3 (maybe 4)". *Default: stages 1 to 7 are phase 3; the store
+   after stage 8, when Aaron has time*, as with the desktop release.
+9. **Phase 3 or 4.** The goals say "3 (maybe 4)". *Default: stages 1 to 8 are phase 3; the store
    release is phase 4.*
 
 ## 9. ADRs to write or change
 
 - **New 26. Mobile builds.** Targets, the crate types, what is desktop-only and why, SQLCipher on
   each target, the CI jobs, the dev Mac's limits.
-- **New 27. Phones as replicas.** Replica only, pairing by QR code with the fingerprint, discovery
+- **New 27. Phones: their own vaults and replicas.** A phone's own vault and its backups through
+  iCloud and Auto Backup (adds to ADR 7: where a phone keeps its backups), pairing by QR code with the fingerprint, discovery
   through the system browsers, locking in the background, the snapshot cover, backup exclusion,
   photos on demand, what a phone shows. Notes ADR 5's "Phase 3 mobile is another client".
 - **New 28. Protocol version ranges**, or a section of 27. Changes ADR 21.
@@ -338,9 +371,8 @@ Each has a recommended default.
 - **Change ADR 11.** The mobile smoke suites.
 - **Change ADR 1.** `crates/app` builds for mobile; its "phase 3 needs a macOS CI runner" comes
   true.
-- **docs/follow-ups.md:** the iOS item moves into this plan. Add: a phone's own vault (question 1),
-  biometric unlock (question 3).
-- **docs/user:** a guide to joining from a phone, what a phone can and cannot do, and giving the
+- **docs/follow-ups.md:** the iOS item moves into this plan. Add: biometric unlock (question 3).
+- **docs/user:** a guide to a phone's own vault and its backups, joining from a phone, what a phone can and cannot do, and giving the
   host a fixed address.
 
 ---
