@@ -162,7 +162,8 @@ jobs:
 
       # The runner has the Android SDK and NDKs; Tauri looks for the NDK in NDK_HOME, and plain
       # cargo needs the NDK's clang named for the target. OpenSSL, built from source for SQLCipher,
-      # configures for Android from ANDROID_NDK_ROOT and finds the NDK's clang on the PATH.
+      # configures for Android from ANDROID_NDK_ROOT and needs the NDK's llvm-ranlib named, since the
+      # NDK has no aarch64-linux-android-ranlib.
       - name: Use the runner's Android NDK
         if: runner.os == 'Linux'
         run: |
@@ -172,6 +173,7 @@ jobs:
             echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME"
             echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang"
             echo "AR_aarch64_linux_android=$bin/llvm-ar"
+            echo "RANLIB_aarch64_linux_android=$bin/llvm-ranlib"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$bin/aarch64-linux-android24-clang"
           } >> "$GITHUB_ENV"
           echo "$bin" >> "$GITHUB_PATH"
