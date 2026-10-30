@@ -6,7 +6,7 @@ to 25, so its new ADRs start at 26. Where it is not sure what Tauri, a crate or 
 it says so, and the first stage exists to find out.
 
 Decisions for Aaron are in [section 8](#8-open-questions-for-aaron), each with a recommended
-default.
+default. On 2026-10-30 Aaron accepted every default, with backups on and three kept.
 
 ## Summary
 
@@ -331,11 +331,11 @@ OpenSSL on Android. That would mean different features per target in `crates/cor
 
 ## 8. Open questions for Aaron
 
-Each has a recommended default.
+Each has a recommended default. Aaron accepted all of them on 2026-10-30.
 
 1. **A phone's own vault.** *Decided 2026-10-30: yes,* since some people have only a phone. Backed
-   up through the phone's own backup, as in 2.6. Still open: *default on* for "Back up with this
-   phone's backup", and keeping the newest *three* backups.
+   up through the phone's own backup, as in 2.6. Aaron chose: on by default for "Back up with this
+   phone's backup", and the newest three backups kept.
 2. **Tablets.** *Default: the same app; at 768 px and wider the desktop layout comes back.* iPad
    and Android tablets on a stand in the glaze room are a likely use.
 3. **Biometric unlock** (Face ID, fingerprint). It would keep a key in the Keychain or Keystore,
