@@ -72,6 +72,7 @@ fn on_network<T: Send, F: Future<Output = T>>(work: impl FnOnce() -> F + Send) -
 }
 
 /// Where hostd is: beside the app, as the installer puts its sidecar, or GLAZE_VAULT_HOSTD.
+#[cfg(desktop)]
 fn hostd() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("GLAZE_VAULT_HOSTD") {
         return Some(PathBuf::from(path));
@@ -80,6 +81,12 @@ fn hostd() -> Option<PathBuf> {
         .ok()?
         .with_file_name(format!("hostd{}", std::env::consts::EXE_SUFFIX));
     path.is_file().then_some(path)
+}
+
+/// Phones and tablets never serve (docs/plans/phase-3-mobile.md).
+#[cfg(mobile)]
+fn hostd() -> Option<PathBuf> {
+    None
 }
 
 /// Development and tests: hostd as a child process, with no service and no administrator.
@@ -403,18 +410,24 @@ impl Network {
     }
 }
 
+/// What this computer asks the host with, and where the host is: taken with the vault held only
+/// for a moment, so the app's other commands and the background sync go on while it waits.
+fn asking(state: &State<AppState>) -> CommandResult<(net::Asking, String)> {
+    let vault = state.vault.lock().unwrap();
+    let vault = vault.as_ref().ok_or_else(locked)?;
+    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    Ok((net::Asking::of(vault).map_err(network_error)?, address))
+}
+
 /// The computers that sync with the host, for an admin.
 #[tauri::command(async)]
 pub fn devices(state: State<AppState>) -> CommandResult<Vec<DeviceInfo>> {
-    let mut vault = state.vault.lock().unwrap();
-    let vault = vault.as_mut().ok_or_else(locked)?;
-    let address = vault
-        .host_address()?
-        .ok_or_else(|| network_error("This vault has no host."))?;
-    on_network(move || async move { net::devices(vault, &address).await }).map_err(network_error)
+    let (asking, address) = asking(&state)?;
+    on_network(move || async move { net::devices(&asking, &address).await }).map_err(network_error)
 }
 
 /// Runs hostd with an administrator's rights, which the system asks the person for.
+#[cfg(desktop)]
 fn elevated(program: &Path, args: &[&str]) -> Result<(), String> {
     let program = program.to_string_lossy();
     let output = elevated_command(&program, args).output().map_err(|e| e.to_string())?;
@@ -427,6 +440,11 @@ fn elevated(program: &Path, args: &[&str]) -> Result<(), String> {
             said => said.to_owned(),
         })
     }
+}
+
+#[cfg(mobile)]
+fn elevated(_program: &Path, _args: &[&str]) -> Result<(), String> {
+    Err("Phones and tablets do not serve.".into())
 }
 
 #[cfg(target_os = "macos")]
@@ -643,13 +661,20 @@ pub fn check_out(
     record: Uuid,
     take_over: bool,
 ) -> CommandResult<Vec<CheckoutView>> {
+    let before = {
+        let vault = state.vault.lock().unwrap();
+        vault
+            .as_ref()
+            .ok_or_else(locked)?
+            .checkouts()
+            .into_iter()
+            .find(|c| c.record == record)
+    };
+    let (asking, address) = asking(&state)?;
+    let after = on_network(move || async move { net::check_out(&asking, &address, record, take_over).await })
+        .map_err(|_| Error::NeedsHost)?;
     let mut vault = state.vault.lock().unwrap();
     let vault = vault.as_mut().ok_or_else(locked)?;
-    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
-    let before = vault.checkouts().into_iter().find(|c| c.record == record);
-    let asking = &mut *vault;
-    let after = on_network(move || async move { net::check_out(asking, &address, record, take_over).await })
-        .map_err(|_| Error::NeedsHost)?;
     let me = vault.me().id;
     if let Some(before) = before
         && before.person != me
@@ -668,12 +693,11 @@ pub fn check_out(
 
 #[tauri::command(async)]
 pub fn release_checkout(state: State<AppState>, record: Uuid) -> CommandResult<Vec<CheckoutView>> {
+    let (asking, address) = asking(&state)?;
+    let after = on_network(move || async move { net::release(&asking, &address, record).await })
+        .map_err(|_| Error::NeedsHost)?;
     let mut vault = state.vault.lock().unwrap();
     let vault = vault.as_mut().ok_or_else(locked)?;
-    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
-    let asking = &mut *vault;
-    let after = on_network(move || async move { net::release(asking, &address, record).await })
-        .map_err(|_| Error::NeedsHost)?;
     vault.set_checkouts(after.clone());
     Ok(views(vault, after))
 }
@@ -706,10 +730,8 @@ pub fn set_offline_policy(state: State<AppState>, policy: OfflinePolicy) -> Comm
 /// A code for a computer that has gone too long without syncing, from the host, for an admin.
 #[tauri::command(async)]
 pub fn extension_code(state: State<AppState>, device: Uuid, days: u32) -> CommandResult<String> {
-    let mut vault = state.vault.lock().unwrap();
-    let vault = vault.as_mut().ok_or_else(locked)?;
-    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
-    on_network(move || async move { net::extension_code(vault, &address, device, days).await }).map_err(network_error)
+    let (asking, address) = asking(&state)?;
+    on_network(move || async move { net::extension_code(&asking, &address, device, days).await }).map_err(network_error)
 }
 
 #[derive(Serialize)]
@@ -724,13 +746,9 @@ pub struct Revoked {
 /// keys to everything it could read, and new keys and one-time passwords to its people.
 #[tauri::command(async)]
 pub fn revoke_device(state: State<AppState>, device: Uuid, lost: bool) -> CommandResult<Revoked> {
-    let devices = {
-        let mut vault = state.vault.lock().unwrap();
-        let vault = vault.as_mut().ok_or_else(locked)?;
-        let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
-        on_network(move || async move { net::revoke_device(vault, &address, device, lost).await })
-            .map_err(network_error)?
-    };
+    let (asking, address) = asking(&state)?;
+    let devices = on_network(move || async move { net::revoke_device(&asking, &address, device, lost).await })
+        .map_err(network_error)?;
     let people = devices
         .iter()
         .find(|d| d.id == device)
@@ -748,20 +766,16 @@ pub fn revoke_device(state: State<AppState>, device: Uuid, lost: bool) -> Comman
 /// (docs/adr/0025-host-backups-from-the-app.md).
 #[tauri::command(async)]
 pub fn host_backups(state: State<AppState>) -> CommandResult<Vec<HostBackup>> {
-    let mut vault = state.vault.lock().unwrap();
-    let vault = vault.as_mut().ok_or_else(locked)?;
-    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
-    on_network(move || async move { net::host_backups(vault, &address).await }).map_err(network_error)
+    let (asking, address) = asking(&state)?;
+    on_network(move || async move { net::host_backups(&asking, &address).await }).map_err(network_error)
 }
 
 /// Has the host put one of its backups back: it starts again in a few seconds, and computers
 /// send again what it lacks as they sync.
 #[tauri::command(async)]
 pub fn restore_host_backup(state: State<AppState>, name: String) -> CommandResult<()> {
-    let mut vault = state.vault.lock().unwrap();
-    let vault = vault.as_mut().ok_or_else(locked)?;
-    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
-    on_network(move || async move { net::restore_host_backup(vault, &address, &name).await }).map_err(network_error)
+    let (asking, address) = asking(&state)?;
+    on_network(move || async move { net::restore_host_backup(&asking, &address, &name).await }).map_err(network_error)
 }
 
 /// Asks where to keep a backup of the host, then fetches one made now. None if the person
@@ -781,10 +795,8 @@ pub fn save_host_backup(
     else {
         return Ok(None);
     };
-    let mut vault = state.vault.lock().unwrap();
-    let vault = vault.as_mut().ok_or_else(locked)?;
-    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
-    let made = on_network(move || async move { net::download_host_backup(vault, &address, &path).await })
+    let (asking, address) = asking(&state)?;
+    let made = on_network(move || async move { net::download_host_backup(&asking, &address, &path).await })
         .map_err(network_error)?;
     Ok(Some(made))
 }
@@ -802,11 +814,12 @@ pub fn restore_host_from_file(window: WebviewWindow, state: State<AppState>) -> 
     else {
         return Ok(None);
     };
-    let mut vault = state.vault.lock().unwrap();
-    let vault = vault.as_mut().ok_or_else(locked)?;
-    let made = vault.check_host_backup(&path)?;
-    let address = vault.host_address()?.ok_or(Error::NeedsHost)?;
-    on_network(move || async move { net::restore_host_from_file(vault, &address, &path).await })
+    let made = {
+        let vault = state.vault.lock().unwrap();
+        vault.as_ref().ok_or_else(locked)?.check_host_backup(&path)?
+    };
+    let (asking, address) = asking(&state)?;
+    on_network(move || async move { net::restore_host_from_file(&asking, &address, &path).await })
         .map_err(network_error)?;
     Ok(Some(made))
 }

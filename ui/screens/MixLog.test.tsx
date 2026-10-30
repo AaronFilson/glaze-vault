@@ -174,3 +174,35 @@ describe('a casting slip as it is mixed and aged', () => {
     expect(saved[0].content).toMatchObject({ sheet: 's', notes: 'Overnight' });
   });
 });
+
+describe('a printed mix record', () => {
+  it('has the weights, a lot for each line, the steps so far and blank rows for the rest', () => {
+    fakeCore();
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+    const draft = {
+      ...newMix({ sheet }, new Date(2026, 9, 19)),
+      size: '5000',
+      lots: ['G-12'],
+      steps: [{ on: '2026-10-19', deflocculant: '25', water: '', gravity: '1.80', viscosity: '', gel: '' }]
+    };
+    const { container } = render(<Log sheets={[sheet]} access={OPERATOR} start={{ current: null, draft }} />);
+    expect(container.querySelector('.print-only')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Print mix record' }));
+    expect(print).toHaveBeenCalledTimes(1);
+    const paper = container.querySelector('.print-only') as HTMLElement;
+    expect(within(paper).getByText('Mix record: CP-1')).toBeTruthy();
+    expect(within(paper).getByText('G-12')).toBeTruthy();
+    expect(within(paper).getByText(/^2,?500\.0$/)).toBeTruthy();
+    expect(within(paper).getByText('1.80')).toBeTruthy();
+    // One step typed, and eight blank for the rest.
+    expect(paper.querySelectorAll('table.steps tbody tr')).toHaveLength(9);
+    print.mockRestore();
+  });
+
+  it('is not offered to someone who may not print', () => {
+    fakeCore();
+    const noPrint: Access = { ...OPERATOR, collections: OPERATOR.collections.map((c) => ({ ...c, print: false })) };
+    render(<Log sheets={[sheet]} access={noPrint} start={{ current: null, draft: newMix({ sheet }, new Date(2026, 9, 19)) }} />);
+    expect(screen.queryByRole('button', { name: 'Print mix record' })).toBeNull();
+  });
+});

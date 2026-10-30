@@ -1,12 +1,20 @@
 //! Finding the host on the LAN (plan section 4.4): it advertises `_glazevault._tcp` by mDNS, with
 //! the protocol version and a short tag of its organization's signing key, so a computer can
 //! tell its own vault's host without learning anything about whose it is.
+//!
+//! Desktops only. On phones and tablets `mdns-sd`'s own multicast sockets would need an
+//! entitlement from Apple, so they find no hosts here and are paired by address (ADR 26).
 
-use crate::{Error, Result};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::Error;
+use crate::Result;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use std::time::Instant;
 
 pub const SERVICE: &str = "_glazevault._tcp.local.";
 
@@ -16,19 +24,23 @@ pub fn vault_tag(organization_key: &[u8]) -> String {
 }
 
 /// A host being advertised, until this is dropped.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub struct Advertised(ServiceDaemon);
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 impl Drop for Advertised {
     fn drop(&mut self) {
         let _ = self.0.shutdown();
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn mdns_error(e: mdns_sd::Error) -> Error {
     Error::Discovery(e.to_string())
 }
 
 /// Advertises the host as `name` on `port`, on every address of this machine.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn advertise(name: &str, port: u16, organization_key: &[u8]) -> Result<Advertised> {
     let daemon = ServiceDaemon::new().map_err(mdns_error)?;
     let host_name = format!("{}.local.", name.replace(|c: char| !c.is_ascii_alphanumeric(), "-"));
@@ -51,6 +63,7 @@ pub struct Found {
 }
 
 /// The hosts that answer within `wait`. Blocking.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn browse(wait: Duration) -> Result<Vec<Found>> {
     let daemon = ServiceDaemon::new().map_err(mdns_error)?;
     let events = daemon.browse(SERVICE).map_err(mdns_error)?;
@@ -78,4 +91,10 @@ pub fn browse(wait: Duration) -> Result<Vec<Found>> {
     }
     let _ = daemon.shutdown();
     Ok(found)
+}
+
+/// Phones and tablets find no hosts by mDNS (see the top of this file).
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn browse(_wait: Duration) -> Result<Vec<Found>> {
+    Ok(Vec::new())
 }

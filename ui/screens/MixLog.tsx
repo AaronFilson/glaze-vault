@@ -1,7 +1,7 @@
 // The mix log (docs/adr/0016-mix-log.md): every batch mixed from the batch sheets and recipes this
 // person can open, newest first, and one at a time to fill in: the lot of each material weighed
 // and, for a slip, deflocculant and water added in steps, with readings as it ages.
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, errorText, type Access, type RecipeHead } from '../api';
 import { BATCH_UNITS, formatWeight, scaleBatch, usableLines, type BatchSheet, type BatchUnit } from '../batch';
 import { amountOf } from '../chemistry';
@@ -21,7 +21,7 @@ import {
   type MixStep
 } from '../mix';
 import { isSlip } from '../slip';
-import { canEdit, editableCollections } from '../team';
+import { canEdit, editableCollections, may } from '../team';
 import { useRevisionLines } from '../useRevisionLines';
 import { ConfirmNotice } from './Deleted';
 import { Fold, PendingNotice } from './FiringLog';
@@ -230,6 +230,16 @@ function MixEditor({
   const steps = draft.steps ?? [];
   const totals = mixTotals(draft);
   const slip = isSlip(recipe?.content.type);
+  const mayPrint = (!!draft.sheet || !!draft.recipe) && may(access, collection, 'print');
+  // The record goes in the page once asked for, and the print dialog takes it after it renders.
+  const [printRequest, setPrintRequest] = useState(0);
+  useEffect(() => {
+    if (printRequest) window.print();
+  }, [printRequest]);
+  const print = () => {
+    setPrintRequest((n) => n + 1);
+    if (current) api.note({ action: 'printed', kind: 'mix', record: current.recordId, detail: 'mix record' }).catch(() => {});
+  };
 
   const save = async (content = draft): Promise<Mix | null> => {
     if (!content.sheet && !content.recipe) {
@@ -530,6 +540,11 @@ function MixEditor({
             Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
           </span>
         )}
+        {mayPrint && (
+          <button type="button" onClick={print}>
+            Print mix record
+          </button>
+        )}
         {current && !readOnly && (
           <button type="button" className="link danger end" onClick={() => setConfirming(true)}>
             Delete…
@@ -541,6 +556,155 @@ function MixEditor({
           {error}
         </p>
       )}
+      {mayPrint && printRequest > 0 && (
+        <PrintedMix
+          draft={draft}
+          name={name}
+          changed={changed}
+          current={current}
+          heading={lines === sheetLines && sheet ? 'Code' : 'Material'}
+          rows={Array.from({ length: lotRows }, (_, i) => ({
+            material: weighed[i]?.material || `Material ${i + 1}`,
+            percent: batch?.lines[i]?.percent ?? null,
+            weight: batch?.lines[i]?.weight ?? null,
+            lot: lots[i] ?? ''
+          }))}
+          slip={slip}
+        />
+      )}
     </>
+  );
+}
+
+/** Blank rows a printed mix record leaves for the steps still to come. */
+const BLANK_STEPS = 8;
+
+/** A mix record for the shop floor (ui/styles.css hides it on screen, once it is asked for): the batch as weighed, with
+ * a place for each lot, then the slip's steps so far and blank rows for the rest, to fill in by
+ * hand and type in later. */
+function PrintedMix({
+  draft,
+  name,
+  changed,
+  current,
+  heading,
+  rows,
+  slip
+}: {
+  draft: MixContent;
+  name: string;
+  changed: boolean;
+  current: Mix | null;
+  heading: string;
+  rows: { material: string; percent: number | null; weight: number | null; lot: string }[];
+  slip: boolean;
+}) {
+  const unit = draft.unit ?? 'g';
+  const steps = draft.steps ?? [];
+  const printed = new Date().toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const status = changed
+    ? 'Not saved: printed with unsaved changes'
+    : current
+      ? `Revision ${current.number}, saved ${new Date(current.savedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`
+      : '';
+  const hasWeights = rows.some((row) => row.weight !== null);
+  return (
+    <section className="print-only paper" aria-hidden="true">
+      <p className="confidential">Confidential · Printed {printed} from Glaze Vault</p>
+      <h1>Mix record: {name}</h1>
+      {status && <p className="meta">{status}</p>}
+      <p className="meta">
+        {draft.sheet ? `Batch sheet revision ${draft.sheetNumber}` : `Recipe revision ${draft.recipeNumber}`} · Mixed on{' '}
+        {draft.mixedOn}
+        {draft.size?.trim() ? ` · Dry batch ${draft.size.trim()} ${unit}` : ''}
+      </p>
+      {rows.length > 0 && (
+        <table className="paper-table">
+          <thead>
+            <tr>
+              <th scope="col">{heading}</th>
+              {hasWeights && (
+                <>
+                  <th scope="col" className="num">
+                    %
+                  </th>
+                  <th scope="col" className="num">
+                    Weight ({unit})
+                  </th>
+                </>
+              )}
+              <th scope="col">Lot</th>
+              <th scope="col">Weighed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i}>
+                <td>{row.material}</td>
+                {hasWeights && (
+                  <>
+                    <td className="num">{row.percent === null ? '' : row.percent.toFixed(2)}</td>
+                    <td className="num">{row.weight === null ? '' : formatWeight(row.weight, unit)}</td>
+                  </>
+                )}
+                <td className="write-in">{row.lot}</td>
+                <td className="write-in" />
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {(slip || steps.length > 0 || !!draft.water?.trim()) && (
+        <>
+          <h2>Water, deflocculant and readings</h2>
+          <p className="meta">Water at the start: {draft.water?.trim() ? `${draft.water.trim()} ${unit}` : '________'}</p>
+          <table className="paper-table steps">
+            <thead>
+              <tr>
+                <th scope="col">Day</th>
+                {STEP_FIELDS.map((f) => (
+                  <th scope="col" key={f.key}>
+                    {f.label}
+                    {f.key === 'deflocculant' || f.key === 'water' ? ` (${unit})` : ''}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {steps.map((step, i) => (
+                <tr key={i}>
+                  <td>{step.on}</td>
+                  {STEP_FIELDS.map((f) => (
+                    <td key={f.key}>{step[f.key]}</td>
+                  ))}
+                </tr>
+              ))}
+              {Array.from({ length: BLANK_STEPS }, (_, i) => (
+                <tr key={`blank-${i}`}>
+                  <td className="write-in" />
+                  {STEP_FIELDS.map((f) => (
+                    <td key={f.key} className="write-in" />
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {draft.notes.trim() && (
+        <>
+          <h2>Notes</h2>
+          <p className="notes">{draft.notes}</p>
+        </>
+      )}
+      <dl className="signoff">
+        <dt>Mixed by</dt>
+        <dd />
+        <dt>Date</dt>
+        <dd />
+        <dt>Checked by</dt>
+        <dd />
+      </dl>
+    </section>
   );
 }

@@ -42,12 +42,9 @@ Work decided on but not done yet, with the reason it waits.
   `.gvhost` file on a new host computer, opened with the organization's key; making someone an
   admin or taking it away from a computer without their key file entry (from the host computer
   for now); joining photo pieces with rusqlite's incremental BLOB writes rather than in memory.
-- From the review of 2026-10-29, not yet fixed: the host's backups (daily, saved for an admin and
-  put back) run under the store's lock, so syncs wait while they copy; a backup sent to put back
-  has no size cap; a backup put back from a file is named by when it was made, so the next daily
-  backup may prune it at once; network commands in the app hold the vault while they wait on the
-  host, so a slow host stalls the app's other commands and the background sync; the replica checks
-  a key file entry from the host against the directory's keys but not its signature.
+- From the review of 2026-10-29, the rest fixed since: changes to people, roles and collections
+  (`network::with_host` in the app) still hold the vault while they wait on the host, since they
+  hold the directory there and sync the change at once; other network commands no longer do.
 - Left from the transport and host mode: the organization certifying the host key at conversion;
   hostd under a user of its own on macOS (`_glazevault`) and `host.key` under DPAPI on Windows;
   MSI updates on a computer that serves (only the NSIS installer stops the service); trying the
@@ -61,10 +58,7 @@ Work decided on but not done yet, with the reason it waits.
 
 The ranked list at the end of
 [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault)
-is built. Small things left from the mix log ([ADR 16](adr/0016-mix-log.md)):
-
-- Mixes in the CSV export, as the firing log has.
-- A printed mix record for the shop floor: the batch sheet with blank rows for the slip's steps.
+is built, and so are the mix log's export and its printed record.
 
 ## Engineering
 

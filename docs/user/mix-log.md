@@ -48,6 +48,21 @@ only if the gravity is too high. See
 When you log a firing of the same recipe revision, **Material lots** offers **Take the lots from
 a mix**: choose the mix, by its day, and its lots fill in. See [the firing log](firing-log.md).
 
+## Printing a mix record
+
+**Print mix record** below a mix prints it for the shop floor: the batch with each material's
+weight, a column for its lot and one to tick as it is weighed, then for a slip the water at the
+start, the steps so far and eight blank rows for those to come, and lines to sign. Fill it in by
+the bucket and type it in later. Start a mix from its batch sheet, give it the size, and print it
+before you weigh; you need not save it first.
+
+## Exporting the log
+
+**Settings → Export → Export mix log as CSV…** saves every mix you can open as a spreadsheet, a
+row each, oldest first: what was mixed and its revision, the day and size, the lots by the number
+of their line, the water and deflocculant in all, every step in one cell, and the last gravity,
+Ford cup and gel readings in their own. The file is not encrypted.
+
 ## Deleting a mix
 
 **Delete…** removes the mix for good. Backups made before then still have it.

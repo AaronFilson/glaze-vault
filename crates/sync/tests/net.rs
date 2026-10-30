@@ -264,7 +264,7 @@ async fn the_host_computers_own_vault_syncs_with_the_host_it_became_and_lists_it
     assert_eq!(net::sync(&mut vault, &address).await.unwrap().accepted, 1);
     assert_eq!(vault.heads(Kind::Recipe).unwrap().len(), 1);
 
-    let devices = net::devices(&vault, &address).await.unwrap();
+    let devices = net::devices(&net::Asking::of(&vault).unwrap(), &address).await.unwrap();
     assert_eq!(devices.len(), 1);
     assert_eq!(devices[0].name, "The host computer");
 
@@ -359,13 +359,24 @@ async fn a_record_is_checked_out_and_released_over_the_network() {
     let (_dir, mut ben) = ben_computer(&lan);
     net::sync(&mut ben, &lan.address).await.unwrap();
     let record = lan.ana.heads(Kind::Recipe).unwrap()[0].record_id;
-    let held = net::check_out(&lan.ana, &lan.address, record, false).await.unwrap();
+    let held = net::check_out(&net::Asking::of(&lan.ana).unwrap(), &lan.address, record, false)
+        .await
+        .unwrap();
     assert_eq!(held[0].person, lan.ana_id);
-    let seen = net::check_out(&ben, &lan.address, record, false).await.unwrap();
+    let seen = net::check_out(&net::Asking::of(&ben).unwrap(), &lan.address, record, false)
+        .await
+        .unwrap();
     assert_eq!(seen[0].person, lan.ana_id);
-    let taken = net::check_out(&ben, &lan.address, record, true).await.unwrap();
+    let taken = net::check_out(&net::Asking::of(&ben).unwrap(), &lan.address, record, true)
+        .await
+        .unwrap();
     assert_eq!(taken[0].person, lan.ben);
-    assert!(net::release(&ben, &lan.address, record).await.unwrap().is_empty());
+    assert!(
+        net::release(&net::Asking::of(&ben).unwrap(), &lan.address, record)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -385,21 +396,26 @@ async fn a_paired_computer_takes_the_hosts_extension_codes_until_it_is_revoked()
     net::sync(&mut ben, &lan.address).await.unwrap();
 
     // Both sides have the secret from pairing, so the host's code works here.
-    let code = net::extension_code(&lan.ana, &lan.address, finished.device, 5)
+    let code = net::extension_code(&net::Asking::of(&lan.ana).unwrap(), &lan.address, finished.device, 5)
         .await
         .unwrap();
     let status = ben.extend(&code).unwrap();
     assert!(status.extended_until.is_some());
     // Only an admin's computer gets one.
     assert!(
-        net::extension_code(&ben, &lan.address, finished.device, 5)
+        net::extension_code(&net::Asking::of(&ben).unwrap(), &lan.address, finished.device, 5)
             .await
             .is_err()
     );
 
-    let devices = net::revoke_device(&lan.ana, &lan.address, finished.device, false)
-        .await
-        .unwrap();
+    let devices = net::revoke_device(
+        &net::Asking::of(&lan.ana).unwrap(),
+        &lan.address,
+        finished.device,
+        false,
+    )
+    .await
+    .unwrap();
     assert!(devices.iter().any(|d| d.id == finished.device && d.revoked && !d.lost));
     assert!(matches!(
         net::sync(&mut ben, &lan.address).await,
@@ -407,17 +423,28 @@ async fn a_paired_computer_takes_the_hosts_extension_codes_until_it_is_revoked()
     ));
     // An admin's computer cannot revoke itself.
     let own = lan.ana.device().unwrap();
-    assert!(net::revoke_device(&lan.ana, &lan.address, own, false).await.is_err());
+    assert!(
+        net::revoke_device(&net::Asking::of(&lan.ana).unwrap(), &lan.address, own, false)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_admins_computer_saves_a_backup_of_the_host_and_puts_one_back() {
     let mut lan = lan().await;
     net::sync(&mut lan.ana, &lan.address).await.unwrap();
-    assert!(net::host_backups(&lan.ana, &lan.address).await.unwrap().is_empty());
+    assert!(
+        net::host_backups(&net::Asking::of(&lan.ana).unwrap(), &lan.address)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let kept = tempfile::tempdir().unwrap();
     let file = kept.path().join("studio.gvhost");
-    let made = net::download_host_backup(&lan.ana, &lan.address, &file).await.unwrap();
+    let made = net::download_host_backup(&net::Asking::of(&lan.ana).unwrap(), &lan.address, &file)
+        .await
+        .unwrap();
     assert_eq!(lan.ana.check_host_backup(&file).unwrap(), made);
     // Nothing is left behind on the host, once it sees the connection end.
     let host_dir = lan.dirs[1].path();
@@ -436,20 +463,22 @@ async fn an_admins_computer_saves_a_backup_of_the_host_and_puts_one_back() {
     assert_eq!(left(), 0);
 
     // Sent back, it becomes one of the host's backups, and hostd is asked to restore it.
-    net::restore_host_from_file(&lan.ana, &lan.address, &file)
+    net::restore_host_from_file(&net::Asking::of(&lan.ana).unwrap(), &lan.address, &file)
         .await
         .unwrap();
-    let backups = net::host_backups(&lan.ana, &lan.address).await.unwrap();
+    let backups = net::host_backups(&net::Asking::of(&lan.ana).unwrap(), &lan.address)
+        .await
+        .unwrap();
     assert_eq!(backups.len(), 1);
     let asked = std::fs::read_to_string(host_dir.join(glaze_vault_core::RESTORE_FILE)).unwrap();
     assert!(asked.ends_with(&backups[0].name));
     std::fs::remove_file(host_dir.join(glaze_vault_core::RESTORE_FILE)).unwrap();
-    net::restore_host_backup(&lan.ana, &lan.address, &backups[0].name)
+    net::restore_host_backup(&net::Asking::of(&lan.ana).unwrap(), &lan.address, &backups[0].name)
         .await
         .unwrap();
     assert!(host_dir.join(glaze_vault_core::RESTORE_FILE).exists());
     assert!(
-        net::restore_host_backup(&lan.ana, &lan.address, "backup-1")
+        net::restore_host_backup(&net::Asking::of(&lan.ana).unwrap(), &lan.address, "backup-1")
             .await
             .is_err()
     );
@@ -461,13 +490,25 @@ async fn an_admins_computer_saves_a_backup_of_the_host_and_puts_one_back() {
         join_locally(&vault, &mut lan.server.host(), ben_dir.path(), lan.ben);
     }
     let ben = Vault::unlock_as(ben_dir.path(), Some(lan.ben), OWN).unwrap();
-    assert!(net::host_backups(&ben, &lan.address).await.is_err());
     assert!(
-        net::download_host_backup(&ben, &lan.address, &kept.path().join("ben.gvhost"))
+        net::host_backups(&net::Asking::of(&ben).unwrap(), &lan.address)
             .await
             .is_err()
     );
-    assert!(net::restore_host_from_file(&ben, &lan.address, &file).await.is_err());
+    assert!(
+        net::download_host_backup(
+            &net::Asking::of(&ben).unwrap(),
+            &lan.address,
+            &kept.path().join("ben.gvhost")
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        net::restore_host_from_file(&net::Asking::of(&ben).unwrap(), &lan.address, &file)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

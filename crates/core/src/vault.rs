@@ -22,7 +22,7 @@ pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
 pub use audit::{AuditEntry, AuditLog, Note};
 pub(crate) use events::Body;
 pub use host::HostStore;
-pub use host_backup::{BACKUPS, HOST_BACKUP_EXTENSION, HostBackup, RESTORE_FILE};
+pub use host_backup::{BACKUPS, ExportCopy, HOST_BACKUP_EXTENSION, HostBackup, RESTORE_FILE};
 pub use offline::{OfflinePolicy, OfflineStatus, RoleLimit};
 pub use roles::{Capabilities, CustomRole};
 pub use signatures::{SignatureCheck, Signed, SignedAs};

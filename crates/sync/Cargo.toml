@@ -14,7 +14,6 @@ glaze-vault-core = { path = "../core" }
 hex = "0.4.3"
 hmac = "0.13.0"
 log = "0.4"
-mdns-sd = { version = "0.21.6", default-features = false }
 # Without its default features, which pull in aws-lc-rs: CMake and NASM on Windows.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -27,6 +26,10 @@ tokio = { version = "1.53.3", features = ["net", "rt-multi-thread", "time", "syn
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"
+
+# mDNS on desktops only (src/net/discover.rs).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+mdns-sd = { version = "0.21.6", default-features = false }
 
 [dev-dependencies]
 # Argon2id at its cheapest, so the tests make many vaults quickly. Never in a release build.

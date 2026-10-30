@@ -24,4 +24,4 @@ pub use vault::{
     LastBackup, MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS, Note, OfflinePolicy, OfflineStatus, Person, Revision,
     RoleLimit, SetAside, Settings, SignatureCheck, Signed, SignedAs, Vault,
 };
-pub use vault::{BACKUPS as HOST_BACKUPS, HOST_BACKUP_EXTENSION, HostBackup, HostStore, RESTORE_FILE};
+pub use vault::{BACKUPS as HOST_BACKUPS, ExportCopy, HOST_BACKUP_EXTENSION, HostBackup, HostStore, RESTORE_FILE};

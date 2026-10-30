@@ -4,11 +4,12 @@
 //! again, and pushes what was saved on it, which the host numbers. Everything else works as on one
 //! computer.
 
-use super::events::{self, Body};
+use super::events::{self, Body, SignedBy};
 use super::host::{MODE, put_entry};
 use super::items;
 use super::signatures::Trust;
 use super::{DATABASE_FILE, KEYRING_FILE, Vault, now_ms, parse_id, revision_aad, set_aside_orphan_database, summaries};
+use crate::access::Directory;
 use crate::crypto::{self, Sealed};
 use crate::error::{Error, Result};
 use crate::keyring::{self, Keyring, Organization, PersonEntry};
@@ -292,7 +293,7 @@ impl Vault {
                         }
                     }
                 }
-                Item::Entry(entry) => take_entry(&tx, &mut keyring, &database_key, entry)?,
+                Item::Entry(entry) => take_entry(&tx, &trust, &mut keyring, &database_key, entry)?,
             }
             // Its own items come back with the host's number; whatever this replica logged for
             // an item, it is no longer waiting to be pushed.
@@ -816,8 +817,15 @@ fn erased_here(conn: &Connection, record: &Uuid) -> Result<bool> {
 }
 
 /// Takes a person's newer key file entry into this replica's key file, sealing its own database
-/// key to them if they are new here.
-fn take_entry(conn: &Connection, keyring: &mut Keyring, database_key: &crypto::Key, item: &EntryItem) -> Result<()> {
+/// key to them if they are new here. It must be signed by the person or an admin, as the host
+/// checks, so a host that was tampered with cannot send an old or made-up entry.
+fn take_entry(
+    conn: &Connection,
+    trust: &Trust,
+    keyring: &mut Keyring,
+    database_key: &crypto::Key,
+    item: &EntryItem,
+) -> Result<()> {
     let entry = item
         .parsed()
         .ok_or_else(|| Error::Corrupt(format!("the key file entry of {} does not read", item.person)))?;
@@ -837,6 +845,17 @@ fn take_entry(conn: &Connection, keyring: &mut Keyring, database_key: &crypto::K
         )));
     }
     let vault_id = keyring.vault_id;
+    let signed = SignedBy {
+        signature: item.signature.clone(),
+        signer: item.signer,
+        role: As::Author,
+    };
+    let payload = signing::entry_payload(&vault_id, &item.person, item.at, &item.entry);
+    if item.signer != item.person && !Directory::load(conn)?.is_admin(item.signer)
+        || trust.check(&signed, &payload).check == super::SignatureCheck::Bad
+    {
+        return Err(Error::BadSignature);
+    }
     // An entry changed here that has not reached the host yet, such as a password chosen at a
     // first sign-in, stays: it is pushed after this pull, and the host keeps the newer.
     if let Some(user) = keyring.users.iter().find(|u| u.id == entry.id) {
@@ -1747,6 +1766,28 @@ mod tests {
     }
 
     #[test]
+    fn a_key_file_entry_from_the_host_must_be_signed_by_its_person_or_an_admin() {
+        let t = team();
+        let ben = &t.computers[1];
+        let entry = items::entry_item(&t.host.conn, &ben.me().id.to_string()).unwrap();
+        let take = |item: &EntryItem| {
+            let trust = Trust::load(&ben.conn, ben.keyring.vault_id).unwrap();
+            let mut keyring = ben.keyring.clone();
+            take_entry(&ben.conn, &trust, &mut keyring, &ben.database_key().unwrap(), item)
+        };
+        take(&entry).unwrap();
+        let mut forged = entry.clone();
+        forged.signature[0] ^= 1;
+        assert!(matches!(take(&forged), Err(Error::BadSignature)));
+        // Cleo is neither Ben nor an admin.
+        let by_cleo = EntryItem {
+            signer: t.computers[2].me().id,
+            ..entry
+        };
+        assert!(matches!(take(&by_cleo), Err(Error::BadSignature)));
+    }
+
+    #[test]
     fn a_backup_of_the_host_kept_elsewhere_goes_back_to_it() {
         let mut t = team();
         let kept = tempfile::tempdir().unwrap();
@@ -1772,11 +1813,21 @@ mod tests {
         changed[last] ^= 1;
         let bad = kept.path().join("changed.gvhost");
         fs::write(&bad, &changed).unwrap();
-        assert!(matches!(t.host.import_backup(&bad), Err(Error::NotABackup)));
+        assert!(matches!(
+            HostStore::import_backup(t.host.dir(), t.host.vault_id(), &bad),
+            Err(Error::NotABackup)
+        ));
         assert!(t.host.backups().unwrap().is_empty());
 
-        let name = t.host.import_backup(&file).unwrap();
+        let name = HostStore::import_backup(t.host.dir(), t.host.vault_id(), &file).unwrap();
         assert_eq!(t.host.backups().unwrap()[0].name, name);
+        // The daily backups do not prune one sent, though it sorts before them.
+        let daily = t.host.dir().join(super::super::BACKUPS);
+        for _ in 0..crate::vault::host::BACKUPS_KEPT + 2 {
+            t.host.back_up(&daily).unwrap();
+        }
+        assert!(t.host.backups().unwrap().iter().any(|b| b.name == name));
+        assert_eq!(t.host.backups().unwrap().len(), crate::vault::host::BACKUPS_KEPT + 1);
         t.host.ask_restore(&name).unwrap();
         assert!(t.host.ask_restore("../elsewhere").is_err());
         let dir = t.host.dir().to_owned();

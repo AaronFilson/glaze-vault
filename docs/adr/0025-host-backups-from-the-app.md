@@ -27,6 +27,12 @@ computer without their key file entry. No new schema.
   `RestoreSent`. The host takes it only if it is this vault's, all there by its hash, and opens
   with its own host key; it goes in among the backups as `backup-<made>-saved`, then back as
   above. `hostd restore` takes such a file too, on the host computer.
+- **Since the review of 2026-10-29**: the store is held only while its files are copied; hashing,
+  writing a `.gvhost` file and checking one sent happen with syncs going on. A file sent may be at
+  most four times the host's store, and at least 1 GiB, or the host refuses it and removes what
+  came. The daily backups' pruning does not count `-saved` ones, which are named by when they were
+  made, perhaps long ago; only the latest one sent is kept. A replica takes a key file entry only
+  if it is signed by its person or an admin, as the host checks.
 - **The directory, guarded**: over the network, the host refuses an event that changes people,
   roles or collections (all but certificates, organization keys, erasures and moves) from a
   computer that does not hold the directory, with `DirectoryNotHeld`, and the rest of its group

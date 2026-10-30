@@ -315,6 +315,11 @@ impl HostStore {
         open_files(dir, backup).map(|_| ())
     }
 
+    /// How large the store in `dir` is.
+    pub fn store_bytes(dir: &Path) -> u64 {
+        fs::metadata(dir.join(DATABASE_FILE)).map_or(0, |m| m.len())
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -1195,6 +1200,8 @@ pub const BACKUPS_KEPT: usize = 14;
 /// What a backup of the host's store holds, besides its database: the database key, sealed to
 /// the host's key, which stays where it is.
 pub(super) const BACKUP_PREFIX: &str = "backup-";
+/// The end of the name of a backup an admin's computer sent.
+pub(super) const SAVED_SUFFIX: &str = "-saved";
 
 impl HostStore {
     /// The store's generation (plan section 3.9): new each time it is restored from a backup, so
@@ -1269,6 +1276,14 @@ impl HostStore {
     /// Copies the store into a new folder in `backups`, and keeps only the newest
     /// [`BACKUPS_KEPT`]. The copy is as encrypted as the store, and opens with the host's key.
     pub fn back_up(&mut self, backups: &Path) -> Result<PathBuf> {
+        let partial = self.copy_for_backup(backups)?;
+        HostStore::finish_backup(&partial)
+    }
+
+    /// The part of [`back_up`](Self::back_up) that needs the store: its files copied into a
+    /// partial folder in `backups`, for [`finish_backup`](Self::finish_backup) to finish with
+    /// the store free for syncs again.
+    pub fn copy_for_backup(&mut self, backups: &Path) -> Result<PathBuf> {
         self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         fs::create_dir_all(backups)?;
         // Named by when, so they sort oldest first; two in one millisecond get a number after.
@@ -1278,20 +1293,36 @@ impl HostStore {
                 0 => backups.join(format!("{BACKUP_PREFIX}{at}")),
                 n => backups.join(format!("{BACKUP_PREFIX}{at}-{n}")),
             })
-            .find(|folder| !folder.exists())
+            .find(|folder| !folder.exists() && !folder.with_extension("partial").exists())
             .expect("a free name");
         let partial = folder.with_extension("partial");
         fs::create_dir_all(&partial)?;
-        fs::copy(self.dir.join(DATABASE_FILE), partial.join(DATABASE_FILE))?;
-        fs::copy(self.dir.join(HOST_FILE), partial.join(HOST_FILE))?;
-        fs::rename(&partial, &folder)?;
+        let copied = fs::copy(self.dir.join(DATABASE_FILE), partial.join(DATABASE_FILE))
+            .and_then(|_| fs::copy(self.dir.join(HOST_FILE), partial.join(HOST_FILE)));
+        if let Err(e) = copied {
+            let _ = fs::remove_dir_all(&partial);
+            return Err(e.into());
+        }
+        Ok(partial)
+    }
+
+    /// Makes a partial backup from [`copy_for_backup`](Self::copy_for_backup) one of the
+    /// backups, and keeps only the newest [`BACKUPS_KEPT`] daily ones. A backup an admin's
+    /// computer sent (named `-saved`) is not counted: it is named by when it was made, which may
+    /// be long ago, and only the latest one sent is kept.
+    pub fn finish_backup(partial: &Path) -> Result<PathBuf> {
+        let folder = partial.with_extension("");
+        fs::rename(partial, &folder)?;
+        let backups = folder.parent().ok_or(Error::NotABackup)?;
         let mut made: Vec<PathBuf> = fs::read_dir(backups)?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| {
                 p.is_dir()
                     && p.extension().is_none()
-                    && p.file_name()
-                        .is_some_and(|n| n.to_string_lossy().starts_with(BACKUP_PREFIX))
+                    && p.file_name().is_some_and(|n| {
+                        let n = n.to_string_lossy();
+                        n.starts_with(BACKUP_PREFIX) && !n.ends_with(SAVED_SUFFIX)
+                    })
             })
             .collect();
         made.sort();

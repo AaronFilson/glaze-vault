@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
+#[cfg(desktop)]
 use tauri_plugin_updater::{Update, UpdaterExt};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -25,6 +26,7 @@ struct AppState {
     /// False in builds made without an updater public key (crates/app/tauri.conf.json).
     updates_configured: bool,
     /// The update found by the last check, kept until it is installed.
+    #[cfg(desktop)]
     update: Mutex<Option<Update>>,
 }
 
@@ -61,6 +63,7 @@ fn file_error(error: impl std::fmt::Display) -> CommandError {
     CommandError::new("io", format!("A file could not be read or written: {error}"))
 }
 
+#[cfg(desktop)]
 fn update_error(error: tauri_plugin_updater::Error) -> CommandError {
     CommandError::new("update-failed", format!("Glaze Vault could not update: {error}"))
 }
@@ -695,10 +698,11 @@ pub(crate) fn open_dialog(
     if let Some(path) = dev_picked() {
         return Ok(Some(path));
     }
-    let picked = window
-        .dialog()
-        .file()
-        .set_parent(window)
+    let dialog = window.dialog().file();
+    // Phones and tablets have no windows to put the dialog over.
+    #[cfg(desktop)]
+    let dialog = dialog.set_parent(window);
+    let picked = dialog
         .set_title(title)
         .add_filter(kind, extensions)
         .blocking_pick_file();
@@ -732,10 +736,10 @@ pub(crate) fn save_dialog(
     if let Some(path) = dev_picked() {
         return Ok(Some(path));
     }
-    let picked = window
-        .dialog()
-        .file()
-        .set_parent(window)
+    let dialog = window.dialog().file();
+    #[cfg(desktop)]
+    let dialog = dialog.set_parent(window);
+    let picked = dialog
         .set_file_name(suggested_name)
         .add_filter(kind, &[extension])
         .blocking_save_file();
@@ -805,6 +809,7 @@ struct UpdateInfo {
 
 /// Asks GitHub Releases whether there is a newer version. Only the version numbers and the
 /// computer's platform are sent (docs/user/settings.md).
+#[cfg(desktop)]
 #[tauri::command]
 async fn check_for_update(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Option<UpdateInfo>> {
     if !state.updates_configured {
@@ -829,6 +834,7 @@ async fn check_for_update(app: AppHandle, state: State<'_, AppState>) -> Command
 
 /// Downloads and checks the update found by `check_for_update`, locks the vault, installs the
 /// update and restarts. On Windows the installer closes the app itself.
+#[cfg(desktop)]
 #[tauri::command]
 async fn install_update(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let update = state
@@ -841,6 +847,27 @@ async fn install_update(app: AppHandle, state: State<'_, AppState>) -> CommandRe
     state.vault.lock().unwrap().take();
     update.install(bytes).map_err(update_error)?;
     app.restart();
+}
+
+/// Phones and tablets: their app store updates them.
+#[cfg(mobile)]
+#[tauri::command]
+async fn check_for_update() -> CommandResult<Option<UpdateInfo>> {
+    Err(updates_from_the_store())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+async fn install_update() -> CommandResult<()> {
+    Err(updates_from_the_store())
+}
+
+#[cfg(mobile)]
+fn updates_from_the_store() -> CommandError {
+    CommandError::new(
+        "updates-not-configured",
+        "Glaze Vault is updated by the app store on phones and tablets.",
+    )
 }
 
 /// Development builds only: writes the page's text picture of the screen (ui/devTools.ts) to the
@@ -921,8 +948,10 @@ fn updater_configured(config: &tauri::Config) -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let context = tauri::generate_context!();
-    let updates_configured = updater_configured(context.config());
+    let updates_configured = cfg!(desktop) && updater_configured(context.config());
+    #[cfg_attr(mobile, allow(unused_mut))]
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    #[cfg(desktop)]
     if updates_configured {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
@@ -941,6 +970,7 @@ pub fn run() {
                 dir,
                 vault: Mutex::new(None),
                 updates_configured,
+                #[cfg(desktop)]
                 update: Mutex::new(None),
             });
             syncing::start(app.handle().clone());

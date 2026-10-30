@@ -96,7 +96,9 @@ pub async fn serve(options: Options, shutdown: impl Future<Output = ()>) -> Resu
 async fn backing_up(server: Arc<Server>, backups: PathBuf) {
     tokio::time::sleep(Duration::from_secs(60)).await;
     loop {
-        match server.host().back_up(&backups) {
+        // Only the copy holds the store; syncs go on while the rest is done.
+        let copied = server.host().copy_for_backup(&backups);
+        match copied.and_then(|partial| glaze_vault_core::HostStore::finish_backup(&partial)) {
             Ok(made) => log::info!("backed up to {}", made.display()),
             Err(e) => log::error!("the daily backup failed: {e}"),
         }
