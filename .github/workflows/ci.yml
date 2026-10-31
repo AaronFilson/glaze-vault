@@ -123,7 +123,8 @@ jobs:
 
   # Phones and tablets (docs/adr/0026-mobile-builds.md): the core and sync crates built for each
   # target, then the app as an unsigned Android APK and an iOS app for the simulator. The mobile
-  # projects (crates/app/gen/android and gen/apple) are made fresh by `tauri init` each time.
+  # projects (crates/app/gen/android and gen/apple) are made fresh by `tauri init` each time, then
+  # given Glaze Vault's changes by crates/app/mobile/patch.cjs (docs/adr/0027-phones.md).
   mobile:
     name: Mobile (${{ matrix.name }})
     strategy:
@@ -200,6 +201,7 @@ jobs:
         run: |
           set -o pipefail
           npx tauri android init --ci
+          node crates/app/mobile/patch.cjs android
           npx tauri android build --ci --apk --target aarch64 x86_64 2>&1 | tee build.log || {
             node .github/annotate.cjs build.log "tauri android build failed"
             exit 1
@@ -211,6 +213,7 @@ jobs:
         run: |
           set -o pipefail
           npx tauri ios init --ci
+          node crates/app/mobile/patch.cjs ios
           npx tauri ios build --ci --debug --target aarch64-sim 2>&1 | tee build.log || {
             node .github/annotate.cjs build.log "tauri ios build failed"
             exit 1

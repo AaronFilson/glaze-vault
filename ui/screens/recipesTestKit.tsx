@@ -6,7 +6,7 @@ import { vi } from 'vitest';
 import type { Access, Draft, LastBackup, MaterialHead, RecipeHead, Settings } from '../api';
 import { Recipes } from './Recipes';
 
-export const STATUS = { exists: true, unlocked: true, version: '0.2.0', updatesConfigured: false, people: [] };
+export const STATUS = { exists: true, unlocked: true, version: '0.2.0', updatesConfigured: false, platform: 'desktop' as const, people: [] };
 
 export const shino: RecipeHead = {
   recordId: 'record-1',

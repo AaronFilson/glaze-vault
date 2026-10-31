@@ -25,6 +25,8 @@ export interface VaultStatus {
   unlocked: boolean;
   version: string;
   updatesConfigured: boolean;
+  /** What this build runs on (docs/adr/0027-phones.md). */
+  platform: 'desktop' | 'ios' | 'android';
   /** A team's people, to choose from on the lock screen; empty for a one-person vault. */
   people: Person[];
 }

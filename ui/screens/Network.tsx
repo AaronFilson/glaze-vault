@@ -25,11 +25,14 @@ const when = (at: number) => new Date(at).toLocaleString(undefined, { dateStyle:
 export function Network({
   people,
   admin,
+  phone = false,
   onChanged,
   onLeft
 }: {
   people: Person[];
   admin: boolean;
+  /** A phone or tablet never serves the vault (ADR 27). */
+  phone?: boolean;
   onChanged: () => void;
   onLeft: () => void;
 }) {
@@ -45,6 +48,13 @@ export function Network({
   }, []);
 
   if (!status) return error ? <p className="error">{error}</p> : <p className="hint">Loading…</p>;
+  if (!status.replica && phone)
+    return (
+      <p className="hint">
+        This vault is on this phone alone. A phone cannot serve a vault to other computers: to share it on your
+        network, restore a backup of it on a computer and serve it from there.
+      </p>
+    );
   if (!status.replica && !admin)
     return <p className="hint">This vault is on this computer alone. An admin can serve it to the team's other computers.</p>;
   if (!status.replica)

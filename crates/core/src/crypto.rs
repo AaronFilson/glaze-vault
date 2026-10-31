@@ -252,6 +252,26 @@ pub(crate) mod b64_option {
 mod tests {
     use super::*;
 
+    /// How long one password takes to hash with the settings new vaults use, which is most of
+    /// unlocking (docs/adr/0027-phones.md). Run on purpose, in release:
+    /// `cargo test --release -p glaze-vault-core password_hash_time -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn password_hash_time() {
+        let kdf = PasswordKdf {
+            memory_kib: 64 * 1024,
+            passes: 3,
+            lanes: 1,
+            salt: random::<16>().to_vec(),
+        };
+        let start = std::time::Instant::now();
+        let runs = 5;
+        for _ in 0..runs {
+            kdf.derive("a password of ordinary length");
+        }
+        println!("Argon2id, 64 MiB, 3 passes, 1 lane: {:?} each", start.elapsed() / runs);
+    }
+
     #[test]
     fn symmetric_round_trip_and_tamper() {
         let key = random_key();

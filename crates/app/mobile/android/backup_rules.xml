@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and before: only finished backups go into Google's backup, never the live vault
+     (docs/adr/0027-phones.md). Naming a folder to include leaves everything else out. -->
+<full-backup-content>
+    <include domain="root" path="backups/" />
+    <include domain="file" path="backups/" />
+</full-backup-content>

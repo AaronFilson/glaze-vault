@@ -1394,6 +1394,7 @@ version = "0.1.0"
 dependencies = [
  "glaze-vault-core",
  "glaze-vault-sync",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "tauri",

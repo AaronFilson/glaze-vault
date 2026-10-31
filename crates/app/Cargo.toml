@@ -28,5 +28,9 @@ zeroize = "1.9.1"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 
+# The vault's folder on iOS: kept out of backups, and protected while the phone is locked.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSObject", "NSString", "NSURL", "NSValue"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

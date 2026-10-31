@@ -41,3 +41,47 @@ export function useIdleLock(minutes: number | null, onIdle: () => void) {
     };
   }, [minutes]);
 }
+
+/** How long a phone's app may be in the background before the vault locks. */
+export const BACKGROUND_GRACE_SECONDS = 30;
+
+/** True once `seconds` have passed since the app went to the background at `hiddenAt`. */
+export function awayTooLong(hiddenAt: number, now: number, seconds: number): boolean {
+  return now - hiddenAt >= seconds * 1000;
+}
+
+/** Phones (docs/adr/0027-phones.md): calls `onAway` once when the app has been in the background
+ * for `seconds`. A suspended app runs no timers, so coming back also checks the wall clock. Null
+ * turns it off. */
+export function useBackgroundLock(seconds: number | null, onAway: () => void) {
+  const callback = useRef(onAway);
+  callback.current = onAway;
+
+  useEffect(() => {
+    if (seconds === null) return;
+    let hiddenAt: number | null = null;
+    let timer: number | undefined;
+    let fired = false;
+    const fire = () => {
+      if (fired) return;
+      fired = true;
+      callback.current();
+    };
+    const changed = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt ??= Date.now();
+        window.clearTimeout(timer);
+        timer = window.setTimeout(fire, seconds * 1000);
+        return;
+      }
+      window.clearTimeout(timer);
+      if (hiddenAt !== null && awayTooLong(hiddenAt, Date.now(), seconds)) fire();
+      hiddenAt = null;
+    };
+    document.addEventListener('visibilitychange', changed);
+    return () => {
+      document.removeEventListener('visibilitychange', changed);
+      window.clearTimeout(timer);
+    };
+  }, [seconds]);
+}

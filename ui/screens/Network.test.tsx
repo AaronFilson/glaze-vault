@@ -68,6 +68,13 @@ describe('the network section', () => {
     expect(await screen.findByText(/hostd, is missing/)).toBeTruthy();
   });
 
+  it('says a phone cannot serve its vault', async () => {
+    mockIPC((command) => (command === 'network_status' ? status({ canHost: false }) : undefined));
+    render(<Network people={PEOPLE} admin phone onChanged={() => {}} onLeft={() => {}} />);
+    expect(await screen.findByText(/A phone cannot serve a vault/)).toBeTruthy();
+    expect(screen.queryByText(/hostd/)).toBeNull();
+  });
+
   it('lets someone on a computer that syncs leave, warning of what has not reached the host', async () => {
     const calls: string[] = [];
     let left = false;

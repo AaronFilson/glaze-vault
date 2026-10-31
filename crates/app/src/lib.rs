@@ -3,6 +3,7 @@
 //! page never chooses where files are written.
 
 mod network;
+mod phone;
 mod syncing;
 
 use glaze_vault_core::{
@@ -83,9 +84,20 @@ struct VaultStatus {
     unlocked: bool,
     version: String,
     updates_configured: bool,
+    /// "desktop", "ios" or "android": what the page offers, and how it locks (ADR 27).
+    platform: &'static str,
     /// A team's people, for the lock screen to choose from; empty for a one-person vault.
     people: Vec<Person>,
 }
+
+/// The kind of system this build runs on, for the page.
+const PLATFORM: &str = if cfg!(target_os = "ios") {
+    "ios"
+} else if cfg!(target_os = "android") {
+    "android"
+} else {
+    "desktop"
+};
 
 // Commands that derive keys from a password take a moment, so every command runs off the main
 // thread (`async`), and the window stays responsive.
@@ -97,6 +109,7 @@ fn vault_status(app: AppHandle, state: State<AppState>) -> VaultStatus {
         unlocked: state.vault.lock().unwrap().is_some(),
         version: app.package_info().version.to_string(),
         updates_configured: state.updates_configured,
+        platform: PLATFORM,
         people: Vault::people_in(&state.dir).unwrap_or_default(),
     }
 }
@@ -962,7 +975,11 @@ pub fn run() {
             // somewhere else, for development and tests.
             let dir = match std::env::var_os("GLAZE_VAULT_DIR") {
                 Some(dir) => PathBuf::from(dir),
-                None => app.path().app_local_data_dir()?.join("vault"),
+                None => {
+                    let dir = app.path().app_local_data_dir()?.join("vault");
+                    phone::prepare(&dir);
+                    dir
+                }
             };
             app.manage(network::Network::default());
             app.manage(std::sync::Arc::new(syncing::Syncing::default()));

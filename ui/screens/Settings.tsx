@@ -153,7 +153,13 @@ export function Settings({
       )}
       {team && (
         <Section title="Network">
-          <Network people={status.people} admin={admin} onChanged={onTeamChanged} onLeft={onLeft} />
+          <Network
+            people={status.people}
+            admin={admin}
+            phone={status.platform !== 'desktop'}
+            onChanged={onTeamChanged}
+            onLeft={onLeft}
+          />
         </Section>
       )}
       {admin && access && (
@@ -651,8 +657,12 @@ function Updates({
           </div>
           {update?.notes && <p className="hint">{update.notes}</p>}
         </>
-      ) : (
+      ) : status.platform === 'desktop' ? (
         <p className="hint">This copy was built without updates. New versions are installed by hand.</p>
+      ) : (
+        <p className="hint">
+          New versions come from the {status.platform === 'ios' ? 'App Store' : 'Play Store'}, like any other app.
+        </p>
       )}
       {message && <p className="hint" role="status">{message}</p>}
       {error && <p role="alert" className="error">{error}</p>}
