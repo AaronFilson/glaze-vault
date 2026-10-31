@@ -8,7 +8,7 @@ mod syncing;
 
 use glaze_vault_core::{
     Attachment, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error, Grant, Kind,
-    LastBackup, MAX_ATTACHMENT_BYTES, Note, Person, Revision, Role, SetAside, Settings, Vault,
+    LastBackup, MAX_ATTACHMENT_BYTES, Note, OwnBackup, Person, Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -60,7 +60,7 @@ fn locked() -> CommandError {
     CommandError::new("locked", "The vault is locked.")
 }
 
-fn file_error(error: impl std::fmt::Display) -> CommandError {
+pub(crate) fn file_error(error: impl std::fmt::Display) -> CommandError {
     CommandError::new("io", format!("A file could not be read or written: {error}"))
 }
 
@@ -510,10 +510,90 @@ fn back_up(window: WebviewWindow, state: State<AppState>, suggested_name: String
     if state.vault.lock().unwrap().is_none() {
         return Err(locked());
     }
+    // Android's file picker hands back an address to write through, not a path.
+    #[cfg(target_os = "android")]
+    if dev_picked_none() {
+        let mut vault = state.vault.lock().unwrap();
+        return phone::back_up_to_picked(&window, vault.as_mut().ok_or_else(locked)?, &suggested_name);
+    }
     let Some(path) = save_dialog(&window, &suggested_name, "Glaze Vault backup", BACKUP_EXTENSION)? else {
         return Ok(None);
     };
     with_vault(&state, |vault| vault.back_up(&path).map(Some))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhoneBackups {
+    /// Whether this vault backs itself up at all: its own, not a replica, with the setting on,
+    /// and in a team, the person an admin.
+    on: bool,
+    last: Option<OwnBackup>,
+    /// What the phone's own backup takes of the app, if it limits it (Android).
+    budget: Option<u64>,
+}
+
+/// A phone's own vault and its backups (docs/adr/0028-a-phones-own-vault.md). None on desktops and
+/// on replicas, which never make these.
+#[tauri::command(async)]
+fn phone_backup_status(state: State<AppState>) -> CommandResult<Option<PhoneBackups>> {
+    if !phone::OWN_BACKUPS {
+        return Ok(None);
+    }
+    with_vault(&state, |vault| {
+        if vault.is_replica() {
+            return Ok(None);
+        }
+        Ok(Some(PhoneBackups {
+            on: vault.may_back_up_own()?,
+            last: vault.last_own_backup()?,
+            budget: phone::BUDGET,
+        }))
+    })
+}
+
+/// Backs a phone's own vault up into the folder its system backup takes, if one is due. The
+/// page asks at unlock, on going into the background, and hourly; the core decides.
+#[tauri::command(async)]
+fn phone_back_up(state: State<AppState>) -> CommandResult<Option<OwnBackup>> {
+    if !phone::OWN_BACKUPS {
+        return Ok(None);
+    }
+    let folder = phone::backups_folder(&state.dir);
+    with_vault(&state, |vault| vault.back_up_own(&folder, phone::BUDGET))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhoneBackup {
+    #[serde(flatten)]
+    backup: ChosenBackup,
+    photos: bool,
+}
+
+/// The backups a phone's own vault left on it, newest first, to restore from at setup: after
+/// the phone itself was restored from iCloud or Google, the vault is gone but these came back.
+#[tauri::command(async)]
+fn phone_backups(state: State<AppState>) -> CommandResult<Vec<PhoneBackup>> {
+    if !phone::OWN_BACKUPS {
+        return Ok(Vec::new());
+    }
+    let mut found = Vec::new();
+    for (path, own) in Vault::own_backups(&phone::backups_folder(&state.dir))? {
+        // One that does not open is left out rather than offered.
+        let Ok(info) = Vault::backup_info(&path) else { continue };
+        found.push(PhoneBackup {
+            backup: ChosenBackup {
+                path: path.to_string_lossy().into_owned(),
+                file_name: own.file_name,
+                created_at: info.created_at,
+                app_version: info.app_version,
+                admins: info.admins,
+            },
+            photos: own.photos,
+        });
+    }
+    Ok(found)
 }
 
 #[derive(Serialize)]
@@ -726,6 +806,15 @@ pub(crate) fn open_dialog(
 /// (`pick` in ui/devDriver.ts), so imports, backups and restores can be driven.
 #[cfg(debug_assertions)]
 static DEV_PICK: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Whether no file was chosen by a script for the next dialog, so a real one is shown.
+#[cfg(target_os = "android")]
+fn dev_picked_none() -> bool {
+    #[cfg(debug_assertions)]
+    return DEV_PICK.lock().unwrap().is_none();
+    #[cfg(not(debug_assertions))]
+    true
+}
 
 fn dev_picked() -> Option<PathBuf> {
     #[cfg(debug_assertions)]
@@ -964,6 +1053,11 @@ pub fn run() {
     let updates_configured = cfg!(desktop) && updater_configured(context.config());
     #[cfg_attr(mobile, allow(unused_mut))]
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    // Android: writing a backup where the file picker points (docs/adr/0028-a-phones-own-vault.md).
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(tauri_plugin_fs::init());
+    }
     #[cfg(desktop)]
     if updates_configured {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -1044,6 +1138,9 @@ pub fn run() {
             back_up,
             choose_backup,
             restore_backup,
+            phone_backup_status,
+            phone_back_up,
+            phone_backups,
             choose_import,
             set_aside_vaults,
             bring_back_vault,

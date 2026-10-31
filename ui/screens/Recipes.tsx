@@ -29,6 +29,7 @@ import {
 import { localDate } from '../export';
 import { restorePart, useEditor, type Editor } from '../useEditor';
 import { BACKGROUND_GRACE_SECONDS, useBackgroundLock, useIdleLock } from '../useIdleLock';
+import { usePhoneBackups } from '../usePhoneBackups';
 import { BatchSheetForm, BatchSheets } from './BatchSheets';
 import { Blend } from './Blend';
 import { Fit } from './Fit';
@@ -580,6 +581,11 @@ export function Recipes({
     leave(scope, () => editor.edit(content));
   };
 
+  // A phone's own vault backs itself up; a whole backup answers the reminder as one saved does.
+  const phoneBackups = usePhoneBackups(status.platform !== 'desktop', (made) => {
+    if (made.photos) setLastBackup({ at: made.at, fileName: made.fileName });
+  });
+
   const backUp = async () => {
     const saved = await api.backUp(`Glaze Vault backup ${localDate(new Date())}.gvbackup`);
     if (saved) setLastBackup(saved);
@@ -588,6 +594,7 @@ export function Recipes({
   const saveSettings = async (next: VaultSettings) => {
     await api.setSettings(next);
     setSettings(next);
+    await phoneBackups.refresh();
   };
 
   const install = () =>
@@ -1024,7 +1031,9 @@ export function Recipes({
               {lastBackup
                 ? `Your last backup was ${Math.floor((Date.now() - lastBackup.at) / DAY)} days ago.`
                 : 'Your recipes have not been backed up yet.'}{' '}
-              A backup is an encrypted copy to keep away from this computer.
+              {phoneBackups.status?.last && !phoneBackups.status.last.photos
+                ? "The backups this phone keeps leave your photos out, to fit the phone's own backup. Save a whole one somewhere else."
+                : 'A backup is an encrypted copy to keep away from this computer.'}
             </p>
             <div className="row">
               <button
@@ -1052,6 +1061,8 @@ export function Recipes({
           settings={settings}
           onSettings={saveSettings}
           lastBackup={lastBackup}
+          phoneBackups={phoneBackups.status}
+          phoneBackupError={phoneBackups.error}
           backUp={backUp}
           recipes={recipes}
           materials={materials}

@@ -47,7 +47,7 @@ const TOO_LARGE_ERROR = { code: 'too-large', message: 'That is too large to save
 
 /** Pretends to be the Rust commands, and records what was called. */
 export function fakeCore({
-  settings = { autoLock: true, autoLockMinutes: 15, backupReminderDays: 30 },
+  settings = { autoLock: true, autoLockMinutes: 15, backupReminderDays: 30, phoneBackups: true },
   lastBackup = { at: Date.now(), fileName: 'b.gvbackup' },
   draft = null,
   recipes = [shino],

@@ -30,6 +30,25 @@ If you have not backed up for a month, Glaze Vault reminds you at the top of the
 **Back up now…**, or **Not now** to hide it until you next unlock. To change how long it waits,
 or turn reminders off, use **Remind me to back up** in **Settings**.
 
+### On a phone
+
+A vault of your phone's own (one it did not join from a computer) backs itself up. Each day you
+change it, Glaze Vault keeps a backup on the phone where the phone's own backup, iCloud or
+Google, takes it, and keeps the newest three. If you lose the phone, restore the new one from the
+phone's backup, open Glaze Vault, and choose **Restore from a backup on this phone**.
+
+These backups are encrypted under your password, so in iCloud or Google they are as safe as your
+password is strong; your recovery key also opens them. If you want none of your vault in the cloud,
+even encrypted, turn off **Back up with this phone's backup** under **Backups** in **Settings**.
+
+**Android** backs up at most 25 MB of an app. When your vault is bigger than that with its photos,
+the backups kept on the phone leave the photos out, and Settings says so. Then also save a whole
+backup somewhere else: choose **Back up now…** and pick Google Drive, or another place the file
+picker offers. The reminder keeps asking until you do.
+
+A phone that [joined a vault](joining.md) makes none of these: the host computer backs up the
+vault.
+
 ## Restoring a backup
 
 Restore a backup to move your vault to a new computer, or to go back to how it was.
@@ -37,7 +56,7 @@ Restore a backup to move your vault to a new computer, or to go back to how it w
 1. On the unlock screen (lock the vault first if it is open), or on the setup screen of a new
    installation, choose **Restore from a backup**.
 2. Choose **Choose backup file…** and pick the `.gvbackup` file. Glaze Vault shows when it was
-   made.
+   made. On a phone, the backups it kept itself are listed first: choose one of those instead.
 3. Type the password the vault had when the backup was made, and choose **Restore**. If you do
    not know that password, choose **Use the recovery key instead**, type the 24 words from the
    sheet you had then, and choose a new password.

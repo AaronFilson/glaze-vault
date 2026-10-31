@@ -4,6 +4,7 @@ import {
   errorText,
   type Access,
   type LastBackup,
+  type PhoneBackups,
   type MaterialHead,
   type Preferences,
   type RecipeHead,
@@ -35,6 +36,8 @@ export function Settings({
   settings,
   onSettings,
   lastBackup,
+  phoneBackups = null,
+  phoneBackupError = '',
   backUp,
   recipes,
   materials,
@@ -59,6 +62,9 @@ export function Settings({
   settings: VaultSettings;
   onSettings: (settings: VaultSettings) => Promise<void>;
   lastBackup: LastBackup | null;
+  /** A phone's own vault's backups; null on a desktop and on a computer that syncs. */
+  phoneBackups?: PhoneBackups | null;
+  phoneBackupError?: string;
   backUp: () => Promise<void>;
   recipes: RecipeHead[];
   materials: MaterialHead[];
@@ -136,7 +142,16 @@ export function Settings({
       {limitFormulas && <Section title="Limit formulas">{limitFormulas}</Section>}
       {prices && <Section title="Prices">{prices}</Section>}
       <AutoLock settings={settings} onSettings={onSettings} />
-      {admin && <Backups settings={settings} onSettings={onSettings} lastBackup={lastBackup} backUp={backUp} />}
+      {admin && (
+        <Backups
+          settings={settings}
+          onSettings={onSettings}
+          lastBackup={lastBackup}
+          phoneBackups={phoneBackups}
+          phoneBackupError={phoneBackupError}
+          backUp={backUp}
+        />
+      )}
       {admin && <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />}
       {(!team || editableCollections(access, 'recipe').length > 0 || editableCollections(access, 'material').length > 0) && (
         <Import onImport={onImport} />
@@ -349,15 +364,65 @@ function AutoLock({
   );
 }
 
+/** A phone's own vault: backups kept where the phone's own backup takes them
+ * (docs/adr/0028-a-phones-own-vault.md). */
+function PhoneBackupChoice({
+  on,
+  phoneBackups,
+  error,
+  onChange
+}: {
+  on: boolean;
+  phoneBackups: PhoneBackups;
+  error: string;
+  onChange: (on: boolean) => void;
+}) {
+  const { last, budget } = phoneBackups;
+  return (
+    <>
+      <label className="check">
+        <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />
+        Back up with this phone's backup
+      </label>
+      <p className="hint">
+        Each day you change the vault, Glaze Vault keeps a backup on this phone where its own backup (iCloud or
+        Google) takes it, and keeps the newest three. If you lose the phone, restore it from its backup,
+        then open Glaze Vault and choose Restore from a backup on this phone. The file is encrypted under your
+        password, so in the cloud it is as safe as your password is strong. Your recovery key still opens it.
+      </p>
+      {on && last && (
+        <p className="hint">
+          Last backup on this phone{' '}
+          {new Date(last.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+          {last.photos ? '.' : ', without photos.'}
+        </p>
+      )}
+      {on && last && !last.photos && (
+        <p className="warn">
+          With your photos the vault is more than the {Math.round((budget ?? 0) / (1024 * 1024))} MB this phone's
+          backup takes, so the backups kept here leave the photos out. Save a whole backup somewhere else, such as
+          Google Drive, with Back up now.
+        </p>
+      )}
+      {!on && <p className="hint">This phone's own backup takes nothing of the vault.</p>}
+      {error && <p role="alert" className="error">The last backup on this phone failed: {error}</p>}
+    </>
+  );
+}
+
 function Backups({
   settings,
   onSettings,
   lastBackup,
+  phoneBackups,
+  phoneBackupError,
   backUp
 }: {
   settings: VaultSettings;
   onSettings: (settings: VaultSettings) => Promise<void>;
   lastBackup: LastBackup | null;
+  phoneBackups: PhoneBackups | null;
+  phoneBackupError: string;
   backUp: () => Promise<void>;
 }) {
   const { error, save } = useSaving(onSettings);
@@ -403,6 +468,14 @@ function Backups({
           </option>
         ))}
       </select>
+      {phoneBackups && (
+        <PhoneBackupChoice
+          on={settings.phoneBackups}
+          phoneBackups={phoneBackups}
+          error={phoneBackupError}
+          onChange={(on) => save({ ...settings, phoneBackups: on })}
+        />
+      )}
       <p className="hint">To restore a backup, lock the vault and choose Restore from a backup.</p>
       {error && <p role="alert" className="error">{error}</p>}
     </Section>
