@@ -50,7 +50,7 @@ it('can use the recovery key and a new password instead', async () => {
 
 it('offers the backups a phone kept, and restores one', async () => {
   const kept = { ...chosen, path: '/data/backups/backup-1.gvbackup', fileName: 'backup-1.gvbackup', photos: false };
-  const restore = vi.fn(() => ({ setAside: null, recoveryWords: null }));
+  const restore = vi.fn((_args: Record<string, unknown>) => ({ setAside: null, recoveryWords: null }));
   mockIPC((cmd, args) => {
     if (cmd === 'phone_backups') return [kept];
     if (cmd === 'restore_backup') return restore(args as Record<string, unknown>);
