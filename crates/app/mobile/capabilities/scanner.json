@@ -1,0 +1,6 @@
+{
+  "identifier": "scanner",
+  "description": "Phones: scanning the QR code an admin's computer shows to pair (docs/adr/0029-phones-as-replicas.md). Added when the app starts on a phone, since desktops have no scanner plugin.",
+  "windows": ["main"],
+  "permissions": ["barcode-scanner:allow-scan", "barcode-scanner:allow-cancel", "barcode-scanner:allow-check-permissions", "barcode-scanner:allow-request-permissions", "barcode-scanner:allow-open-app-settings"]
+}

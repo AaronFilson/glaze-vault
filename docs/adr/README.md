@@ -33,3 +33,5 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0026](0026-mobile-builds.md)                 | Mobile builds: the same app for phones and tablets             | 2026-10-30 |
 | [0027](0027-phones.md)                        | Phones: the vault's folder, locking and what the page offers   | 2026-10-30 |
 | [0028](0028-a-phones-own-vault.md)            | A phone's own vault, backed up by the phone's own backup       | 2026-10-30 |
+| [0029](0029-phones-as-replicas.md)            | Phones as replicas: pairing by QR code, the local network      | 2026-10-30 |
+| [0030](0030-protocol-version-ranges.md)       | Protocol version ranges                                        | 2026-10-30 |

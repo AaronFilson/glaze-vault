@@ -1,10 +1,21 @@
 import { useEffect, useState } from 'react';
-import { api, errorText, type FoundHost, type Joining } from '../api';
+import { Format, scan } from '@tauri-apps/plugin-barcode-scanner';
+import { api, errorText, type FoundHost, type Joining, type Platform } from '../api';
 
 /** Joining a vault another computer serves on this network (docs/adr/0023-client-mode.md): find
  * the host or type its address, type the code an admin reads out, and wait for them to approve
- * this computer. Then its people sign in with the passwords they have. */
-export function Join({ onJoined, onBack }: { onJoined: () => void; onBack: () => void }) {
+ * this computer. Then its people sign in with the passwords they have. A phone or tablet can scan
+ * the QR code the admin's screen shows instead, which also pins the host's key
+ * (docs/adr/0029-phones-as-replicas.md). */
+export function Join({
+  onJoined,
+  onBack,
+  platform = 'desktop'
+}: {
+  onJoined: () => void;
+  onBack: () => void;
+  platform?: Platform;
+}) {
   const [joining, setJoining] = useState<Joining | null>(null);
   const [hosts, setHosts] = useState<FoundHost[] | null>(null);
   const [address, setAddress] = useState('');
@@ -34,12 +45,11 @@ export function Join({ onJoined, onBack }: { onJoined: () => void; onBack: () =>
     look();
   }, []);
 
-  const join = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const joinWith = async (invite: string | null) => {
     setWaiting(true);
     setError('');
     try {
-      await api.joinVault(address, code, name);
+      await api.joinVault(address, code, name, invite);
       onJoined();
     } catch (e) {
       setError(errorText(e));
@@ -47,6 +57,22 @@ export function Join({ onJoined, onBack }: { onJoined: () => void; onBack: () =>
       setWaiting(false);
     }
   };
+  const join = (event: React.FormEvent) => {
+    event.preventDefault();
+    void joinWith(null);
+  };
+  const scanCode = async () => {
+    setError('');
+    let scanned: string;
+    try {
+      scanned = (await scan({ formats: [Format.QRCode] })).content;
+    } catch (e) {
+      setError(`The code could not be scanned (${errorText(e)}). Type the address and code instead.`);
+      return;
+    }
+    await joinWith(scanned);
+  };
+  const phone = platform !== 'desktop';
 
   return (
     <main className="center">
@@ -54,8 +80,21 @@ export function Join({ onJoined, onBack }: { onJoined: () => void; onBack: () =>
         <h1>Join a vault on this network</h1>
         <p>
           Another computer serves the team's vault. Ask an admin to choose <strong>Pair a computer</strong> in Settings,
-          Network, and type the code they read out.
+          Network, and {phone ? 'scan the code their screen shows, or type it' : 'type the code they read out'}.
         </p>
+        {platform === 'ios' && (
+          <p className="hint">
+            The first time, this iPhone or iPad asks whether Glaze Vault may find devices on your local network. Choose
+            Allow: the vault's host is on your network, and nothing goes beyond it.
+          </p>
+        )}
+        {phone && (
+          <div className="row">
+            <button type="button" className="primary" disabled={!joining || waiting} onClick={() => void scanCode()}>
+              Scan the code
+            </button>
+          </div>
+        )}
         <fieldset className="plain" disabled={waiting}>
           <label htmlFor="join-address">The vault's host</label>
           {hosts && hosts.length > 0 && (
@@ -95,7 +134,7 @@ export function Join({ onJoined, onBack }: { onJoined: () => void; onBack: () =>
             placeholder="4821-0937"
             onChange={(e) => setCode(e.target.value)}
           />
-          <label htmlFor="join-name">This computer's name, for the admin to see</label>
+          <label htmlFor="join-name">{phone ? "This device's name" : "This computer's name"}, for the admin to see</label>
           <input id="join-name" value={name} onChange={(e) => setName(e.target.value)} />
         </fieldset>
         {joining && (

@@ -16,6 +16,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [dependencies]
 glaze-vault-core = { path = "../core" }
 glaze-vault-sync = { path = "../sync" }
+# The QR code on "Pair a computer", drawn as SVG (docs/adr/0029-phones-as-replicas.md).
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2", features = [] }
@@ -28,13 +30,19 @@ zeroize = "1.9.1"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 
-# The vault's folder on iOS: kept out of backups, and protected while the phone is locked.
+# The vault's folder on iOS: kept out of backups, and protected while the phone is locked; and
+# the device's kind (uname), for the name a joining phone suggests.
 [target.'cfg(target_os = "ios")'.dependencies]
+libc = "0.2.190"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSObject", "NSString", "NSURL", "NSValue"] }
 
 # Android: writing a backup where the system's file picker points, a content:// address.
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-fs = "2.7.1"
+
+# Phones: scanning the admin's QR code to join.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-barcode-scanner = "2.5.3"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

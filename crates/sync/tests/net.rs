@@ -149,7 +149,7 @@ async fn an_admin_pairs_a_new_computer_with_a_code() {
     let ben_dir = tempfile::tempdir().unwrap();
     let joining = tokio::spawn({
         let (address, code, dir) = (lan.address.clone(), pairing.code.clone(), ben_dir.path().to_owned());
-        async move { net::pair(&address, &code, "Ben's laptop", &dir, &DeviceKey::generate()).await }
+        async move { net::pair(&address, &code, "Ben's laptop", &dir, &DeviceKey::generate(), None).await }
     });
     let finished = pairing.wait().await.unwrap();
     assert_eq!(finished.name, "Ben's laptop");
@@ -170,9 +170,57 @@ async fn an_admin_pairs_a_new_computer_with_a_code() {
     );
     let other = tempfile::tempdir().unwrap();
     assert!(matches!(
-        net::pair(&lan.address, &code, "again", other.path(), &DeviceKey::generate()).await,
+        net::pair(&lan.address, &code, "again", other.path(), &DeviceKey::generate(), None).await,
         Err(Error::Pairing(_))
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scanned_code_pins_the_host_before_pairing() {
+    let mut lan = lan().await;
+    net::sync(&mut lan.ana, &lan.address).await.unwrap();
+    let mut pairing = AdminPairing::start(&lan.ana, &lan.address).await.unwrap();
+    let invite = net::Invite {
+        addresses: vec![lan.address.clone()],
+        host_key: lan.ana.host_key().unwrap(),
+        code: pairing.code.clone(),
+    };
+    let scanned = net::Invite::parse(&invite.to_uri()).unwrap();
+
+    // Another host's key: refused by TLS, and the code is not spent.
+    let dir = tempfile::tempdir().unwrap();
+    let wrong = net::pair(
+        &lan.address,
+        &scanned.code,
+        "phone",
+        dir.path(),
+        &DeviceKey::generate(),
+        Some(vec![9; 32]),
+    )
+    .await;
+    assert!(
+        matches!(wrong, Err(Error::Pairing(ref reason)) if reason.contains("scanned")),
+        "{wrong:?}"
+    );
+
+    let joining = tokio::spawn({
+        let (address, dir) = (scanned.addresses[0].clone(), dir.path().to_owned());
+        async move {
+            net::pair(
+                &address,
+                &scanned.code,
+                "phone",
+                &dir,
+                &DeviceKey::generate(),
+                Some(scanned.host_key),
+            )
+            .await
+        }
+    });
+    let finished = pairing.wait().await.unwrap();
+    pairing.approve(&lan.ana, &finished, &[lan.ben]).await.unwrap();
+    joining.await.unwrap().unwrap();
+    assert!(Vault::exists(dir.path()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -186,7 +234,7 @@ async fn a_wrong_code_ends_the_pairing() {
         "1234-5678"
     };
     let dir = tempfile::tempdir().unwrap();
-    let tried = net::pair(&lan.address, wrong, "guess", dir.path(), &DeviceKey::generate()).await;
+    let tried = net::pair(&lan.address, wrong, "guess", dir.path(), &DeviceKey::generate(), None).await;
     assert!(
         matches!(tried, Err(Error::Pairing(ref reason)) if reason.contains("wrong")),
         "{tried:?}"
@@ -194,7 +242,15 @@ async fn a_wrong_code_ends_the_pairing() {
     assert!(!Vault::exists(dir.path()));
     assert!(matches!(pairing.wait().await, Err(Error::Pairing(_))));
     // One attempt only: the right code no longer works either.
-    let right = net::pair(&lan.address, &pairing.code, "right", dir.path(), &DeviceKey::generate()).await;
+    let right = net::pair(
+        &lan.address,
+        &pairing.code,
+        "right",
+        dir.path(),
+        &DeviceKey::generate(),
+        None,
+    )
+    .await;
     assert!(matches!(right, Err(Error::Pairing(_))), "{right:?}");
 }
 
@@ -218,6 +274,7 @@ async fn the_host_refuses_a_key_it_does_not_know_and_computers_refuse_a_host_the
     stranger
         .send(&ClientMsg::Hello {
             protocol: PROTOCOL,
+            oldest: None,
             device: lan.ana.device().unwrap(),
             levels: Vec::new(),
         })
@@ -387,7 +444,7 @@ async fn a_paired_computer_takes_the_hosts_extension_codes_until_it_is_revoked()
     let ben_dir = tempfile::tempdir().unwrap();
     let joining = tokio::spawn({
         let (address, code, dir) = (lan.address.clone(), pairing.code.clone(), ben_dir.path().to_owned());
-        async move { net::pair(&address, &code, "laptop", &dir, &DeviceKey::generate()).await }
+        async move { net::pair(&address, &code, "laptop", &dir, &DeviceKey::generate(), None).await }
     });
     let finished = pairing.wait().await.unwrap();
     pairing.approve(&lan.ana, &finished, &[lan.ben]).await.unwrap();

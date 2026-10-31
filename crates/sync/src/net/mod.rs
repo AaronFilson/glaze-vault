@@ -5,6 +5,7 @@
 mod client;
 mod conn;
 mod discover;
+mod invite;
 mod pairing;
 mod server;
 mod tls;
@@ -18,6 +19,7 @@ pub use conn::Conn;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use discover::{Advertised, advertise};
 pub use discover::{Found, SERVICE, browse, vault_tag};
+pub use invite::Invite;
 pub use pairing::{CODE_LIFETIME, fingerprint};
 pub use server::{Server, serve};
 pub use tls::{client_config, server_config};

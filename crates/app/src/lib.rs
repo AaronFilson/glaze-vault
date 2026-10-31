@@ -1058,6 +1058,11 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_fs::init());
     }
+    // Phones: scanning the admin's QR code to join (docs/adr/0029-phones-as-replicas.md).
+    #[cfg(mobile)]
+    {
+        builder = builder.plugin(tauri_plugin_barcode_scanner::init());
+    }
     #[cfg(desktop)]
     if updates_configured {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -1075,6 +1080,8 @@ pub fn run() {
                     dir
                 }
             };
+            #[cfg(mobile)]
+            app.add_capability(include_str!("../mobile/capabilities/scanner.json"))?;
             app.manage(network::Network::default());
             app.manage(std::sync::Arc::new(syncing::Syncing::default()));
             app.manage(AppState {

@@ -4,6 +4,10 @@ Proposed, 2026-10-21. Stage 5 of [the LAN host plan](../plans/phase-2-lan-host.m
 its section 4: the network around [ADR 20](0020-sync-core.md)'s sync core. Settles the plan's
 open choice between raw public keys and rcgen, and the default port.
 
+[ADR 30](0030-protocol-version-ranges.md) replaces the single protocol version with a range, and
+[ADR 29](0029-phones-as-replicas.md) adds pairing by QR code, which pins the host's key before
+the code is tried.
+
 ## Context
 
 ADR 20 left the host and replicas talking through frames passed in one process. What was left was

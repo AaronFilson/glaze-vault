@@ -20,13 +20,15 @@ function invoke<T>(command: string, args?: InvokeArgs, options?: InvokeOptions):
   return tauriInvoke<T>(command, args, options).finally(() => pendingCalls.delete(id));
 }
 
+export type Platform = 'desktop' | 'ios' | 'android';
+
 export interface VaultStatus {
   exists: boolean;
   unlocked: boolean;
   version: string;
   updatesConfigured: boolean;
   /** What this build runs on (docs/adr/0027-phones.md). */
-  platform: 'desktop' | 'ios' | 'android';
+  platform: Platform;
   /** A team's people, to choose from on the lock screen; empty for a one-person vault. */
   people: Person[];
 }
@@ -338,6 +340,8 @@ export interface Checkout {
 export interface PairingCode {
   code: string;
   expiresAt: number;
+  /** The same pairing as a QR code for a phone to scan, as SVG. */
+  qrSvg: string | null;
 }
 
 /** A computer that used a pairing code, for the admin to compare with what it shows. */
@@ -496,7 +500,8 @@ export const api = {
   discoverHosts: () => invoke<FoundHost[]>('discover_hosts'),
   prepareJoin: () => invoke<Joining>('prepare_join'),
   /** Waits until an admin approves this computer, then it holds a locked vault to sign in to. */
-  joinVault: (address: string, code: string, name: string) => invoke<void>('join_vault', { address, code, name }),
+  joinVault: (address: string, code: string, name: string, invite: string | null = null) =>
+    invoke<void>('join_vault', { address, code, name, invite }),
   /** Removes this computer's copy of the vault. */
   leaveVault: () => invoke<void>('leave_vault'),
   checkouts: () => invoke<Checkout[]>('checkouts'),
