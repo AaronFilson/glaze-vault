@@ -2,9 +2,69 @@
 //! device backups, and its files are unreadable while the phone is locked; the `backups` folder
 //! beside it, which stage 3 fills with finished backups, is left for the system to back up. On
 //! Android the app's own storage is private already, and the backup rules are in the manifest
-//! (crates/app/mobile/android).
+//! (crates/app/mobile/android). A phone's own vault backs itself up into that folder
+//! (docs/adr/0028-a-phones-own-vault.md).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Whether this build's own vault backs itself up where the phone's backup takes it.
+pub const OWN_BACKUPS: bool = cfg!(mobile);
+
+/// What the backups folder may hold in all: Android's own backup takes at most 25 MB of an app,
+/// and drops all of it when there is more. iCloud has no such limit.
+pub const BUDGET: Option<u64> = if cfg!(target_os = "android") {
+    Some(24 * 1024 * 1024)
+} else {
+    None
+};
+
+/// The folder beside the vault's that the phone's own backup takes.
+pub fn backups_folder(vault_dir: &Path) -> PathBuf {
+    vault_dir.with_file_name("backups")
+}
+
+/// Android: a backup saved where the person chose in the system's file picker, which hands back
+/// a `content://` address rather than a path. The backup is written in the app's cache under the
+/// name chosen, then copied there. Returns None if the person cancelled.
+#[cfg(target_os = "android")]
+pub fn back_up_to_picked(
+    window: &tauri::WebviewWindow,
+    vault: &mut glaze_vault_core::Vault,
+    suggested_name: &str,
+) -> Result<Option<glaze_vault_core::LastBackup>, crate::CommandError> {
+    use tauri::Manager;
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    let Some(picked) = window
+        .dialog()
+        .file()
+        .set_file_name(suggested_name)
+        .add_filter("Glaze Vault backup", &[glaze_vault_core::BACKUP_EXTENSION])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    if let FilePath::Path(path) = &picked {
+        return Ok(Some(vault.back_up(path)?));
+    }
+    let cache = window.path().app_cache_dir().map_err(crate::file_error)?;
+    std::fs::create_dir_all(&cache).map_err(crate::file_error)?;
+    let staged = cache.join(suggested_name);
+    let made = vault.back_up(&staged);
+    let copied = made.as_ref().ok().map(|_| {
+        let mut options = OpenOptions::new();
+        options.write(true).truncate(true);
+        window
+            .fs()
+            .open(picked, options)
+            .and_then(|mut out| std::io::copy(&mut std::fs::File::open(&staged)?, &mut out))
+    });
+    let _ = std::fs::remove_file(&staged);
+    let last = made?;
+    copied.transpose().map_err(crate::file_error)?;
+    Ok(Some(last))
+}
 
 /// Run once at start, before the vault is opened.
 #[cfg(target_os = "ios")]

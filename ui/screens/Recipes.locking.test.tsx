@@ -37,7 +37,7 @@ describe('locking by itself', () => {
   });
 
   it('keeps unsaved changes as a draft', async () => {
-    const core = fakeCore({ settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0 } });
+    const core = fakeCore({ settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0, phoneBackups: true } });
     const onLocked = show();
     fireEvent.click(await screen.findByRole('button', { name: 'Shino' }));
     fireEvent.change(screen.getByLabelText('Recipe name'), { target: { value: 'Shino, more iron' } });
@@ -55,7 +55,7 @@ describe('locking by itself', () => {
   });
 
   it('keeps unsaved changes to a material too', async () => {
-    const core = fakeCore({ materials: [spar], settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0 } });
+    const core = fakeCore({ materials: [spar], settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0, phoneBackups: true } });
     const onLocked = show();
     fireEvent.click(await screen.findByRole('button', { name: 'Materials' }));
     fireEvent.click(screen.getByRole('button', { name: 'Spar, lot 7' }));
@@ -74,7 +74,7 @@ describe('locking by itself', () => {
   });
 
   it('just locks when nothing is unsaved', async () => {
-    const core = fakeCore({ settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0 } });
+    const core = fakeCore({ settings: { autoLock: true, autoLockMinutes: 5, backupReminderDays: 0, phoneBackups: true } });
     const onLocked = show();
     await screen.findByRole('button', { name: 'Shino' });
     // Lets the idle lock start listening before the key goes down.
@@ -86,7 +86,7 @@ describe('locking by itself', () => {
   });
 
   it('stays open when switched off', async () => {
-    const core = fakeCore({ settings: { autoLock: false, autoLockMinutes: 5, backupReminderDays: 0 } });
+    const core = fakeCore({ settings: { autoLock: false, autoLockMinutes: 5, backupReminderDays: 0, phoneBackups: true } });
     const onLocked = show();
     await screen.findByRole('button', { name: 'Shino' });
     vi.setSystemTime(Date.UTC(2026, 9, 15));

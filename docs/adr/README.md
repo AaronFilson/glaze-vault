@@ -32,3 +32,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0025](0025-host-backups-from-the-app.md)     | The phase 2 leftovers: host backups from the app, and the rest | 2026-10-29 |
 | [0026](0026-mobile-builds.md)                 | Mobile builds: the same app for phones and tablets             | 2026-10-30 |
 | [0027](0027-phones.md)                        | Phones: the vault's folder, locking and what the page offers   | 2026-10-30 |
+| [0028](0028-a-phones-own-vault.md)            | A phone's own vault, backed up by the phone's own backup       | 2026-10-30 |

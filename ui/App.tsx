@@ -27,6 +27,7 @@ export function App() {
   const [screen, setScreen] = useState<Screen>({ name: 'loading' });
   const [status, setStatus] = useState<VaultStatus | null>(null);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [backupsOnPhone, setBackupsOnPhone] = useState(false);
 
   // The people on the lock screen change as a team does, so the status is read again on locking.
   const refreshStatus = () => api.status().then(setStatus, () => {});
@@ -48,6 +49,10 @@ export function App() {
         setStatus(status);
         if (status.unlocked) void opened();
         else setScreen(status.exists ? { name: 'unlock' } : { name: 'setup' });
+        // A phone restored from its own backup has no vault, but the backups the vault kept.
+        if (!status.exists && status.platform !== 'desktop') {
+          api.phoneBackups().then((found) => setBackupsOnPhone(found.length > 0), () => {});
+        }
         // A quiet check at start: offline computers simply hear nothing.
         if (status.updatesConfigured) {
           api
@@ -108,6 +113,7 @@ export function App() {
           onCreated={(words) => setScreen({ name: 'recovery-sheet', words })}
           onRestore={() => setScreen({ name: 'restore', back: 'setup' })}
           onJoin={() => setScreen({ name: 'join' })}
+          backupsOnPhone={backupsOnPhone}
         />
       );
     case 'join':

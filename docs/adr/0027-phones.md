@@ -2,8 +2,8 @@
 
 Proposed, 2026-10-30. Stage 2 of [the phase 3 plan](../plans/phase-3-mobile.md#7-staged-delivery),
 on [ADR 26](0026-mobile-builds.md)'s mobile builds. Changes ADR 26's "Stage 2 checks [the mobile
-projects] in". Later stages add to this record: a phone's own vault and its backups (stage 3),
-joining from a phone (stage 4).
+projects] in". A phone's own vault and its backups are [ADR 28](0028-a-phones-own-vault.md) (stage 3);
+joining from a phone comes in stage 4.
 
 ## Context
 

@@ -47,3 +47,18 @@ it('can use the recovery key and a new password instead', async () => {
     expect(restore).toHaveBeenCalledWith(expect.objectContaining({ words, newPassword: 'a new password' }))
   );
 });
+
+it('offers the backups a phone kept, and restores one', async () => {
+  const kept = { ...chosen, path: '/data/backups/backup-1.gvbackup', fileName: 'backup-1.gvbackup', photos: false };
+  const restore = vi.fn(() => ({ setAside: null, recoveryWords: null }));
+  mockIPC((cmd, args) => {
+    if (cmd === 'phone_backups') return [kept];
+    if (cmd === 'restore_backup') return restore(args as Record<string, unknown>);
+    return null;
+  });
+  render(<Restore vaultExists={false} onRestored={() => {}} onBack={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /without photos/ }));
+  fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'cone six oxidation' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+  await waitFor(() => expect(restore).toHaveBeenCalledWith(expect.objectContaining({ path: kept.path })));
+});

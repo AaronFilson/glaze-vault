@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { api, errorText, type ChosenBackup } from '../api';
+import { useEffect, useState } from 'react';
+import { api, errorText, type ChosenBackup, type PhoneBackup } from '../api';
 import { NewPassword } from './NewPassword';
 import { PersonPicker } from './PersonPicker';
 
@@ -34,6 +34,11 @@ export function Restore({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const count = words.split(/\s+/).filter(Boolean).length;
+  // The backups a phone's own vault left on it (docs/adr/0028-a-phones-own-vault.md).
+  const [onPhone, setOnPhone] = useState<PhoneBackup[]>([]);
+  useEffect(() => {
+    api.phoneBackups().then((found) => setOnPhone(found ?? []), () => {});
+  }, []);
 
   const choose = async () => {
     setError('');
@@ -81,8 +86,24 @@ export function Restore({
         )}
         {!backup ? (
           <>
-            <p>Choose the backup file. Backup files end in .gvbackup.</p>
-            <button type="button" className="primary" onClick={choose}>
+            {onPhone.length > 0 && (
+              <>
+                <h2>Backups on this phone</h2>
+                <ul className="list">
+                  {onPhone.map((found) => (
+                    <li key={found.path}>
+                      <button type="button" className="link left" onClick={() => setBackup(found)}>
+                        {new Date(found.createdAt).toLocaleString(undefined, { dateStyle: 'long', timeStyle: 'short' })}
+                        {found.photos ? '' : ', without photos'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="hint">Or choose a backup file saved somewhere else.</p>
+              </>
+            )}
+            {onPhone.length === 0 && <p>Choose the backup file. Backup files end in .gvbackup.</p>}
+            <button type="button" className={onPhone.length > 0 ? undefined : 'primary'} onClick={choose}>
               Choose backup file…
             </button>
           </>

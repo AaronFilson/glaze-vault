@@ -100,6 +100,8 @@ export interface Settings {
   autoLockMinutes: number;
   /** 0 means no reminder. */
   backupReminderDays: number;
+  /** On a phone, keep backups where the phone's own backup takes them (docs/adr/0028-a-phones-own-vault.md). */
+  phoneBackups: boolean;
 }
 
 /** Kept outside the vault, because they apply before it is unlocked. */
@@ -119,6 +121,28 @@ export interface ChosenBackup {
   appVersion: string;
   /** For a team's backup, the admins who can restore it. */
   admins: Person[];
+}
+
+/** A backup a phone's own vault made of itself (docs/adr/0028-a-phones-own-vault.md). */
+export interface OwnBackup {
+  at: number;
+  fileName: string;
+  /** False for one made without its photos, to fit Android's backup. */
+  photos: boolean;
+  size: number;
+}
+
+export interface PhoneBackups {
+  /** Whether this vault backs itself up: the setting is on, and in a team the person is an admin. */
+  on: boolean;
+  last: OwnBackup | null;
+  /** What the phone's own backup takes of the app, if it limits it (Android). */
+  budget: number | null;
+}
+
+/** A backup left on this phone by its own vault, to restore from. */
+export interface PhoneBackup extends ChosenBackup {
+  photos: boolean;
 }
 
 /** A vault that a restore moved aside, beside the vault's files. */
@@ -512,6 +536,12 @@ export const api = {
   /** Asks where to save, then backs up. Null if cancelled. */
   backUp: (suggestedName: string) => invoke<LastBackup | null>('back_up', { suggestedName }),
   chooseBackup: () => invoke<ChosenBackup | null>('choose_backup'),
+  /** Null on a desktop and on a computer that syncs. */
+  phoneBackupStatus: () => invoke<PhoneBackups | null>('phone_backup_status'),
+  /** Backs a phone's own vault up if one is due; the core decides. */
+  phoneBackUp: () => invoke<OwnBackup | null>('phone_back_up'),
+  /** Backups on this phone to restore from, newest first; none on a desktop. */
+  phoneBackups: () => invoke<PhoneBackup[]>('phone_backups'),
   /** `person` is the admin restoring a team's backup. */
   restoreBackup: (path: string, using: RestoreWith, person: string | null = null) =>
     invoke<RestoreResult>('restore_backup', { path, person, ...using }),

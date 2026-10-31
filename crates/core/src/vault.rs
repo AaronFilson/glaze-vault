@@ -12,6 +12,7 @@ mod hosting;
 mod items;
 mod moving;
 mod offline;
+mod own_backups;
 mod replica;
 mod roles;
 mod signatures;
@@ -24,6 +25,7 @@ pub(crate) use events::Body;
 pub use host::HostStore;
 pub use host_backup::{BACKUPS, ExportCopy, HOST_BACKUP_EXTENSION, HostBackup, RESTORE_FILE};
 pub use offline::{OfflinePolicy, OfflineStatus, RoleLimit};
+pub use own_backups::{OWN_BACKUPS_KEPT, OwnBackup};
 pub use roles::{Capabilities, CustomRole};
 pub use signatures::{SignatureCheck, Signed, SignedAs};
 pub use team::{Collection, Grant, Person};
@@ -468,6 +470,20 @@ impl Vault {
 
     /// Writes a backup of the whole vault to `path` (docs/adr/0007-backups-locking-updates.md).
     pub fn back_up(&mut self, path: &Path) -> Result<LastBackup> {
+        let at = self.write_backup(path, true)?;
+        let last = LastBackup {
+            at,
+            file_name: file_name_of(path),
+        };
+        self.set_meta("last_backup", &serde_json::to_string(&last)?)?;
+        audit::note(&self.conn, &self.signer, audit::Entry::new("backed-up"))?;
+        Ok(last)
+    }
+
+    /// Writes a backup to `path` and says when it was made, without recording it. Without
+    /// `photos`, attachments go in without their bytes, as a replica pulls them, so the backup is
+    /// small (docs/adr/0028-a-phones-own-vault.md).
+    fn write_backup(&mut self, path: &Path, photos: bool) -> Result<i64> {
         // A backup holds every collection, so in a team only admins make one (ADR 12).
         if self.is_team() {
             self.admin()?;
@@ -482,22 +498,30 @@ impl Vault {
         }
         let database_key = self.database_key()?;
         let at = now_ms();
-        Backup::write(
+        let database = self.dir.join(DATABASE_FILE);
+        if photos {
+            Backup::write(
+                path,
+                self.keyring.vault_id,
+                at,
+                self.keyring.clone(),
+                &database_key,
+                &database,
+            )?;
+            return Ok(at);
+        }
+        let lean = own_backups::without_photos(&database, &database_key)?;
+        let written = Backup::write(
             path,
             self.keyring.vault_id,
             at,
             self.keyring.clone(),
             &database_key,
-            &self.dir.join(DATABASE_FILE),
-        )?;
-
-        let last = LastBackup {
-            at,
-            file_name: file_name_of(path),
-        };
-        self.set_meta("last_backup", &serde_json::to_string(&last)?)?;
-        audit::note(&self.conn, &self.signer, audit::Entry::new("backed-up"))?;
-        Ok(last)
+            &lean,
+        );
+        own_backups::remove_database(&lean);
+        written?;
+        Ok(at)
     }
 
     /// What can be told about a backup before it is opened.
@@ -1467,6 +1491,9 @@ pub struct Settings {
     pub auto_lock_minutes: u32,
     /// Remind about backups this many days after the last one; 0 means never.
     pub backup_reminder_days: u32,
+    /// On a phone, keep backups where the phone's own backup takes them
+    /// (docs/adr/0028-a-phones-own-vault.md).
+    pub phone_backups: bool,
 }
 
 impl Default for Settings {
@@ -1475,6 +1502,7 @@ impl Default for Settings {
             auto_lock: true,
             auto_lock_minutes: 15,
             backup_reminder_days: 30,
+            phone_backups: true,
         }
     }
 }
@@ -2062,6 +2090,7 @@ mod tests {
             auto_lock: false,
             auto_lock_minutes: 5,
             backup_reminder_days: 7,
+            phone_backups: false,
         };
         vault.set_settings(&settings).unwrap();
         let path = files.path().join("vault.gvbackup");

@@ -36,7 +36,7 @@ describe('backup reminder', () => {
   });
 
   it('stays quiet when switched off', async () => {
-    fakeCore({ lastBackup: null, settings: { autoLock: true, autoLockMinutes: 15, backupReminderDays: 0 } });
+    fakeCore({ lastBackup: null, settings: { autoLock: true, autoLockMinutes: 15, backupReminderDays: 0, phoneBackups: true } });
     show();
     await screen.findByRole('button', { name: 'Shino' });
     expect(screen.queryByText(/backed up/)).toBeNull();
@@ -54,7 +54,8 @@ it('switches auto-lock off from Settings', async () => {
   expect(core.called('set_settings')[0].args.settings).toEqual({
     autoLock: false,
     autoLockMinutes: 15,
-    backupReminderDays: 30
+    backupReminderDays: 30,
+    phoneBackups: true
   });
   expect((screen.getByLabelText('Lock after') as HTMLSelectElement).disabled).toBe(true);
 });

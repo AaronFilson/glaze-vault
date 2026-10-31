@@ -32,5 +32,9 @@ tauri-plugin-updater = "2"
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSObject", "NSString", "NSURL", "NSValue"] }
 
+# Android: writing a backup where the system's file picker points, a content:// address.
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-fs = "2.7.1"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -6,9 +6,12 @@ export function Setup({
   notice,
   onCreated,
   onRestore,
-  onJoin
+  onJoin,
+  backupsOnPhone = false
 }: {
   notice?: string;
+  /** Backups this phone's own vault left, as after the phone was restored from its own backup. */
+  backupsOnPhone?: boolean;
   onCreated: (words: string[]) => void;
   onRestore: () => void;
   onJoin: () => void;
@@ -49,7 +52,7 @@ export function Setup({
           {busy ? 'Creating your vault…' : 'Create vault'}
         </button>
         <button type="button" className="link" onClick={onRestore}>
-          Restore from a backup
+          {backupsOnPhone ? 'Restore from a backup on this phone' : 'Restore from a backup'}
         </button>
         <button type="button" className="link" onClick={onJoin}>
           Join a vault on this network
