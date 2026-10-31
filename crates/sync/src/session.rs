@@ -3,7 +3,7 @@
 //! its own and pushes what was saved on it, then asks who is changing what. Each side takes the
 //! other's message and gives its next one; neither does any IO.
 
-use crate::proto::{ClientMsg, Frames, HostMsg, PROTOCOL, frame};
+use crate::proto::{ClientMsg, Frames, HostMsg, OLDEST, PROTOCOL, agree, frame};
 use crate::{Error, Result};
 use glaze_vault_core::sync::{Chunk, Item, Refusal};
 use glaze_vault_core::{HostStore, Vault};
@@ -26,15 +26,26 @@ const CHUNK_BYTES: usize = 1024 * 1024;
 pub struct HostSession {
     device: Uuid,
     greeted: bool,
+    /// The version agreed in the hello: what to speak when versions come to differ.
+    version: u32,
 }
 
 impl HostSession {
     pub fn new(device: Uuid) -> HostSession {
-        HostSession { device, greeted: false }
+        HostSession {
+            device,
+            greeted: false,
+            version: PROTOCOL,
+        }
     }
 
     pub fn device(&self) -> Uuid {
         self.device
+    }
+
+    /// The protocol version agreed with the computer.
+    pub fn version(&self) -> u32 {
+        self.version
     }
 
     /// The answer to a computer's message; none when it says goodbye.
@@ -47,12 +58,18 @@ impl HostSession {
         match message {
             ClientMsg::Hello {
                 protocol,
+                oldest,
                 device,
                 levels,
             } => {
-                if protocol != PROTOCOL {
-                    return refused("this host speaks another version of the protocol: update the app");
-                }
+                let Some(version) = agree(oldest.unwrap_or(protocol), protocol) else {
+                    return refused(if protocol < OLDEST {
+                        "this app is too old for the host: update it"
+                    } else {
+                        "the host is older than this app: update Glaze Vault on the host computer"
+                    });
+                };
+                self.version = version;
                 if device != self.device {
                     return refused("the computer is not the one it said it was");
                 }
@@ -132,6 +149,7 @@ impl ClientSession {
         let (_, levels) = vault.sync_state()?;
         let hello = ClientMsg::Hello {
             protocol: PROTOCOL,
+            oldest: Some(OLDEST),
             device: vault.device()?,
             levels,
         };

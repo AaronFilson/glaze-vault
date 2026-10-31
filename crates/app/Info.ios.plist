@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged by Tauri into the iOS app's Info.plist (docs/adr/0029-phones-as-replicas.md). -->
+<plist version="1.0">
+<dict>
+  <key>NSCameraUsageDescription</key>
+  <string>Glaze Vault uses the camera to scan the pairing code an admin's computer shows, so this iPhone or iPad can join the vault.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Glaze Vault reaches the computer that serves your vault on this network, to join it and to sync. Nothing leaves your network.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_glazevault._tcp</string>
+  </array>
+</dict>
+</plist>

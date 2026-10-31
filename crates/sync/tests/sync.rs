@@ -132,6 +132,7 @@ fn a_host_talks_only_to_the_computer_the_transport_vouched_for() {
     ));
     let hello = |protocol, device| ClientMsg::Hello {
         protocol,
+        oldest: None,
         device,
         levels: Vec::new(),
     };
@@ -139,6 +140,19 @@ fn a_host_talks_only_to_the_computer_the_transport_vouched_for() {
         session.handle(&mut t.host, hello(PROTOCOL + 1, ben)).unwrap(),
         Some(HostMsg::Refused { .. })
     ));
+    // A newer computer that still speaks this host's version is let in, at that version.
+    let newer = ClientMsg::Hello {
+        protocol: PROTOCOL + 1,
+        oldest: Some(PROTOCOL),
+        device: ben,
+        levels: Vec::new(),
+    };
+    let mut other = HostSession::new(ben);
+    assert!(matches!(
+        other.handle(&mut t.host, newer).unwrap(),
+        Some(HostMsg::Welcome(_))
+    ));
+    assert_eq!(other.version(), PROTOCOL);
     assert!(matches!(
         session.handle(&mut t.host, hello(PROTOCOL, Uuid::new_v4())).unwrap(),
         Some(HostMsg::Refused { .. })

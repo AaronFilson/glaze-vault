@@ -239,7 +239,10 @@ function Pairing({ people }: { people: Person[] }) {
       <h3>Pair a computer</h3>
       {!code && (
         <>
-          <p>On the other computer, choose to join a vault on this network, and type the code shown here.</p>
+          <p>
+            On the other computer, phone or tablet, choose to join a vault on this network, and type the code shown here, or
+            scan it.
+          </p>
           <div className="row">
             <button type="button" onClick={start}>
               Pair a computer…
@@ -256,6 +259,16 @@ function Pairing({ people }: { people: Person[] }) {
           <p className="pairing-code" aria-label="Pairing code">
             {code.code}
           </p>
+          {code.qrSvg && (
+            <>
+              <p>A phone or tablet can scan this instead, which also checks that it reaches this vault's host.</p>
+              <img
+                className="pairing-qr"
+                alt="QR code for pairing a phone"
+                src={`data:image/svg+xml;utf8,${encodeURIComponent(code.qrSvg)}`}
+              />
+            </>
+          )}
           <p className="hint">Waiting for the other computer…</p>
           <div className="row">
             <button type="button" onClick={cancel}>

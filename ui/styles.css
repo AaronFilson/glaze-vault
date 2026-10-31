@@ -1156,3 +1156,11 @@ input.short {
   border: 1px solid var(--line);
   border-left: 4px solid var(--accent);
 }
+
+.pairing-qr {
+  display: block;
+  width: 15rem;
+  max-width: 100%;
+  background: #fff;
+  border-radius: 6px;
+}

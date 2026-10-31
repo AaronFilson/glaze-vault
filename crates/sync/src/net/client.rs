@@ -392,12 +392,25 @@ async fn greeted(asking: &Asking, address: &str) -> Result<Conn<Stream>> {
 
 /// Joins the vault served at `address` with a pairing code an admin read out, as a replica in
 /// `dir`, named `name` for the admin to see, with the key this computer made to join. Waits
-/// until the admin approves it.
-pub async fn pair(address: &str, code: &str, name: &str, dir: &Path, device: &DeviceKey) -> Result<()> {
+/// until the admin approves it. With `expect`, the host key a scanned code gave, any other host
+/// is refused before the code is tried.
+pub async fn pair(
+    address: &str,
+    code: &str,
+    name: &str,
+    dir: &Path,
+    device: &DeviceKey,
+    expect: Option<Vec<u8>>,
+) -> Result<()> {
     if Vault::exists(dir) {
         return Err(glaze_vault_core::Error::VaultExists.into());
     }
-    let (mut conn, host_key) = connect(address, device, None).await?;
+    let pinned = expect.is_some();
+    let (mut conn, host_key) = connect(address, device, expect).await.map_err(|e| match e {
+        Error::Tls(_) if pinned => wrong_host(),
+        Error::Io(e) if pinned && e.kind() == std::io::ErrorKind::InvalidData => wrong_host(),
+        e => e,
+    })?;
     let exporter = pairing::exported(
         conn.stream()
             .get_ref()
@@ -435,6 +448,12 @@ pub async fn pair(address: &str, code: &str, name: &str, dir: &Path, device: &De
     }
     Vault::join_at(dir, &package, device, Some(address), Some(&offline_secret))?;
     Ok(())
+}
+
+fn wrong_host() -> Error {
+    Error::Pairing(
+        "the computer at that address is not the host in the code you scanned: ask the admin to show it again".into(),
+    )
 }
 
 fn pairing_error(message: HostMsg) -> Error {

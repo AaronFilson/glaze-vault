@@ -306,7 +306,7 @@ Sizes as in the phase 2 plan: S under 500 lines changed, M 500 to 1,500, L 1,500
 | 1 | **Mobile builds** | Crate types and the mobile entry point, `#[cfg(desktop)]` on hosting, updater and dialogs; `tauri android init` and `tauri ios init`; SQLCipher with vendored OpenSSL on all mobile targets (or the fallback, below); CI jobs that build an Android APK and an iOS simulator app, and cross-compile `core` and `sync`. Checks the file input and the camera in both webviews. ADR 26. **Built**: the mobile projects are made by `tauri init` on CI rather than checked in, until stage 2 changes them; mobile builds are checked on CI only; picked files on Android are `content://` addresses, left to stages 6 and 7. | Proves the stack before any screen work. | M |
 | 2 | **The vault on a phone** | Folder, file protection, backup exclusion, the snapshot cover and `FLAG_SECURE`, locking in the background, the `platform` command, Argon2 timing on a real or emulated phone. ADR 27. **Built**: the platform is a field of `vault_status`, not a command; the mobile projects stay made by `tauri init`, changed after it by `crates/app/mobile/patch.cjs`; Argon2 measured on the dev Mac only, phones left to stage 8. | The security edges, done first. | M |
 | 3 | **A vault of its own** | Setup on a phone, daily `.gvbackup` files in `backups/`, iCloud and Auto Backup rules, the 25 MB fallback and saving a backup through the file picker, the setting, restoring at setup. ADR 28. **Built**: a backup is due when the vault changed and the last is 20 hours old; on Android older backups go first to keep the folder under 24 MB; a whole backup saved through the picker goes by `tauri-plugin-fs`; the recovery sheet as a PDF moves to stage 7. | People with only a phone can use it, safely. | M |
-| 4 | **Joining from a phone** | The QR code on "Pair a computer" and the scanner; the fingerprint check; the typed path; the local network permission on iOS, explained and detected; the system browsers for discovery; protocol version ranges (3.5). ADR 29. | A phone syncs with a host. | M |
+| 4 | **Joining from a phone** | The QR code on "Pair a computer" and the scanner; the fingerprint check; the typed path; the local network permission on iOS, explained and detected; the system browsers for discovery; protocol version ranges (3.5). ADR 29. **Built** ([ADR 29](../adr/0029-phones-as-replicas.md), [ADR 30](../adr/0030-protocol-version-ranges.md)): the QR code carries the host's whole key, which is pinned before pairing; no discovery on phones yet, as the system browsers need native plugins no device here can try; a phone is named by its model on Android, and "An iPhone" or "An iPad" on iOS. | A phone syncs with a host. | M |
 | 5 | **Phone screens** | The layout of section 5, the bottom bar, what is hidden (2.4), the shop-floor screens first: recipe, batch sheet, mix log, firing log. | Usable on the shop floor. | L |
 | 6 | **Camera and photos** | "Take photo", HEIC to JPEG, scaling, EXIF stripped, photos on demand by default. | Test tiles from the kiln room. | S |
 | 7 | **Getting things out** | CSV through the share sheet; printing by PDF or the native controller. | Parity with desktop's exports. | M |
@@ -365,10 +365,9 @@ Each has a recommended default. Aaron accepted all of them on 2026-10-30.
 - **New 27. Phones: the vault's folder, locking and what the page offers.** Built in stage 2.
 - **New 28. A phone's own vault and its backups** through iCloud and Auto Backup (adds to ADR 7:
   where a phone keeps its backups, and a backup without photos). Built in stage 3.
-- **New 29. Phones as replicas.** Pairing by QR code with the fingerprint, discovery
-  through the system browsers, locking in the background, the snapshot cover, backup exclusion,
-  photos on demand, what a phone shows. Notes ADR 5's "Phase 3 mobile is another client".
-- **New 30. Protocol version ranges**, or a section of 29. Changes ADR 21.
+- **New 29. Phones as replicas.** Pairing by QR code with the host's key, the local network
+  permission, a phone's name. Notes ADR 5's "Phase 3 mobile is another client". Built in stage 4.
+- **New 30. Protocol version ranges.** Changes ADR 21. Built in stage 4.
 - **New, later: store release**, with export compliance (changes ADR 3's export paragraph from
   "to be confirmed" to what was answered).
 - **Change ADR 11.** The mobile smoke suites.

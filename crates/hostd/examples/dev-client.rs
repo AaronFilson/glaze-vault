@@ -80,10 +80,12 @@ async fn main() {
         ["join-local", vault, host, dir] => join_local(vault, host, dir, &flags),
         ["sync", dir, to] => sync(dir, to, &flags).await,
         ["pair-start", dir, to] => pair_start(dir, to, &flags).await,
-        ["pair", to, code, name, dir] => net::pair(&address(to), code, name, Path::new(dir), &DeviceKey::generate())
-            .await
-            .map(|()| println!("joined: sign in with your password"))
-            .map_err(|e| e.to_string()),
+        ["pair", to, code, name, dir] => {
+            net::pair(&address(to), code, name, Path::new(dir), &DeviceKey::generate(), None)
+                .await
+                .map(|()| println!("joined: sign in with your password"))
+                .map_err(|e| e.to_string())
+        }
         ["discover"] => discover(),
         _ => Err("see the top of crates/hostd/examples/dev-client.rs".to_owned()),
     };

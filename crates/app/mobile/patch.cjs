@@ -47,6 +47,17 @@ function android() {
   manifest = setAttribute(manifest, 'android:allowBackup', 'true');
   manifest = setAttribute(manifest, 'android:fullBackupContent', '@xml/backup_rules');
   manifest = setAttribute(manifest, 'android:dataExtractionRules', '@xml/data_extraction_rules');
+  // The scanner plugin asks for a camera, which would keep the app off devices without one: the
+  // code can be typed instead (docs/adr/0029-phones-as-replicas.md).
+  if (!manifest.includes('android.hardware.camera.any')) {
+    if (!manifest.includes('xmlns:tools=')) {
+      manifest = manifest.replace(/<manifest\b/, '<manifest xmlns:tools="http://schemas.android.com/tools"');
+    }
+    manifest = manifest.replace(
+      /(\s*)<application\b/,
+      '$1<uses-feature android:name="android.hardware.camera.any" android:required="false" tools:replace="android:required" />$1<application'
+    );
+  }
   fs.writeFileSync(manifestPath, manifest);
 
   // FLAG_SECURE: no recipe in the recent apps picture, and no screenshots.

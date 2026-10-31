@@ -127,6 +127,7 @@ export function App() {
             });
           }}
           onBack={() => setScreen({ name: 'setup' })}
+          platform={status?.platform}
         />
       );
     case 'recovery-sheet':

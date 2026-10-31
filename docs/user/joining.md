@@ -24,6 +24,37 @@ You need an admin nearby, or on the phone, and the computer that serves must be 
 
 A code works once, for ten minutes. If it was typed wrongly, the admin starts again for a new one.
 
+## Joining from a phone or tablet
+
+A phone or tablet joins the same way, and can scan the code instead of typing it.
+
+1. Install Glaze Vault on the phone and open it. Choose **Join a vault on this network**.
+2. The admin chooses **Pair a computer…** in Settings, Network. Their screen shows the code and a
+   square QR code beside it.
+3. Choose **Scan the code** on the phone, and allow the camera when asked. Point it at the
+   admin's screen.
+4. On an iPhone or iPad, the first time, it asks whether Glaze Vault may find devices on your
+   local network. Choose **Allow**: the vault's host is on your network, and nothing goes beyond
+   it.
+5. The admin checks the phone's key and approves it, as for a computer, and you sign in with your
+   own password.
+
+Scanning also checks that the phone reaches your vault's own host, and not some other computer
+on the network: if it does not, the phone says so and nothing is sent.
+
+If the camera cannot be used, type the host's address and the code, as on a computer. Phones do
+not list the hosts on the network yet, so ask the admin for the address Settings shows.
+
+**If an iPhone cannot reach the host**, and once said no to finding devices on the local network,
+turn it on in **Settings, Privacy & Security, Local Network, Glaze Vault**, then try again.
+
+### Give the host a fixed address
+
+Phones find the host only by the address they joined with. If the host computer's address
+changes, as some routers do when it restarts, phones stop syncing until it is back. Ask whoever
+runs your network to give the host computer a fixed address (a "DHCP reservation" in most
+routers' settings), or set one on the computer itself. Computers find the host by name anyway.
+
 ## Syncing
 
 While you are signed in, Glaze Vault syncs with the host by itself: a few seconds after you save
