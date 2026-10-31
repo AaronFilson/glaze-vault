@@ -45,7 +45,12 @@ pub fn advertise(name: &str, port: u16, organization_key: &[u8]) -> Result<Adver
     let daemon = ServiceDaemon::new().map_err(mdns_error)?;
     let host_name = format!("{}.local.", name.replace(|c: char| !c.is_ascii_alphanumeric(), "-"));
     let tag = vault_tag(organization_key);
-    let properties = [("proto", "1"), ("vault", tag.as_str())];
+    let (newest, oldest) = (crate::PROTOCOL.to_string(), crate::OLDEST.to_string());
+    let properties = [
+        ("proto", newest.as_str()),
+        ("oldest", oldest.as_str()),
+        ("vault", tag.as_str()),
+    ];
     let info = ServiceInfo::new(SERVICE, name, &host_name, "", port, &properties[..])
         .map_err(mdns_error)?
         .enable_addr_auto();
@@ -72,7 +77,14 @@ pub fn browse(wait: Duration) -> Result<Vec<Found>> {
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         let Ok(event) = events.recv_timeout(left) else { break };
         if let ServiceEvent::ServiceResolved(service) = event {
-            if service.txt_properties.get_property_val_str("proto") != Some("1") {
+            let version = |key| {
+                service
+                    .txt_properties
+                    .get_property_val_str(key)
+                    .and_then(|v| v.parse::<u32>().ok())
+            };
+            let Some(newest) = version("proto") else { continue };
+            if crate::agree(version("oldest").unwrap_or(newest), newest).is_none() {
                 continue;
             }
             let name = service

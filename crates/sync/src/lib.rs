@@ -7,7 +7,7 @@ pub mod net;
 pub mod proto;
 mod session;
 
-pub use proto::{ClientMsg, Frames, HostMsg, PROTOCOL, frame};
+pub use proto::{ClientMsg, Frames, HostMsg, OLDEST, PROTOCOL, agree, frame};
 pub use session::{ClientSession, HostSession, Report, sync_in_process};
 
 /// What can go wrong in a sync.

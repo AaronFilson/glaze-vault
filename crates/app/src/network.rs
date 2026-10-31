@@ -328,6 +328,9 @@ pub fn stop_hosting(state: State<AppState>, network: State<Network>, anyway: boo
 pub struct PairingCode {
     code: String,
     expires_at: i64,
+    /// The same pairing as a QR code for a phone to scan: where the host is, its key and the
+    /// code (docs/adr/0029-phones-as-replicas.md), as an SVG.
+    qr_svg: Option<String>,
 }
 
 /// Asks the host for a code to pair a computer with, for an admin.
@@ -338,15 +341,50 @@ pub fn start_pairing(state: State<AppState>, network: State<Network>) -> Command
     let address = vault
         .host_address()?
         .ok_or_else(|| network_error("This vault has no host."))?;
+    let host_key = vault.host_key()?;
+    let addresses = host_addresses(&address);
     let pairing =
         on_network(move || async move { AdminPairing::start(vault, &address).await }).map_err(network_error)?;
+    let invite = net::Invite {
+        addresses,
+        host_key,
+        code: pairing.code.clone(),
+    };
     let code = PairingCode {
         code: pairing.code.clone(),
         expires_at: pairing.expires_at,
+        qr_svg: qr_svg(&invite.to_uri()),
     };
     network.cancel();
     *network.pairing.lock().unwrap() = Some((pairing, None));
     Ok(code)
+}
+
+/// Where other computers reach the host: the address this computer syncs with, or, when the host
+/// is this computer, the address this computer has on the network.
+fn host_addresses(address: &str) -> Vec<String> {
+    let Some(port) = address.strip_prefix("127.0.0.1:") else {
+        return vec![address.to_owned()];
+    };
+    // A UDP socket "connected" to an outside address sends nothing, but takes the address this
+    // computer would use to reach it: the one on its network.
+    let lan = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| socket.connect("192.0.2.1:9").map(|()| socket))
+        .and_then(|socket| socket.local_addr())
+        .ok()
+        .map(|local| local.ip())
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified());
+    lan.map(|ip| vec![format!("{ip}:{port}")]).unwrap_or_default()
+}
+
+fn qr_svg(text: &str) -> Option<String> {
+    let code = qrcode::QrCode::with_error_correction_level(text, qrcode::EcLevel::M).ok()?;
+    Some(
+        code.render::<qrcode::render::svg::Color>()
+            .min_dimensions(240, 240)
+            .quiet_zone(true)
+            .build(),
+    )
 }
 
 #[derive(Serialize)]
@@ -541,7 +579,39 @@ pub fn prepare_join(state: State<AppState>, network: State<Network>) -> CommandR
     })
 }
 
-/// What the system calls this computer, if it says.
+/// What the system calls this computer, if it says. A phone has no `hostname`: Android says its
+/// model, and iOS whether it is an iPhone or an iPad (its own name needs an entitlement).
+#[cfg(target_os = "android")]
+fn computer_name() -> String {
+    Command::new("getprop")
+        .arg("ro.product.model")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "An Android phone".to_owned())
+}
+
+#[cfg(target_os = "ios")]
+fn computer_name() -> String {
+    // SAFETY: uname fills the struct it is given; its fields are NUL-terminated.
+    let machine = unsafe {
+        let mut names: libc::utsname = std::mem::zeroed();
+        if libc::uname(&mut names) != 0 {
+            return "An iPhone".to_owned();
+        }
+        std::ffi::CStr::from_ptr(names.machine.as_ptr())
+            .to_string_lossy()
+            .into_owned()
+    };
+    match machine.starts_with("iPad") {
+        true => "An iPad".to_owned(),
+        false => "An iPhone".to_owned(),
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn computer_name() -> String {
     Command::new("hostname")
         .output()
@@ -561,13 +631,24 @@ pub fn join_vault(
     address: String,
     code: String,
     name: String,
+    invite: Option<String>,
 ) -> CommandResult<()> {
+    // A scanned code gives the addresses, the code and the host's key, which is pinned.
+    let (addresses, code, expect) = match invite {
+        Some(scanned) => {
+            let invite = net::Invite::parse(&scanned).map_err(network_error)?;
+            (invite.addresses, invite.code, Some(invite.host_key))
+        }
+        None => {
+            let address = match address.trim() {
+                a if a.contains(':') => a.to_owned(),
+                a => format!("{a}:{DEFAULT_PORT}"),
+            };
+            (vec![address], code, None)
+        }
+    };
     let Some(device) = network.joining.lock().unwrap().take() else {
         return Err(network_error("Start joining again."));
-    };
-    let address = match address.trim() {
-        a if a.contains(':') => a.to_owned(),
-        a => format!("{a}:{DEFAULT_PORT}"),
     };
     let name = match name.trim() {
         "" => computer_name(),
@@ -576,8 +657,20 @@ pub fn join_vault(
     let dir = state.dir.clone();
     let cancelled = network.cancelled.notified();
     let joined = on_network(|| async {
+        let pair = async {
+            // The next address only when this one could not be reached: past that, the code may
+            // have been tried, and trying it again would end the pairing.
+            let mut tried = Err(glaze_vault_sync::Error::Pairing("the code has no address".into()));
+            for address in &addresses {
+                tried = net::pair(address, code.trim(), &name, &dir, &device, expect.clone()).await;
+                if !matches!(tried, Err(glaze_vault_sync::Error::Io(_))) {
+                    break;
+                }
+            }
+            tried
+        };
         tokio::select! {
-            joined = net::pair(&address, code.trim(), &name, &dir, &device) => joined,
+            joined = pair => joined,
             () = cancelled => Err(glaze_vault_sync::Error::Pairing("joining was cancelled".into())),
         }
     });
@@ -586,10 +679,22 @@ pub fn join_vault(
         *network.joining.lock().unwrap() = Some(device);
         return Err(match e {
             glaze_vault_sync::Error::Core(e) => e.into(),
+            glaze_vault_sync::Error::Io(e) if cfg!(target_os = "ios") => unreachable_on_ios(e),
             e => network_error(e),
         });
     }
     Ok(())
+}
+
+/// iOS asks before an app reaches the local network, and once refused, a connection just fails:
+/// the likely reason is said, with where to change it.
+fn unreachable_on_ios(error: std::io::Error) -> CommandError {
+    CommandError::new(
+        "local-network",
+        format!(
+            "The host could not be reached ({error}). If this iPhone or iPad was asked about finding devices on the local network and the answer was no, turn on Local Network for Glaze Vault in Settings, Privacy & Security, Local Network, then try again. Otherwise check that both are on the same network."
+        ),
+    )
 }
 
 /// Stops waiting for the admin to approve this computer.

@@ -46,7 +46,7 @@ describe('the network section', () => {
     mockIPC((command, args) => {
       calls.push([command, args]);
       if (command === 'network_status') return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917' });
-      if (command === 'start_pairing') return { code: '4821-0937', expiresAt: Date.now() + 600_000 };
+      if (command === 'start_pairing') return { code: '4821-0937', expiresAt: Date.now() + 600_000, qrSvg: null };
       if (command === 'wait_for_pairing') return { device: 'd1', name: "Ben's laptop", fingerprint: '428b-ec49-9b19-3bd5' };
       // Ben was added since this sign-in began, so the lock screen's list lacks him.
       if (command === 'team') return { people: PEOPLE, grants: [] };
@@ -60,6 +60,19 @@ describe('the network section', () => {
     fireEvent.click(approve);
     await waitFor(() => expect(calls).toContainEqual(['approve_pairing', { people: ['ben'] }]));
     expect(await screen.findByText(/Ben's laptop is paired/)).toBeTruthy();
+  });
+
+  it('shows a QR code for a phone to scan while it waits', async () => {
+    mockIPC((command) => {
+      if (command === 'network_status') return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917' });
+      if (command === 'start_pairing') return { code: '4821-0937', expiresAt: Date.now() + 600_000, qrSvg: '<svg></svg>' };
+      if (command === 'wait_for_pairing') return new Promise(() => {});
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Pair a computer…' }));
+    const qr = (await screen.findByAltText('QR code for pairing a phone')) as HTMLImageElement;
+    expect(qr.src).toContain('data:image/svg+xml');
+    expect(screen.getByLabelText('Pairing code').textContent).toBe('4821-0937');
   });
 
   it('says so when hostd is missing', async () => {

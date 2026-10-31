@@ -219,6 +219,23 @@ jobs:
             exit 1
           }
 
+      # The camera and local network reasons in crates/app/Info.ios.plist reach the built app
+      # (docs/adr/0029-phones-as-replicas.md): without them iOS ends the app when it asks.
+      - name: iOS app's permission reasons
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          plist=$(find crates/app/gen/apple ~/Library/Developer/Xcode/DerivedData -path '*.app/Info.plist' 2>/dev/null | head -1)
+          test -n "$plist" || { echo "::error::No built app Info.plist"; exit 1; }
+          for key in NSCameraUsageDescription NSLocalNetworkUsageDescription NSBonjourServices; do
+            /usr/libexec/PlistBuddy -c "Print :$key" "$plist" > /dev/null || { echo "::error::$key is missing from $plist"; exit 1; }
+          done
+
+      - name: Android manifest's camera is optional
+        if: runner.os == 'Linux'
+        shell: bash
+        run: grep -q 'android.hardware.camera.any" android:required="false"' crates/app/gen/android/app/src/main/AndroidManifest.xml
+
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:

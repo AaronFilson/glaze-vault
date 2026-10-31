@@ -10,8 +10,21 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// The version of the protocol. A host refuses a computer that speaks another.
+/// The newest version of the protocol this build speaks.
 pub const PROTOCOL: u32 = 1;
+
+/// The oldest version this build still speaks (docs/adr/0030-protocol-version-ranges.md). A phone
+/// waits on app review for days, so a host or a computer that moves to a new version keeps the one
+/// before it for a release: when PROTOCOL goes up, OLDEST stays where it was until the release
+/// after.
+pub const OLDEST: u32 = 1;
+
+/// The version two sides speak: the newest both know, or None if their ranges do not meet. A
+/// hello from before ranges gives only its one version, as both ends of its range.
+pub fn agree(oldest: u32, newest: u32) -> Option<u32> {
+    let version = newest.min(PROTOCOL);
+    (version >= oldest.max(OLDEST) && oldest <= newest).then_some(version)
+}
 
 /// The largest frame either side takes: a 25 MiB photo and room to spare.
 pub const MAX_FRAME: usize = 32 * 1024 * 1024;
@@ -21,7 +34,11 @@ pub const MAX_FRAME: usize = 32 * 1024 * 1024;
 pub enum ClientMsg {
     /// Who the computer is, and what it last knew its people hold in each collection.
     Hello {
+        /// The newest version the computer speaks.
         protocol: u32,
+        /// The oldest it still speaks; missing from a computer from before ranges.
+        #[serde(default)]
+        oldest: Option<u32>,
         device: Uuid,
         levels: Vec<(Scope, Vec<Level>)>,
     },
@@ -218,5 +235,67 @@ impl Frames {
         let message = ciborium::from_reader(&self.buffer[4..4 + length]).map_err(|e| Error::Encoding(e.to_string()))?;
         self.buffer.drain(..4 + length);
         Ok(Some(message))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_sides_agree_on_the_newest_version_both_speak() {
+        assert_eq!(agree(PROTOCOL, PROTOCOL), Some(PROTOCOL));
+        assert_eq!(agree(OLDEST, PROTOCOL + 1), Some(PROTOCOL));
+        assert_eq!(agree(PROTOCOL + 1, PROTOCOL + 2), None);
+        assert_eq!(agree(0, OLDEST - 1), None);
+        assert_eq!(agree(PROTOCOL, PROTOCOL - 1), None);
+    }
+
+    /// Hellos from before ranges, and hosts from before them, still understand each other.
+    #[test]
+    fn a_hello_without_a_range_still_reads_and_a_range_is_ignored_by_older_hosts() {
+        #[derive(Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        enum Before {
+            Hello {
+                protocol: u32,
+                device: Uuid,
+                levels: Vec<(Scope, Vec<Level>)>,
+            },
+        }
+        let device = Uuid::new_v4();
+        let mut old = Vec::new();
+        ciborium::into_writer(
+            &Before::Hello {
+                protocol: 1,
+                device,
+                levels: Vec::new(),
+            },
+            &mut old,
+        )
+        .unwrap();
+        let read: ClientMsg = ciborium::from_reader(&old[..]).unwrap();
+        assert!(matches!(
+            read,
+            ClientMsg::Hello {
+                protocol: 1,
+                oldest: None,
+                ..
+            }
+        ));
+
+        let mut new = Vec::new();
+        ciborium::into_writer(
+            &ClientMsg::Hello {
+                protocol: PROTOCOL,
+                oldest: Some(OLDEST),
+                device,
+                levels: Vec::new(),
+            },
+            &mut new,
+        )
+        .unwrap();
+        let read: Before = ciborium::from_reader(&new[..]).unwrap();
+        assert!(matches!(read, Before::Hello { protocol: PROTOCOL, .. }));
     }
 }
