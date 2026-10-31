@@ -30,6 +30,8 @@ import { localDate } from '../export';
 import { restorePart, useEditor, type Editor } from '../useEditor';
 import { BACKGROUND_GRACE_SECONDS, useBackgroundLock, useIdleLock } from '../useIdleLock';
 import { usePhoneBackups } from '../usePhoneBackups';
+import { offered, PHONE_TABS } from '../phone';
+import { useFieldAboveKeyboard } from '../useFieldAboveKeyboard';
 import { BatchSheetForm, BatchSheets } from './BatchSheets';
 import { Blend } from './Blend';
 import { Fit } from './Fit';
@@ -118,6 +120,15 @@ export function Recipes({
   const [view, setView] = useState<
     'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'mixes' | 'blend' | 'fit'
   >('recipes');
+  // A phone shows a bottom bar, and leaves running a vault it joined to a computer (ADR 31).
+  const phone = status.platform !== 'desktop';
+  const [replica, setReplica] = useState(false);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    if (phone) api.networkStatus().then((network) => setReplica(!!network?.replica), () => {});
+  }, [phone]);
+  const shows = offered(status.platform, replica);
+  useFieldAboveKeyboard(phone);
   // The firing log (ADR 14): every firing, the one being edited, and the recipe it is showing.
   const [firings, setFirings] = useState<Firing[]>([]);
   const [firing, setFiring] = useState<FiringEditing | null>(null);
@@ -909,28 +920,89 @@ export function Recipes({
     </button>
   );
 
+  const tab = (name: (typeof PHONE_TABS)[number], label: string) => (
+    <button
+      type="button"
+      aria-current={view === name && !more ? 'page' : undefined}
+      onClick={() => {
+        setMore(false);
+        setView(name);
+      }}
+    >
+      {label}
+    </button>
+  );
+
   return (
-    <div className="shell">
+    <div className={phone ? 'shell phone' : 'shell'}>
       <header className="bar no-print">
         <span className="brand">Glaze Vault</span>
         <div className="bar-actions">
-          {view === 'recipes' && may(access, shownIn, 'print') && (
+          {/* Printing on a phone comes with stage 7 of the phase 3 plan. */}
+          {view === 'recipes' && !phone && may(access, shownIn, 'print') && (
             <button type="button" aria-expanded={printing} onClick={() => setPrinting(!printing)}>
               Print…
             </button>
           )}
-          {viewButton('mixes', 'Mix log')}
-          {viewButton('firings', 'Firing log')}
-          {team && viewButton('batches', 'Batch sheets')}
-          {viewButton('materials', 'Materials')}
-          {viewButton('settings', 'Settings')}
+          <span className="views">
+            {viewButton('mixes', 'Mix log')}
+            {viewButton('firings', 'Firing log')}
+            {team && viewButton('batches', 'Batch sheets')}
+            {viewButton('materials', 'Materials')}
+            {viewButton('settings', 'Settings')}
+          </span>
           <SyncIndicator />
           {team && access && <span className="hint signed-in">{access.me.name}</span>}
-          <button type="button" onClick={lock}>
+          <button type="button" className="views" onClick={lock}>
             Lock
           </button>
         </div>
       </header>
+
+      {phone && (
+        <nav className="phone-nav no-print" aria-label="Views">
+          {tab('recipes', 'Recipes')}
+          {tab('mixes', 'Mix log')}
+          {tab('firings', 'Firing log')}
+          <button type="button" aria-expanded={more} onClick={() => setMore(!more)}>
+            More
+          </button>
+          {more && (
+            <div className="phone-more" role="menu">
+              {(
+                [
+                  ['materials', 'Materials'],
+                  ...(team ? [['batches', 'Batch sheets']] : []),
+                  ['settings', 'Settings']
+                ] as ['materials' | 'batches' | 'settings', string][]
+              ).map(([name, label]) => (
+                <button
+                  key={name}
+                  type="button"
+                  role="menuitem"
+                  aria-current={view === name ? 'page' : undefined}
+                  onClick={() => {
+                    setMore(false);
+                    setView(name);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMore(false);
+                  lock();
+                }}
+              >
+                Lock
+              </button>
+            </div>
+          )}
+        </nav>
+      )}
 
       <div className="notices no-print">
         <OfflineNotice />
@@ -1057,6 +1129,7 @@ export function Recipes({
 
       {view === 'settings' && settings ? (
         <Settings
+          offered={shows}
           onLeft={() => onLocked('left')}
           settings={settings}
           onSettings={saveSettings}
