@@ -3,7 +3,7 @@
 import { mockIPC } from '@tauri-apps/api/mocks';
 import { render } from '@testing-library/react';
 import { vi } from 'vitest';
-import type { Access, Draft, LastBackup, MaterialHead, RecipeHead, Settings } from '../api';
+import type { Access, Draft, LastBackup, MaterialHead, Platform, RecipeHead, Settings } from '../api';
 import { Recipes } from './Recipes';
 
 export const STATUS = { exists: true, unlocked: true, version: '0.2.0', updatesConfigured: false, platform: 'desktop' as const, people: [] };
@@ -56,7 +56,8 @@ export function fakeCore({
   history = [],
   setAside = [],
   importFile = null,
-  access = ONE_PERSON
+  access = ONE_PERSON,
+  replica = false
 }: {
   settings?: Settings;
   lastBackup?: LastBackup | null;
@@ -68,6 +69,8 @@ export function fakeCore({
   setAside?: { name: string; setAsideAt: number }[];
   importFile?: { fileName: string; contents: string } | null;
   access?: Access;
+  /** The vault syncs with a host (ADR 23). */
+  replica?: boolean;
 } = {}) {
   const calls: { cmd: string; args: Record<string, unknown> }[] = [];
   const revisions = new Map<string, { recordId: string; number: number }>(
@@ -135,6 +138,8 @@ export function fakeCore({
         return lastBackup;
       case 'get_draft':
         return draft;
+      case 'network_status':
+        return { replica, hostHere: false, hostAddress: null, canHost: false, defaultPort: 47917, device: null };
       default:
         return null;
     }
@@ -142,8 +147,8 @@ export function fakeCore({
   return { called: (cmd: string) => calls.filter((c) => c.cmd === cmd) };
 }
 
-export function show() {
+export function show(platform: Platform = 'desktop') {
   const onLocked = vi.fn();
-  render(<Recipes status={STATUS} update={null} onUpdate={() => {}} onLocked={onLocked} />);
+  render(<Recipes status={{ ...STATUS, platform }} update={null} onUpdate={() => {}} onLocked={onLocked} />);
   return onLocked;
 }

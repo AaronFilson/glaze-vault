@@ -1,3 +1,4 @@
+import { offered as offeredOn, type Offered } from '../phone';
 import { useEffect, useState } from 'react';
 import {
   api,
@@ -32,6 +33,9 @@ const REMINDER_DAYS: [number, string][] = [
   [90, 'After three months']
 ];
 
+/** Everything, as on a computer. */
+const OFFERED_EVERYWHERE = offeredOn('desktop', false);
+
 export function Settings({
   settings,
   onSettings,
@@ -57,7 +61,8 @@ export function Settings({
   onTeamChanged,
   onLeft,
   limitFormulas,
-  prices
+  prices,
+  offered = OFFERED_EVERYWHERE
 }: {
   settings: VaultSettings;
   onSettings: (settings: VaultSettings) => Promise<void>;
@@ -88,6 +93,8 @@ export function Settings({
   onShared: (organizationWords: string[]) => void;
   /** People or collections changed: reads this person's access again. */
   onTeamChanged: () => void;
+  /** What this platform offers: a phone that joined a host leaves running the vault to a computer. */
+  offered?: Offered;
   /** This computer left the vault it synced. */
   onLeft: () => void;
   /** The person's own limit formulas (Limits.tsx). */
@@ -117,7 +124,16 @@ export function Settings({
               This vault is yours alone again. The backup made first is {shrunkTo}.
             </p>
           )}
-          {!team ? (
+          {!offered.team ? (
+            <p>
+              {team ? (
+                <>
+                  You are signed in as <strong>{access.me.name}</strong>.{' '}
+                </>
+              ) : null}
+              People, roles and sharing are looked after on a computer.
+            </p>
+          ) : !team ? (
             <ShareVault onShared={onShared} />
           ) : access.me.admin ? (
             <People
@@ -142,7 +158,7 @@ export function Settings({
       {limitFormulas && <Section title="Limit formulas">{limitFormulas}</Section>}
       {prices && <Section title="Prices">{prices}</Section>}
       <AutoLock settings={settings} onSettings={onSettings} />
-      {admin && (
+      {admin && offered.backups && (
         <Backups
           settings={settings}
           onSettings={onSettings}
@@ -152,8 +168,9 @@ export function Settings({
           backUp={backUp}
         />
       )}
-      {admin && <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />}
-      {(!team || editableCollections(access, 'recipe').length > 0 || editableCollections(access, 'material').length > 0) && (
+      {admin && offered.backups && <SetAsideVaults onSwitch={onSwitchVault} error={switchError} />}
+      {offered.import &&
+        (!team || editableCollections(access, 'recipe').length > 0 || editableCollections(access, 'material').length > 0) && (
         <Import onImport={onImport} />
       )}
       {(!team || access?.collections.some((c) => c.export)) && (
@@ -177,7 +194,7 @@ export function Settings({
           />
         </Section>
       )}
-      {admin && access && (
+      {admin && access && offered.auditLog && (
         <Section title="Audit log">
           <AuditLog access={access} people={status.people} records={recordNames(recipes, materials, firings)} />
         </Section>

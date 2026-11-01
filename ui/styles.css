@@ -1164,3 +1164,116 @@ input.short {
   background: #fff;
   border-radius: 6px;
 }
+
+/* Phones and tablets (docs/adr/0031-phone-screens.md). The layout follows the width, so a narrow
+ * computer window gets the single column too; the bottom bar is on phones only, and a tablet at
+ * 768px or wider keeps the computer's bar. */
+.phone-nav {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .shell.phone {
+    padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  }
+  .shell.phone .bar {
+    padding-top: calc(0.5rem + env(safe-area-inset-top, 0px));
+    padding-left: max(1rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1rem, env(safe-area-inset-right, 0px));
+  }
+  .shell.phone .views {
+    display: none;
+  }
+  .phone-nav {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+  .phone-nav > button {
+    min-height: 3.5rem;
+    border: none;
+    border-radius: 0;
+    background: none;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  .phone-nav > button[aria-current='page'],
+  .phone-nav > button[aria-expanded='true'] {
+    color: var(--accent);
+    font-weight: 600;
+    box-shadow: inset 0 3px 0 var(--accent);
+  }
+  .phone-more {
+    position: absolute;
+    right: max(0.5rem, env(safe-area-inset-right, 0px));
+    bottom: calc(100% + 0.5rem);
+    display: flex;
+    flex-direction: column;
+    min-width: 12rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px #0003;
+  }
+  .phone-more button {
+    min-height: 44px;
+    text-align: left;
+    border: none;
+    border-radius: 0;
+    background: none;
+    padding: 0 1rem;
+  }
+  .phone-more button[aria-current='page'] {
+    color: var(--accent);
+    font-weight: 600;
+  }
+}
+
+/* One column: wide tables and charts scroll inside their own box, the first column kept in view. */
+@media (max-width: 599px) {
+  table.lines,
+  table.umf,
+  table.compare-table,
+  table.facts {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  table.lines th:first-child,
+  table.lines td:first-child,
+  table.umf th:first-child,
+  table.umf td:first-child,
+  table.compare-table th:first-child,
+  table.compare-table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--surface);
+  }
+  .chart-frame {
+    overflow-x: auto;
+  }
+  .chart-frame > svg {
+    min-width: 32rem;
+  }
+}
+
+/* Touch: targets of at least 44px, whatever the width. */
+@media (pointer: coarse) {
+  button,
+  select,
+  input:not([type='checkbox']):not([type='radio']) {
+    min-height: 44px;
+  }
+  input[type='checkbox'],
+  input[type='radio'] {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+}

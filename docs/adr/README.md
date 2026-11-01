@@ -35,3 +35,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0028](0028-a-phones-own-vault.md)            | A phone's own vault, backed up by the phone's own backup       | 2026-10-30 |
 | [0029](0029-phones-as-replicas.md)            | Phones as replicas: pairing by QR code, the local network      | 2026-10-30 |
 | [0030](0030-protocol-version-ranges.md)       | Protocol version ranges                                        | 2026-10-30 |
+| [0031](0031-phone-screens.md)                 | Phone screens: the bottom bar, one column, what a phone offers | 2026-10-31 |
