@@ -4,6 +4,7 @@
 
 mod network;
 mod phone;
+mod smoke;
 mod syncing;
 
 use glaze_vault_core::{
@@ -104,6 +105,7 @@ const PLATFORM: &str = if cfg!(target_os = "ios") {
 
 #[tauri::command(async)]
 fn vault_status(app: AppHandle, state: State<AppState>) -> VaultStatus {
+    smoke::page_asked();
     VaultStatus {
         exists: Vault::exists(&state.dir),
         unlocked: state.vault.lock().unwrap().is_some(),
@@ -1155,6 +1157,10 @@ pub fn run() {
                 update: Mutex::new(None),
             });
             syncing::start(app.handle().clone());
+            if let Some(result) = smoke::requested() {
+                let dir = app.state::<AppState>().dir.clone();
+                smoke::start(app.handle().clone(), dir, result);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

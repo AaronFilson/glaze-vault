@@ -355,6 +355,18 @@ jobs:
             exit 1
           }
 
+      # Each installer installed as a person would, and the installed app's self-test: it makes,
+      # locks and unlocks a vault, its page reaches the core, and hostd came with it
+      # (docs/adr/0035-installer-smoke-test.md). A virtual display on Linux, and FUSE for the
+      # AppImage.
+      - name: Linux display for the installed app
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y xvfb libfuse2
+
+      - name: Install and open each installer
+        shell: bash
+        run: node .github/smoke-installer.cjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: Glaze Vault ${{ matrix.name }}

@@ -62,9 +62,9 @@ is built, and so are the mix log's export and its printed record.
 
 ## Engineering
 
-- Nobody has installed the app on Windows or Linux yet: the end-to-end tests run the development
-  app there in CI, but the installers from a CI run's artifacts are untried. The first real
+- Nobody has installed the app on Windows or Linux by hand yet: CI installs each installer and
+  runs its self-test (ADR 35), but no one has used an installed copy there. The first real
   release also tests the updater end to end.
-- End-to-end tests of a release build ([ADR 11](adr/0011-end-to-end-tests.md) tests the
-  development app): before the first release, a check that each installer opens and unlocks a
-  vault.
+- Each installer is installed and opens and unlocks a vault on CI
+  ([ADR 35](adr/0035-installer-smoke-test.md)); the rpm is not tried, and nothing tests a signed
+  installer or the updater yet.
