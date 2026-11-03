@@ -1,4 +1,4 @@
-// Development builds only (main.tsx loads this when import.meta.env.DEV): lets work on the app be
+// Development builds only (main.tsx loads this when import.meta.env.DEV, or for the phone suite): lets work on the app be
 // followed and driven without looking at it, from a script or a coding agent.
 //
 //     GLAZE_VAULT_DIR=/tmp/test-vault \

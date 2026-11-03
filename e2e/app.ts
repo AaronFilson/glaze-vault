@@ -51,7 +51,7 @@ export class App {
   private readonly screenFile: string;
   private readonly driveFile: string;
   private child: ChildProcess | null = null;
-  private exited = false;
+  protected exited = false;
 
   /** What this app's environment adds, such as the LAN suite's development host. */
   private readonly env: Record<string, string>;
@@ -108,6 +108,12 @@ export class App {
     }
   }
 
+  /** Hands the driver a script, all at once. */
+  protected send(script: string) {
+    writeFileSync(this.driveFile + '.tmp', script);
+    renameSync(this.driveFile + '.tmp', this.driveFile);
+  }
+
   /** Runs a script in the app (commands in ui/devDriver.ts) and returns the screen after it. */
   async run(...lines: string[]): Promise<string> {
     const before = lastScript(this.screen())[0];
@@ -115,8 +121,7 @@ export class App {
     // Saving and unlocking take longer in a development build on a busy machine than the driver
     // waits by itself.
     const script = [`timeout ${WAIT_MS}`, ...lines];
-    writeFileSync(this.driveFile + '.tmp', script.join('\n') + '\n');
-    renameSync(this.driveFile + '.tmp', this.driveFile);
+    this.send(script.join('\n') + '\n');
     let screen = '';
     await this.until(
       () => {

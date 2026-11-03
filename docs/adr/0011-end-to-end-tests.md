@@ -1,7 +1,7 @@
 # 11. End-to-end tests through the development screen and driver
 
 Proposed, 2026-10-16. A second suite, on the LAN, with two apps and a host, is in
-[ADR 23](0023-client-mode.md).
+[ADR 23](0023-client-mode.md). Changed 2026-11-03 for a third, on phones (below).
 
 ## Context
 
@@ -43,3 +43,25 @@ another file (`ui/devTools.ts`), for working on the app without seeing it.
   answers are not slowed, and on macOS the runner keeps the display awake with `caffeinate` for
   as long as it runs. A screen locked by the person still hides the window, so run the tests on
   a Mac that is not locked.
+
+## Phones (2026-11-03, phase 3 stage 8)
+
+- **`npm run e2e -- --suite android` or `--suite ios`** (`e2e/phone.ts`) installs a development
+  build of the app (`E2E_PHONE_APP`, an .apk or .app) on a running Android emulator or booted iOS
+  simulator. It joins a `hostd` run on the same machine by the typed address and pairing code
+  (the QR scan is left out), Ben signs in and sets his password, a recipe goes each way, and he
+  logs a mix that reaches the host.
+- **The admin is the dev client** (`crates/hostd/examples/dev-client.rs`): it makes the team
+  vault, prepares the host's store, pairs and approves the phone, and saves and lists records
+  through Ana's replica, so the suite needs no second app.
+- **The driver by file:** a phone's app is started with no environment from the runner, so in a
+  development build on a phone the screen and driver files are always `dev/screen.txt` and
+  `dev/drive.txt` beside the vault folder, and secrets are shown. The runner reads and writes
+  them with `adb exec-out run-as` / `adb exec-in run-as` on Android (a debug APK is debuggable)
+  and straight from the simulator's data container on iOS.
+- **The page's dev tools** load in a built page when it is built with `VITE_GLAZE_DEV_TOOLS=1`, as
+  a phone loads the built page, not Vite's. CI builds the phone suite's apps that way, and never
+  the APK it uploads.
+- **CI** runs it in the Mobile jobs: an API 34 emulator through
+  `reactivecircus/android-emulator-runner` on Linux, and the first available iPhone simulator on
+  macOS. The emulator reaches the runner as `10.0.2.2`, the simulator as `127.0.0.1`.

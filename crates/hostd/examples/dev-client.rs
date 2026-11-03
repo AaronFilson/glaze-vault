@@ -12,6 +12,10 @@
 //!                                     an admin: show a code, wait, and approve the computer
 //!   dev-client pair <address> <code> <device-name> <dir>
 //!   dev-client discover
+//!   dev-client save-recipe <dir> <recipe-name> --as NAME
+//!                                     a new recipe in Shared, in a replica or vault
+//!   dev-client list <dir> <recipe|mix> --as NAME
+//!                                     the names of the newest recipes or mixes
 
 use glaze_vault_core::sync::DeviceKey;
 use glaze_vault_core::{HostStore, Kind, Role, Vault};
@@ -87,6 +91,8 @@ async fn main() {
                 .map_err(|e| e.to_string())
         }
         ["discover"] => discover(),
+        ["save-recipe", dir, name] => save_recipe(dir, name, &flags),
+        ["list", dir, kind] => list(dir, kind, &flags),
         _ => Err("see the top of crates/hostd/examples/dev-client.rs".to_owned()),
     };
     if let Err(message) = done {
@@ -194,6 +200,40 @@ fn discover() -> Result<()> {
             host.port,
             host.vault.unwrap_or_default()
         );
+    }
+    Ok(())
+}
+
+fn save_recipe(dir: &str, name: &str, flags: &[(String, String)]) -> Result<()> {
+    let mut vault = unlock(Path::new(dir), flag(flags, "as")?)?;
+    let shared = vault
+        .collections()
+        .iter()
+        .find(|c| c.owner.is_none())
+        .map(|c| c.id)
+        .ok_or("no shared collection")?;
+    vault
+        .save_in(
+            Kind::Recipe,
+            shared,
+            &serde_json::json!({ "name": name, "lines": [], "notes": "" }),
+        )
+        .map_err(|e| e.to_string())?;
+    println!("saved {name}");
+    Ok(())
+}
+
+/// One line for each record: its name.
+fn list(dir: &str, kind: &str, flags: &[(String, String)]) -> Result<()> {
+    let vault = unlock(Path::new(dir), flag(flags, "as")?)?;
+    let (kind, field) = match kind {
+        "recipe" => (Kind::Recipe, "/name"),
+        "mix" => (Kind::Mix, "/name"),
+        _ => return Err("recipe or mix".to_owned()),
+    };
+    for revision in vault.heads(kind).map_err(|e| e.to_string())? {
+        let name = revision.content.pointer(field).and_then(|v| v.as_str()).unwrap_or("?");
+        println!("{name}");
     }
     Ok(())
 }
