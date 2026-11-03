@@ -1012,15 +1012,38 @@ fn updates_from_the_store() -> CommandError {
     )
 }
 
+/// Development builds only: the screen or driver file. On a computer GLAZE_VAULT_SCREEN and
+/// GLAZE_VAULT_DRIVE name them. A phone's app is started with no environment of its own, so there
+/// they are always in `dev/` beside the vault folder, where the phone suite (e2e/phone.ts) reads
+/// and writes them with `adb` or `simctl` (ADR 11).
+#[cfg(debug_assertions)]
+fn dev_file(state: &AppState, variable: &str, name: &str) -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os(variable) {
+        return Some(PathBuf::from(path));
+    }
+    #[cfg(mobile)]
+    {
+        let dir = state.dir.parent()?.join("dev");
+        fs::create_dir_all(&dir).ok()?;
+        Some(dir.join(name))
+    }
+    #[cfg(desktop)]
+    {
+        let _ = (state, name);
+        None
+    }
+}
+
 /// Development builds only: writes the page's text picture of the screen (ui/devTools.ts) to the
-/// file GLAZE_VAULT_SCREEN names, so the app can be followed without screenshots. Says when no
-/// file is named, and the page stops sending. The file holds what is on screen in plain text, so
-/// it is for throwaway vaults.
+/// screen file ([`dev_file`]), so the app can be followed without screenshots. Says when there is
+/// no file, and the page stops sending. The file holds what is on screen in plain text, so it is
+/// for throwaway vaults. On phones it shows secrets too, as only the phone suite runs a
+/// development build there.
 #[cfg(debug_assertions)]
 #[tauri::command(async)]
-fn dev_screen(text: String) -> CommandResult<ScreenFile> {
-    let show_secrets = std::env::var("GLAZE_VAULT_SHOW_SECRETS").is_ok_and(|value| value == "1");
-    let Some(path) = std::env::var_os("GLAZE_VAULT_SCREEN").map(PathBuf::from) else {
+fn dev_screen(state: State<'_, AppState>, text: String) -> CommandResult<ScreenFile> {
+    let show_secrets = cfg!(mobile) || std::env::var("GLAZE_VAULT_SHOW_SECRETS").is_ok_and(|value| value == "1");
+    let Some(path) = dev_file(&state, "GLAZE_VAULT_SCREEN", "screen.txt") else {
         return Ok(ScreenFile {
             written: false,
             show_secrets,
@@ -1046,13 +1069,13 @@ struct ScreenFile {
     show_secrets: bool,
 }
 
-/// Development builds only: takes the script in the file GLAZE_VAULT_DRIVE names, if there is
-/// one, for the page to run (ui/devDriver.ts). Fails when no file is named, and the page stops
+/// Development builds only: takes the script in the driver file ([`dev_file`]), if there is one,
+/// for the page to run (ui/devDriver.ts). Fails when there is no driver file, and the page stops
 /// asking.
 #[cfg(debug_assertions)]
 #[tauri::command(async)]
-fn dev_drive() -> CommandResult<Option<String>> {
-    let Some(path) = std::env::var_os("GLAZE_VAULT_DRIVE").map(PathBuf::from) else {
+fn dev_drive(state: State<'_, AppState>) -> CommandResult<Option<String>> {
+    let Some(path) = dev_file(&state, "GLAZE_VAULT_DRIVE", "drive.txt") else {
         return Err(CommandError::new("off", "GLAZE_VAULT_DRIVE is not set."));
     };
     // Moved aside first, so a script written while this one is read is not lost or run twice.

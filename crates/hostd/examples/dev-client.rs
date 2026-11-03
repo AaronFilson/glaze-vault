@@ -5,13 +5,18 @@
 //!                                     a new team vault; others get GLAZE_PASSWORD as a one-time
 //!                                     password, formulators on Shared
 //!   dev-client prepare <vault-dir> <host-dir> --as NAME     make a host's store from a team vault
-//!   dev-client join-local <vault-dir> <host-dir> <dir> --as NAME
-//!                                     this person's computer as a replica, without pairing
+//!   dev-client join-local <vault-dir> <host-dir> <dir> --as NAME [--add NAME...]
+//!                                     this person's computer as a replica, without pairing; with
+//!                                     --add, others' too, so an admin there can name them
 //!   dev-client sync <dir> <address> --as NAME
 //!   dev-client pair-start <dir> <address> --as NAME [--for NAME...]
 //!                                     an admin: show a code, wait, and approve the computer
 //!   dev-client pair <address> <code> <device-name> <dir>
 //!   dev-client discover
+//!   dev-client save-recipe <dir> <recipe-name> --as NAME
+//!                                     a new recipe in Shared, in a replica or vault
+//!   dev-client list <dir> <recipe|mix> --as NAME
+//!                                     the names of the newest recipes or mixes
 
 use glaze_vault_core::sync::DeviceKey;
 use glaze_vault_core::{HostStore, Kind, Role, Vault};
@@ -87,6 +92,8 @@ async fn main() {
                 .map_err(|e| e.to_string())
         }
         ["discover"] => discover(),
+        ["save-recipe", dir, name] => save_recipe(dir, name, &flags),
+        ["list", dir, kind] => list(dir, kind, &flags),
         _ => Err("see the top of crates/hostd/examples/dev-client.rs".to_owned()),
     };
     if let Err(message) = done {
@@ -127,14 +134,18 @@ fn prepare(vault: &str, host: &str, flags: &[(String, String)]) -> Result<()> {
     Ok(())
 }
 
-fn join_local(vault: &str, host: &str, dir: &str, flags: &[(String, String)]) -> Result<()> {
+fn join_local(vault_dir: &str, host: &str, dir: &str, flags: &[(String, String)]) -> Result<()> {
     let name = flag(flags, "as")?;
-    let id = person(Path::new(vault), name)?;
-    let vault = unlock(Path::new(vault), name)?;
+    let id = person(Path::new(vault_dir), name)?;
+    let vault = unlock(Path::new(vault_dir), name)?;
     let mut host = HostStore::open(Path::new(host)).map_err(|e| e.to_string())?;
     let device = DeviceKey::generate();
+    let mut people = vec![id];
+    for (_, other) in flags.iter().filter(|(f, _)| f == "add") {
+        people.push(person(Path::new(vault_dir), other)?);
+    }
     let certificate = vault
-        .certify_device(device.id, "dev client", &device.public(), &[id])
+        .certify_device(device.id, "dev client", &device.public(), &people)
         .map_err(|e| e.to_string())?;
     host.add_device(&certificate).map_err(|e| e.to_string())?;
     let package = host.join_package(device.id).map_err(|e| e.to_string())?;
@@ -194,6 +205,46 @@ fn discover() -> Result<()> {
             host.port,
             host.vault.unwrap_or_default()
         );
+    }
+    Ok(())
+}
+
+fn save_recipe(dir: &str, name: &str, flags: &[(String, String)]) -> Result<()> {
+    let mut vault = unlock(Path::new(dir), flag(flags, "as")?)?;
+    let shared = vault
+        .collections()
+        .iter()
+        .find(|c| c.owner.is_none())
+        .map(|c| c.id)
+        .ok_or("no shared collection")?;
+    vault
+        .save_in(
+            Kind::Recipe,
+            shared,
+            &serde_json::json!({ "name": name, "lines": [], "notes": "" }),
+        )
+        .map_err(|e| e.to_string())?;
+    println!("saved {name}");
+    Ok(())
+}
+
+/// One line for each record: its name.
+fn list(dir: &str, kind: &str, flags: &[(String, String)]) -> Result<()> {
+    let vault = unlock(Path::new(dir), flag(flags, "as")?)?;
+    let (kind, field) = match kind {
+        "recipe" => (Kind::Recipe, "/name"),
+        "mix" => (Kind::Mix, "/name"),
+        _ => return Err("recipe or mix".to_owned()),
+    };
+    for revision in vault.heads(kind).map_err(|e| e.to_string())? {
+        // A mix is often left unnamed: "?" keeps it a line of its own.
+        let name = revision
+            .content
+            .pointer(field)
+            .and_then(|v| v.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("?");
+        println!("{name}");
     }
     Ok(())
 }

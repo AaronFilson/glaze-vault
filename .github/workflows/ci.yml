@@ -214,7 +214,8 @@ jobs:
           set -o pipefail
           npx tauri ios init --ci
           node crates/app/mobile/patch.cjs ios
-          npx tauri ios build --ci --debug --target aarch64-sim 2>&1 | tee build.log || {
+          # A development build, with the page's dev tools for the phone suite below (ADR 11).
+          VITE_GLAZE_DEV_TOOLS=1 npx tauri ios build --ci --debug --target aarch64-sim 2>&1 | tee build.log || {
             node .github/annotate.cjs build.log "tauri ios build failed"
             exit 1
           }
@@ -243,6 +244,51 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: crates/app/gen/android/app/build/outputs/apk/**/*.apk
+
+      # The phone suite (e2e/phone.ts, ADR 11): the app on an emulator or simulator joins a hostd
+      # run on the runner, syncs a recipe both ways and logs a mix.
+      - name: Android development build for the phone suite
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          VITE_GLAZE_DEV_TOOLS=1 npx tauri android build --ci --debug --apk --target x86_64 2>&1 | tee build.log || {
+            node .github/annotate.cjs build.log "tauri android build --debug failed"
+            exit 1
+          }
+          apk=$(find crates/app/gen/android/app/build/outputs/apk -path '*debug*' -name '*.apk' | head -1)
+          test -n "$apk" || { echo "::error::No debug APK"; exit 1; }
+          echo "E2E_PHONE_APP=$PWD/$apk" >> "$GITHUB_ENV"
+
+      - name: Let the emulator use KVM
+        if: runner.os == 'Linux'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Phone suite on an Android emulator
+        if: runner.os == 'Linux'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: npm run e2e -- --suite android
+
+      - name: Phone suite on the iOS simulator
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          plist=$(find crates/app/gen/apple ~/Library/Developer/Xcode/DerivedData -path '*.app/Info.plist' 2>/dev/null | head -1)
+          app=$(dirname "$plist")
+          test -n "$plist" || { echo "::error::No simulator app"; exit 1; }
+          device=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device"
+          E2E_PHONE_APP="$app" npm run e2e -- --suite ios
 
   # Unsigned installers for every push, to try on each system. Releases are built by release.yml.
   bundle:
