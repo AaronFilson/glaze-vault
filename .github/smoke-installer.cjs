@@ -73,17 +73,26 @@ if (process.platform === 'darwin') {
     check('macOS disk image', path.join(work, 'Glaze Vault.app', 'Contents', 'MacOS', 'glaze-vault'));
   });
 } else if (process.platform === 'win32') {
+  // The MSI first: it installs for the whole computer, the setup for this user.
+  attempt('Windows installer (MSI)', () => {
+    const log = path.join(work, 'msi.log');
+    sh('msiexec', ['/i', path.resolve(one(/\.msi$/)), '/qn', '/norestart', '/l*v', log]);
+    const places = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA].filter(Boolean);
+    const binary = places.flatMap((place) => find(path.join(place, 'Glaze Vault'), /^glaze-vault\.exe$/))[0];
+    if (!binary) {
+      // Where the MSI said it put files, to see why.
+      const text = fs.existsSync(log) ? fs.readFileSync(log, 'utf16le') : '';
+      const lines = text.split(/\r?\n/).filter((l) => /INSTALLDIR|APPLICATIONFOLDER|Installation success|return value 3|Error \d/i.test(l));
+      console.log(lines.slice(-30).join('\n') || text.slice(-3000));
+      throw new Error('glaze-vault.exe is not in Program Files after the MSI');
+    }
+    check('Windows installer (MSI)', binary);
+  });
   attempt('Windows setup (NSIS)', () => {
     sh(one(/-setup\.exe$/), ['/S']);
     const [binary] = find(path.join(process.env.LOCALAPPDATA, 'Glaze Vault'), /^glaze-vault\.exe$/);
     if (!binary) throw new Error('glaze-vault.exe is not where the setup puts it');
     check('Windows setup (NSIS)', binary);
-  });
-  attempt('Windows installer (MSI)', () => {
-    sh('msiexec', ['/i', one(/\.msi$/), '/qn', '/l*v', path.join(work, 'msi.log')]);
-    const [binary] = find(path.join(process.env.ProgramFiles, 'Glaze Vault'), /^glaze-vault\.exe$/);
-    if (!binary) throw new Error('glaze-vault.exe is not where the MSI puts it');
-    check('Windows installer (MSI)', binary);
   });
 } else {
   // Under a virtual display, as the runner has none.
