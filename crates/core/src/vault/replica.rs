@@ -647,9 +647,13 @@ impl Vault {
     }
 
     /// Whether this computer fetches photos only when someone opens them (the plan's question 9),
-    /// rather than all of them, which is the default: for a laptop short of room.
+    /// rather than all of them: for a laptop short of room. Off by default on a computer; on by
+    /// default on a phone or tablet, so years of test tiles do not fill it (ADR 32).
     pub fn photos_on_demand(&self) -> Result<bool> {
-        Ok(self.meta(PHOTOS_ON_DEMAND)?.as_deref() == Some("1"))
+        Ok(match self.meta(PHOTOS_ON_DEMAND)?.as_deref() {
+            Some(set) => set == "1",
+            None => PHOTOS_ON_DEMAND_UNSET,
+        })
     }
 
     pub fn set_photos_on_demand(&mut self, on: bool) -> Result<()> {
@@ -888,6 +892,8 @@ fn take_entry(
 
 /// Where a replica keeps whether it fetches photos only when opened, and which were (meta).
 const PHOTOS_ON_DEMAND: &str = "photos_on_demand";
+/// What photos on demand is until someone chooses: on for phones and tablets.
+const PHOTOS_ON_DEMAND_UNSET: bool = cfg!(any(target_os = "ios", target_os = "android"));
 const PHOTOS_WANTED: &str = "photos_wanted";
 
 #[cfg(test)]
@@ -1478,6 +1484,8 @@ mod tests {
     #[test]
     fn with_photos_on_demand_a_computer_fetches_only_those_opened() {
         let mut t = team();
+        // A computer brings every photo until told otherwise; a phone would not.
+        assert!(!t.computers[0].photos_on_demand().unwrap());
         t.computers[0].set_photos_on_demand(true).unwrap();
         let first = t.computers[1]
             .add_attachment(Kind::Firing, t.firing, "image/jpeg", b"first")

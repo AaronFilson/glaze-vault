@@ -84,12 +84,14 @@ select {
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
-button:focus-visible {
+button:focus-visible,
+label.button:focus-within {
   outline: 3px solid var(--focus);
   outline-offset: 1px;
 }
 
-button {
+button,
+label.button {
   font: inherit;
   color: inherit;
   background: var(--surface);
@@ -106,7 +108,8 @@ button.primary {
   font-weight: 600;
 }
 
-button:disabled {
+button:disabled,
+label.button.disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -858,6 +861,17 @@ table.facts th {
   flex-wrap: nowrap;
 }
 
+label.button {
+  display: inline-flex;
+  align-items: center;
+}
+
+.photo-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .photos {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
@@ -1267,6 +1281,7 @@ input.short {
 /* Touch: targets of at least 44px, whatever the width. */
 @media (pointer: coarse) {
   button,
+  label.button,
   select,
   input:not([type='checkbox']):not([type='radio']) {
     min-height: 44px;
