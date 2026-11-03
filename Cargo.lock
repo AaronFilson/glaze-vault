@@ -1396,6 +1396,7 @@ dependencies = [
  "glaze-vault-sync",
  "libc",
  "objc2-foundation",
+ "percent-encoding",
  "qrcode",
  "serde",
  "serde_json",

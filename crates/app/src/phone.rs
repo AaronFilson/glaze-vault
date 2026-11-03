@@ -66,6 +66,44 @@ pub fn back_up_to_picked(
     Ok(Some(last))
 }
 
+/// Android: `bytes` written where the person chose in the system's file picker, whose answer is
+/// usually a `content://` address. The picker does not say the name chosen, so the suggested one
+/// is returned. None if the person cancelled.
+#[cfg(target_os = "android")]
+pub fn write_to_picked(
+    window: &tauri::WebviewWindow,
+    suggested_name: &str,
+    kind: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> Result<Option<String>, crate::CommandError> {
+    use std::io::Write;
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    let Some(picked) = window
+        .dialog()
+        .file()
+        .set_file_name(suggested_name)
+        .add_filter(kind, &[extension])
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    if let FilePath::Path(path) = &picked {
+        std::fs::write(path, bytes).map_err(crate::file_error)?;
+    } else {
+        let mut options = OpenOptions::new();
+        options.write(true).truncate(true);
+        window
+            .fs()
+            .open(picked, options)
+            .and_then(|mut out| out.write_all(bytes))
+            .map_err(crate::file_error)?;
+    }
+    Ok(Some(suggested_name.to_owned()))
+}
+
 /// Run once at start, before the vault is opened.
 #[cfg(target_os = "ios")]
 pub fn prepare(dir: &Path) {

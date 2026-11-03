@@ -18,6 +18,8 @@ glaze-vault-core = { path = "../core" }
 glaze-vault-sync = { path = "../sync" }
 # The QR code on "Pair a computer", drawn as SVG (docs/adr/0029-phones-as-replicas.md).
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+# A saved PDF's name, percent-encoded in a header by the page.
+percent-encoding = "2.3.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2", features = [] }

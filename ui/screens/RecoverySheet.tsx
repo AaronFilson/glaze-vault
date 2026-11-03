@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { errorText } from '../api';
+import { printOut, printsToPdf } from '../printing';
 
 /** Shows a recovery key once, offers to print it, then checks three of the words. The
  * organization's key, made when a vault grows into a team's, gets its own wording. */
@@ -14,6 +16,17 @@ export function RecoverySheet({
   organization?: boolean;
 }) {
   const [stored, setStored] = useState(false);
+  // A phone saves the sheet as a PDF to print (ADR 33).
+  const [saved, setSaved] = useState('');
+  const [printError, setPrintError] = useState('');
+  const print = async () => {
+    setPrintError('');
+    try {
+      setSaved((await printOut()) ?? '');
+    } catch (e) {
+      setPrintError(errorText(e));
+    }
+  };
   const [checking, setChecking] = useState(false);
   const asked = useMemo(() => pickThree(words.length), [words]);
   const [answers, setAnswers] = useState<string[]>(['', '', '']);
@@ -76,10 +89,16 @@ export function RecoverySheet({
         )}
         <WordGrid words={words} />
         <div className="row">
-          <button type="button" onClick={() => window.print()}>
-            Print recovery sheet
+          <button type="button" onClick={() => void print()}>
+            {printsToPdf() ? 'Save recovery sheet as PDF…' : 'Print recovery sheet'}
           </button>
         </div>
+        {saved && <p className="hint">Saved as {saved}. Print it, then keep it somewhere safe, away from this device.</p>}
+        {printError && (
+          <p role="alert" className="error">
+            {printError}
+          </p>
+        )}
         <label className="check">
           <input type="checkbox" checked={stored} onChange={(e) => setStored(e.target.checked)} /> I have printed or
           written down these words and put them somewhere safe.

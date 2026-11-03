@@ -57,6 +57,7 @@ import { SyncIndicator } from './SyncIndicator';
 import { OfflineNotice } from './OfflineNotice';
 import { CollectionPicker, MoveTo } from './Team';
 import { byCollection, canEdit, defaultCollection, editableCollections, may, onlyWeighs } from '../team';
+import { printOut } from '../printing';
 
 const DAY = 24 * 60 * 60 * 1000;
 /** How long after the last keystroke unsaved edits are kept as a draft. */
@@ -324,7 +325,7 @@ export function Recipes({
 
   // Print once the page shows the chosen layout.
   useEffect(() => {
-    if (printRequest) window.print();
+    if (printRequest) printOut().catch((e) => setError(errorText(e)));
   }, [printRequest]);
 
   // The audit log notes each record opened (ADR 19); the core notes each once a sign-in.
@@ -938,8 +939,8 @@ export function Recipes({
       <header className="bar no-print">
         <span className="brand">Glaze Vault</span>
         <div className="bar-actions">
-          {/* Printing on a phone comes with stage 7 of the phase 3 plan. */}
-          {view === 'recipes' && !phone && may(access, shownIn, 'print') && (
+          {/* A phone saves what it would print as a PDF (ADR 33). */}
+          {view === 'recipes' && may(access, shownIn, 'print') && (
             <button type="button" aria-expanded={printing} onClick={() => setPrinting(!printing)}>
               Print…
             </button>

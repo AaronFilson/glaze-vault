@@ -29,7 +29,8 @@ vault, which is a computer's job there.
   person may do; this only decides what the phone shows. The page learns whether the vault is a
   replica from `network_status`, which it already had.
 - **Printing is not offered on a phone** until stage 7 of the plan, since `window.print()` does
-  nothing in a phone's webview.
+  nothing in a phone's webview. (Since [ADR 33](0033-getting-things-out-on-a-phone.md), a phone
+  saves it as a PDF.)
 - **Under 600 px**, the tables of lines, analyses, comparisons and facts scroll sideways inside
   themselves, with the first column kept in view; the vitrification chart scrolls inside its frame
   at a readable width rather than shrinking. The page itself never scrolls sideways.

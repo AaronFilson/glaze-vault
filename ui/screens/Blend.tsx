@@ -4,7 +4,8 @@
 // with alumina as one, and what is plastic. Bar labels for the tests, one at each cone, go with
 // the bars to the kiln.
 import { useEffect, useMemo, useState } from 'react';
-import type { RecipeHead } from '../api';
+import { errorText, type RecipeHead } from '../api';
+import { printOut } from '../printing';
 import { baseOf, usableLines } from '../batch';
 import { bodyChemistry, bodyMakeup, isBody } from '../body';
 import {
@@ -58,10 +59,10 @@ export function Blend({
   const [paper, setPaper] = useState<Paper>('weights');
   // Printed once the paper asked for is on the page.
   const [printRequest, setPrintRequest] = useState(0);
-  useEffect(() => {
-    if (printRequest) window.print();
-  }, [printRequest]);
   const [error, setError] = useState('');
+  useEffect(() => {
+    if (printRequest) printOut().catch((e) => setError(errorText(e)));
+  }, [printRequest]);
   const picked = (mode === 'line' ? [first, second] : [first, second, third]).map((id) =>
     recipes.find((r) => r.recordId === id)
   );
