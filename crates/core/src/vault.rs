@@ -1245,6 +1245,8 @@ impl Vault {
         // signing (signatures.rs), which needs the change-over done first: it changes rows.
         let _ = vault.certify_myself();
         let _ = vault.attest();
+        // Best effort, like attesting: a host converted before ADR 34 gets its certificate.
+        let _ = vault.certify_pinned_host();
         audit::note(&vault.conn, &vault.signer, audit::Entry::new("signed-in"))?;
         if vault.is_replica() {
             vault.note_time()?;

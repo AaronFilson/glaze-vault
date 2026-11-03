@@ -116,12 +116,16 @@ impl Vault {
         if dir.join(HOST_FILE).exists() || dir.join(DATABASE_FILE).exists() {
             return Err(Error::VaultExists);
         }
+        // The organization vouches for the new host's key before the store is copied, so the host
+        // and every computer that joins it have the certificate (ADR 34).
+        let host = KeyPair::generate();
+        let host_public = signing::public(&signing::host_key(&host));
+        self.certify_host(&host_public)?;
         fs::create_dir_all(dir)?;
         self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         fs::copy(self.dir.join(DATABASE_FILE), dir.join(DATABASE_FILE))?;
 
         let vault_id = self.keyring.vault_id;
-        let host = KeyPair::generate();
         let database_key = crypto::random_key();
         let conn = store::open(&dir.join(DATABASE_FILE), &self.database_key()?)?;
         store::rekey(&conn, &database_key)?;

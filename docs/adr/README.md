@@ -38,3 +38,4 @@ Each one is written once; a later change gets a new record that replaces the old
 | [0031](0031-phone-screens.md)                 | Phone screens: the bottom bar, one column, what a phone offers | 2026-10-31 |
 | [0032](0032-photos-on-a-phone.md)             | Photos on a phone: the camera, size, and where it was taken    | 2026-11-02 |
 | [0033](0033-getting-things-out-on-a-phone.md) | Getting things out on a phone: PDFs and the file picker        | 2026-11-02 |
+| [0034](0034-certified-host-keys.md)            | The organization certifies the host's key                      | 2026-11-03 |

@@ -74,7 +74,7 @@ and stopped again, on macOS 12 and later, Windows and Linux.
 - An admin can serve the vault from one computer, pair others, and stop. Other computers join
   from the app in stage 7.
 - The organization does not yet certify the host key at conversion; computers trust it from
-  pairing (ADR 21).
+  pairing (ADR 21). [ADR 34](0034-certified-host-keys.md) certifies it.
 - Revoking a computer, and a computer that reconnects after the host stopped, are stage 8.
 - Going back to one person, on a vault that serves, needs it stopped first.
 - The Windows service, the NSIS hooks and the macOS daemon have run only in CI, not on a

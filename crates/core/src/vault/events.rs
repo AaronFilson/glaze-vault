@@ -187,6 +187,17 @@ pub(crate) enum Body {
     RoleDeleted {
         role: Uuid,
     },
+    /// That a LAN host's TLS key is the vault's host (ADR 34), signed by the organization's
+    /// signing key `issuer_key`.
+    HostCertified {
+        #[serde(with = "crate::crypto::b64")]
+        host_key: Vec<u8>,
+        issued_at: i64,
+        #[serde(with = "crate::crypto::b64")]
+        issuer_key: Vec<u8>,
+        #[serde(with = "crate::crypto::b64")]
+        signature: Vec<u8>,
+    },
     /// The rule for computers that go without reaching the host (ADR 24).
     OfflinePolicySet {
         policy: super::offline::OfflinePolicy,
@@ -223,6 +234,7 @@ impl Body {
             self,
             Body::CertificateIssued { .. }
                 | Body::OrganizationKeyAdded { .. }
+                | Body::HostCertified { .. }
                 | Body::Erased { .. }
                 | Body::Moved { .. }
         )
@@ -249,6 +261,7 @@ impl Body {
             Body::RoleCreated { .. } => "role-created",
             Body::RoleChanged { .. } => "role-changed",
             Body::RoleDeleted { .. } => "role-deleted",
+            Body::HostCertified { .. } => "host-certified",
             Body::OfflinePolicySet { .. } => "offline-policy-set",
             Body::Erased { .. } => "erased",
             Body::Moved { .. } => "moved",
@@ -591,6 +604,18 @@ pub(crate) fn apply(conn: &Connection, event: &Event) -> Result<()> {
         }
         Body::RoleDeleted { role } => {
             conn.execute("DELETE FROM roles WHERE id = ?1", params![role.to_string()])?;
+        }
+        Body::HostCertified {
+            host_key,
+            issued_at,
+            issuer_key,
+            signature,
+        } => {
+            conn.execute(
+                "INSERT OR IGNORE INTO host_certificates (host_key, issued_at, issuer_key, signature, place)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![host_key, issued_at, issuer_key, signature, place],
+            )?;
         }
         Body::OfflinePolicySet { policy } => {
             conn.execute(

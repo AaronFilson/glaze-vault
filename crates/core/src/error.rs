@@ -66,6 +66,10 @@ pub enum Error {
     NotReadyToHost(&'static str),
     #[error("This computer may no longer sync with the vault.")]
     Revoked,
+    #[error(
+        "The vault's organization does not vouch for this host's key, so this computer will not sync with it. Ask an admin to sign in on a computer that syncs with the host, then try again."
+    )]
+    HostNotCertified,
     #[error("Deleting it has not reached the vault's host yet. Erase it once this computer has synced.")]
     NotSynced,
     #[error("This photo has not reached this computer yet. It comes with a sync.")]
@@ -125,6 +129,7 @@ impl Error {
             Error::BadSignature => "bad-signature",
             Error::NotReadyToHost(_) => "not-ready-to-host",
             Error::Revoked => "revoked",
+            Error::HostNotCertified => "host-not-certified",
             Error::NotSynced => "not-synced",
             Error::NotFetched => "not-fetched",
             Error::CheckedOut(_) => "checked-out",

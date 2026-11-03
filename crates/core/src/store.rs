@@ -266,6 +266,16 @@ const MIGRATIONS: &[&str] = &[
     );
     ALTER TABLE devices ADD COLUMN offline_secret BLOB;
     ALTER TABLE devices ADD COLUMN lost INTEGER NOT NULL DEFAULT 0;",
+    // 14: the host's key, certified by the organization (ADR 34). `place` is where the certificate
+    // came in the change log, which says whether the organization key that signed it was still
+    // the vault's then.
+    "CREATE TABLE host_certificates (
+        host_key BLOB PRIMARY KEY,
+        issued_at INTEGER NOT NULL,
+        issuer_key BLOB NOT NULL,
+        signature BLOB NOT NULL,
+        place INTEGER
+    );",
 ];
 
 /// A step a migration needs that SQL cannot do, run in its transaction after its SQL.
