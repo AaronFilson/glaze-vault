@@ -27,6 +27,7 @@ import { ConfirmNotice } from './Deleted';
 import { Fold, PendingNotice } from './FiringLog';
 import { ForkChoice } from './ForkChoice';
 import { CheckoutBar } from './CheckoutBar';
+import { printOut } from '../printing';
 
 /** The mix open in the editor: the newest revision, if saved, and the edits to it. */
 export interface MixEditing {
@@ -234,7 +235,7 @@ function MixEditor({
   // The record goes in the page once asked for, and the print dialog takes it after it renders.
   const [printRequest, setPrintRequest] = useState(0);
   useEffect(() => {
-    if (printRequest) window.print();
+    if (printRequest) printOut().catch((e) => setError(errorText(e)));
   }, [printRequest]);
   const print = () => {
     setPrintRequest((n) => n + 1);

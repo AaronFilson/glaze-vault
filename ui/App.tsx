@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, errorText, onEvent, type Person, type UpdateInfo, type VaultStatus } from './api';
+import { setPlatform } from './printing';
 import { FirstSignIn } from './screens/FirstSignIn';
 import { Join } from './screens/Join';
 import { Recipes, type LockReason } from './screens/Recipes';
@@ -46,6 +47,7 @@ export function App() {
     api
       .status()
       .then((status) => {
+        setPlatform(status.platform);
         setStatus(status);
         if (status.unlocked) void opened();
         else setScreen(status.exists ? { name: 'unlock' } : { name: 'setup' });

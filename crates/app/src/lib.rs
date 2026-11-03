@@ -774,10 +774,50 @@ fn save_export(
         Some("xml") => ("Insight XML", "xml"),
         _ => return Err(CommandError::new("bad-request", "Exports are CSV, JSON or XML.")),
     };
-    let Some(path) = save_dialog(&window, &suggested_name, kind, extension)? else {
+    save_picked(&window, &suggested_name, kind, extension, contents.as_bytes())
+}
+
+/// Asks where to save a PDF the page has made of what it would print (ui/pdf.ts): how a phone
+/// prints, as its webview has no print dialog (docs/adr/0033-getting-things-out-on-a-phone.md).
+/// The body is the PDF; the suggested-name header its name. Returns the file name, or None if
+/// the person cancelled.
+#[tauri::command(async)]
+fn save_pdf(window: WebviewWindow, request: tauri::ipc::Request<'_>) -> CommandResult<Option<String>> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(CommandError::new("bad-request", "The PDF came without its bytes."));
+    };
+    if !bytes.starts_with(b"%PDF-") {
+        return Err(CommandError::new("bad-request", "That is not a PDF."));
+    }
+    // Percent-encoded by the page, as a header carries only ASCII.
+    let name = request
+        .headers()
+        .get("suggested-name")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| percent_encoding::percent_decode_str(v).decode_utf8().ok())
+        .filter(|name| !name.contains(['/', '\\']) && name.ends_with(".pdf"))
+        .map(|name| name.into_owned())
+        .unwrap_or_else(|| "Glaze Vault.pdf".to_owned());
+    save_picked(&window, &name, "PDF", "pdf", bytes)
+}
+
+/// Asks where to save, then writes `bytes` there. Returns the file name, or None if the person
+/// cancelled. On Android the picker hands back an address to write through, not a path.
+fn save_picked(
+    window: &WebviewWindow,
+    suggested_name: &str,
+    kind: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> CommandResult<Option<String>> {
+    #[cfg(target_os = "android")]
+    if dev_picked_none() {
+        return phone::write_to_picked(window, suggested_name, kind, extension, bytes);
+    }
+    let Some(path) = save_dialog(window, suggested_name, kind, extension)? else {
         return Ok(None);
     };
-    fs::write(&path, contents).map_err(file_error)?;
+    fs::write(&path, bytes).map_err(file_error)?;
     Ok(Some(file_name(&path)))
 }
 
@@ -1152,6 +1192,7 @@ pub fn run() {
             set_aside_vaults,
             bring_back_vault,
             save_export,
+            save_pdf,
             get_preferences,
             set_preferences,
             check_for_update,

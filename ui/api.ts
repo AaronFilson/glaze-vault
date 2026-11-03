@@ -558,6 +558,9 @@ export const api = {
   /** Asks where to save, then writes. The file name, or null if cancelled. */
   saveExport: (suggestedName: string, contents: string) =>
     invoke<string | null>('save_export', { suggestedName, contents }),
+  /** Asks where to save a PDF, and saves it; the name saved, or null if cancelled. */
+  savePdf: (suggestedName: string, bytes: Uint8Array) =>
+    invoke<string | null>('save_pdf', bytes, { headers: { 'suggested-name': encodeURIComponent(suggestedName) } }),
   preferences: () => invoke<Preferences>('get_preferences'),
   setPreferences: (preferences: Preferences) => invoke<void>('set_preferences', { preferences }),
   checkForUpdate: () => invoke<UpdateInfo | null>('check_for_update'),
