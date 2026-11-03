@@ -213,8 +213,9 @@ export const phoneScenarios: PhoneScenario[] = [
         `type "The vault's host" ${quote(phone.hostAddress)}`,
         `type "Pairing code" ${quote(code)}`,
         'type "This device\'s name, for the admin to see" "Ben\'s phone"',
-        'click "Join"',
-        'expect "Waiting for the admin to approve this computer" 30000'
+        // The dev client approves at once, so the phone may be past "Waiting for the admin" before
+        // the screen is read; the next script waits for it to have joined.
+        'click "Join"'
       );
       await pairing.approved;
       const sheet = await phone.run(
