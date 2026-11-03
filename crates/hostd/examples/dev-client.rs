@@ -237,7 +237,13 @@ fn list(dir: &str, kind: &str, flags: &[(String, String)]) -> Result<()> {
         _ => return Err("recipe or mix".to_owned()),
     };
     for revision in vault.heads(kind).map_err(|e| e.to_string())? {
-        let name = revision.content.pointer(field).and_then(|v| v.as_str()).unwrap_or("?");
+        // A mix is often left unnamed: "?" keeps it a line of its own.
+        let name = revision
+            .content
+            .pointer(field)
+            .and_then(|v| v.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("?");
         println!("{name}");
     }
     Ok(())

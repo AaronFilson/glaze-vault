@@ -93,14 +93,22 @@ export class Phone extends App {
   }
 
   override logTail(): string {
-    const log =
-      this.kind === 'android'
-        ? spawnSync('adb', ['logcat', '-d', '-t', '40'], { encoding: 'utf8' })
-        : spawnSync(
-            'xcrun',
-            ['simctl', 'spawn', 'booted', 'log', 'show', '--last', '2m', '--style', 'compact', '--predicate', `subsystem == "${ID}" OR process CONTAINS "glaze"`],
-            { encoding: 'utf8', maxBuffer: 16 << 20 }
-          );
+    if (this.kind === 'android') {
+      // The app's own lines only (the page's console, Tauri and Rust), and what is in dev/.
+      const pid = spawnSync('adb', ['shell', 'pidof', ID], { encoding: 'utf8' }).stdout.trim();
+      const lines = pid
+        ? spawnSync('adb', ['logcat', '-d', '--pid', pid], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout
+        : `${ID} is not running`;
+      const dev = this.devDir
+        ? spawnSync('adb', ['shell', `run-as ${ID} ls -la ${this.devDir}`], { encoding: 'utf8' }).stdout
+        : '(no dev folder found)';
+      return `dev/:\n${dev}\n${lines.split('\n').slice(-60).join('\n')}`;
+    }
+    const predicate = `subsystem == "${ID}" OR process CONTAINS "glaze"`;
+    const log = spawnSync('xcrun', ['simctl', 'spawn', 'booted', 'log', 'show', '--last', '2m', '--style', 'compact', '--predicate', predicate], {
+      encoding: 'utf8',
+      maxBuffer: 16 << 20
+    });
     return (log.stdout ?? '').split('\n').slice(-40).join('\n') || '(no log)';
   }
 
