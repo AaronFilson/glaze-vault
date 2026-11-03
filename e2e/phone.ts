@@ -85,8 +85,10 @@ export class Phone extends App {
     const file = `${this.devDir}/drive.txt`;
     if (this.kind === 'android') {
       // adb runs its arguments as one line of the phone's shell, so the redirect is quoted for
-      // that shell to hand to run-as's.
-      must('adb', ['exec-in', `run-as ${ID} sh -c 'cat > ${tmp} && mv ${tmp} ${file}'`], script);
+      // that shell to hand to run-as's. The move is a call of its own: after `exec-in` ends with
+      // the script's end, the rest of its line is not run.
+      must('adb', ['exec-in', `run-as ${ID} sh -c 'cat > ${tmp}'`], script);
+      must('adb', ['shell', `run-as ${ID} mv ${tmp} ${file}`]);
     } else {
       must('sh', ['-c', 'cat > "$0" && mv "$0" "$1"', tmp, file], script);
     }
