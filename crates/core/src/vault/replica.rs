@@ -21,6 +21,9 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
+/// In `meta`, once this replica requires its host's key to be certified (ADR 34).
+pub(super) const HOST_CERTIFICATE: &str = "host_certificate";
+
 impl Vault {
     /// Makes this computer a replica of the vault a host serves, in `dir`, from what the host gave
     /// for it (HostStore::join_package) and its own key. It holds nothing until it first syncs;
@@ -88,6 +91,7 @@ impl Vault {
             ("device_key", hex::encode(*device.seed)),
             ("device_certificate", certificate),
             ("host_key", hex::encode(&package.host_key)),
+            (HOST_CERTIFICATE, "required".to_owned()),
         ] {
             tx.execute("INSERT INTO meta (name, value) VALUES (?1, ?2)", params![name, value])?;
         }
@@ -308,6 +312,21 @@ impl Vault {
                  ON CONFLICT (scope) DO UPDATE SET cursor = excluded.cursor",
                 params![scope.key(), cursor],
             )?;
+        }
+        // Once caught up, the host must be one the organization vouches for (ADR 34). A computer
+        // that joined before hosts were certified trusts its pin until a certificate comes, and
+        // requires one from then on. Nothing pulled is kept from a host that fails.
+        if !batch.more {
+            let pinned = self.host_key()?;
+            if self.host_certified(&pinned)? {
+                tx.execute(
+                    "INSERT INTO meta (name, value) VALUES (?1, 'required')
+                     ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+                    params![HOST_CERTIFICATE],
+                )?;
+            } else if self.meta(HOST_CERTIFICATE)?.is_some() {
+                return Err(Error::HostNotCertified);
+            }
         }
         tx.commit()?;
         if keyring.users.len() != self.keyring.users.len()
@@ -1036,6 +1055,83 @@ mod tests {
             firing,
             computers,
         }
+    }
+
+    /// Pulls everything from the host, giving the first error instead of panicking.
+    fn pull_all(vault: &mut Vault, host: &mut HostStore) -> Result<()> {
+        let device = vault.device()?;
+        loop {
+            let (cursors, _) = vault.sync_state()?;
+            let batch = host.pull(device, &cursors, 64 * 1024)?;
+            vault.apply_batch(&batch)?;
+            if !batch.more {
+                return Ok(());
+            }
+        }
+    }
+
+    #[test]
+    fn the_organization_vouches_for_the_host_it_prepares_and_computers_require_it() {
+        let mut team = team();
+        let host_key = team.host.identity();
+        for computer in &team.computers {
+            assert!(computer.host_certified(&host_key).unwrap());
+            assert_eq!(computer.meta(HOST_CERTIFICATE).unwrap().as_deref(), Some("required"));
+        }
+        // A computer whose pinned key the vault never vouched for keeps nothing it pulls.
+        let ben = &mut team.computers[1];
+        ben.set_meta("host_key", &hex::encode([7u8; 32])).unwrap();
+        ben.conn.execute("DELETE FROM sync_state", []).unwrap();
+        let before = count(ben, "SELECT count(*) FROM revisions");
+        assert!(matches!(pull_all(ben, &mut team.host), Err(Error::HostNotCertified)));
+        assert_eq!(count(ben, "SELECT count(*) FROM revisions"), before);
+    }
+
+    #[test]
+    fn a_computer_from_before_certificates_trusts_its_pin_until_an_admin_certifies_it() {
+        let mut team = team();
+        let pinned = [9u8; 32];
+        for computer in team.computers.iter_mut() {
+            computer.set_meta("host_key", &hex::encode(pinned)).unwrap();
+            computer
+                .conn
+                .execute("DELETE FROM meta WHERE name = ?1", params![HOST_CERTIFICATE])
+                .unwrap();
+        }
+        let (ana, ben) = team.computers.split_at_mut(1);
+        let (ana, ben) = (&mut ana[0], &mut ben[0]);
+        pull_all(ben, &mut team.host).unwrap();
+        assert!(!ben.host_certified(&pinned).unwrap());
+
+        // Not Ben, who is not an admin; Ana, at her sign-in.
+        ben.certify_pinned_host().unwrap();
+        assert!(!ben.host_certified(&pinned).unwrap());
+        ana.certify_pinned_host().unwrap();
+        assert!(ana.host_certified(&pinned).unwrap());
+        sync(ana, &mut team.host);
+        sync(ben, &mut team.host);
+        assert!(ben.host_certified(&pinned).unwrap());
+        assert_eq!(ben.meta(HOST_CERTIFICATE).unwrap().as_deref(), Some("required"));
+    }
+
+    #[test]
+    fn only_an_admin_with_the_organization_key_certifies_a_host() {
+        let team = team();
+        let ben = &team.computers[1];
+        let key = crate::crypto::KeyPair::generate();
+        let issuer = signing::person_key(&key);
+        let issued_at = now_ms();
+        let body = Body::HostCertified {
+            host_key: vec![5; 32],
+            issued_at,
+            issuer_key: signing::public(&issuer),
+            signature: signing::sign(
+                &issuer,
+                &signing::host_payload(&ben.keyring.vault_id, &[5; 32], issued_at),
+            ),
+        };
+        assert!(events::record(&ben.conn, &ben.signer, body).is_err());
+        assert!(!ben.host_certified(&[5; 32]).unwrap());
     }
 
     fn names(vault: &Vault, kind: Kind) -> Vec<String> {

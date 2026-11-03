@@ -2,18 +2,21 @@
 //! host's first computer, a replica over loopback, and can become a vault on one computer again
 //! when the host stops serving.
 
+use super::events::{self, Body};
 use super::host::{MODE, put_entry};
-use super::{HostStore, Vault};
+use super::{HostStore, Vault, now_ms};
 use crate::access::Directory;
 use crate::error::{Error, Result};
+use crate::signing;
 use crate::sync::DeviceKey;
 use rusqlite::params;
 use std::path::Path;
 use uuid::Uuid;
 
 /// What a replica keeps in `meta` that a vault on one computer does not.
-const REPLICA_META: [&str; 11] = [
+const REPLICA_META: [&str; 12] = [
     MODE,
+    super::replica::HOST_CERTIFICATE,
     "device",
     "device_key",
     "device_certificate",
@@ -49,12 +52,53 @@ impl Vault {
             ("device_certificate", serde_json::to_string(&certificate)?),
             ("host_key", hex::encode(host.identity())),
             ("host_address", address.to_owned()),
+            (super::replica::HOST_CERTIFICATE, "required".to_owned()),
         ] {
             tx.execute("INSERT INTO meta (name, value) VALUES (?1, ?2)", params![name, value])?;
         }
         tx.execute("UPDATE changes SET host_seq = seq WHERE host_seq IS NULL", [])?;
         tx.commit()?;
         Ok(host)
+    }
+
+    /// Whether the organization vouches for `host_key` as the vault's host (ADR 34): a
+    /// certificate for it, signed by an organization key that had not been retired when the
+    /// certificate came in the change log.
+    pub fn host_certified(&self, host_key: &[u8]) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM host_certificates h JOIN organization_keys o ON o.signing_key = h.issuer_key
+             WHERE h.host_key = ?1 AND (o.retired_place IS NULL OR h.place < o.retired_place))",
+            params![host_key],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// An admin's organization key vouches for `host_key` as the vault's host, if it does not yet.
+    pub(super) fn certify_host(&mut self, host_key: &[u8]) -> Result<()> {
+        let organization = self.admin()?;
+        if self.host_certified(host_key)? {
+            return Ok(());
+        }
+        let issuer = signing::organization_key(organization);
+        let issued_at = now_ms();
+        let payload = signing::host_payload(&self.keyring.vault_id, host_key, issued_at);
+        let body = Body::HostCertified {
+            host_key: host_key.to_vec(),
+            issued_at,
+            issuer_key: signing::public(&issuer),
+            signature: signing::sign(&issuer, &payload),
+        };
+        events::record(&self.conn, &self.signer, body)
+    }
+
+    /// A host converted before hosts were certified: an admin signing in at one of its
+    /// computers certifies the key that computer pinned when it paired, which pairing checked.
+    pub(super) fn certify_pinned_host(&mut self) -> Result<()> {
+        if !self.is_replica() || self.admin().is_err() {
+            return Ok(());
+        }
+        let pinned = self.host_key()?;
+        self.certify_host(&pinned)
     }
 
     /// Where this replica last reached its host.

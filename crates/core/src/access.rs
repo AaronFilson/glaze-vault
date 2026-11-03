@@ -593,6 +593,24 @@ impl Directory {
                 team()?;
                 policy.check()
             }
+            // Only an admin, with the organization key the vault lists now (ADR 34).
+            Body::HostCertified {
+                host_key,
+                issued_at,
+                issuer_key,
+                signature,
+            } => {
+                in_charge()?;
+                team()?;
+                let payload = signing::host_payload(&self.vault, host_key, *issued_at);
+                if !signing::verify(issuer_key, &payload, signature) {
+                    return Err(Error::BadSignature);
+                }
+                if !self.organization_keys.contains(issuer_key) {
+                    return Err(Error::NotAllowed);
+                }
+                Ok(())
+            }
             Body::RoleDeleted { role } => {
                 in_charge()?;
                 if self.grants.iter().any(|g| g.role == Role::Custom(*role)) {

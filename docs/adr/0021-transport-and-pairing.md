@@ -68,7 +68,8 @@ program that serves.
 
 - Developers can run a host and pair and sync computers by hand.
 - The organization does not certify the host key yet: a computer trusts it from pairing, or from
-  the join package when it joins on the host computer itself. Stage 6 certifies it at conversion.
+  the join package when it joins on the host computer itself. [ADR 34](0034-certified-host-keys.md)
+  certifies it.
 - The offline secret from the SPAKE2 key (plan section 3.12) is not derived or kept yet: stage 8,
   with the offline limits that use it.
 - Replicas made before this have no host key and must join again; none were in use.

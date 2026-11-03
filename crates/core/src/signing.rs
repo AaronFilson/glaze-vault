@@ -250,6 +250,15 @@ pub(crate) fn device_payload(
     .into_bytes()
 }
 
+/// What the organization signs to certify the LAN host's TLS key (ADR 34).
+pub(crate) fn host_payload(vault: &Uuid, host_key: &[u8], issued_at: i64) -> Vec<u8> {
+    format!(
+        "glaze-vault v1 host-certificate vault {vault} key {} issued {issued_at}",
+        hex::encode(host_key)
+    )
+    .into_bytes()
+}
+
 /// What signs a person's key file entry on its way to their computers: who it is, when, and its
 /// JSON as signed.
 pub(crate) fn entry_payload(vault: &Uuid, person: &Uuid, at: i64, entry: &str) -> Vec<u8> {

@@ -45,9 +45,9 @@ Work decided on but not done yet, with the reason it waits.
 - From the review of 2026-10-29, the rest fixed since: changes to people, roles and collections
   (`network::with_host` in the app) still hold the vault while they wait on the host, since they
   hold the directory there and sync the change at once; other network commands no longer do.
-- Left from the transport and host mode: the organization certifying the host key at conversion;
-  hostd under a user of its own on macOS (`_glazevault`) and `host.key` under DPAPI on Windows;
-  MSI updates on a computer that serves (only the NSIS installer stops the service); trying the
+- Left from the transport and host mode (the host key is certified since
+  [ADR 34](adr/0034-certified-host-keys.md)): hostd under a user of its own on macOS
+  (`_glazevault`) and `host.key` under DPAPI on Windows; MSI updates on a computer that serves (only the NSIS installer stops the service); trying the
   Windows service and updates on a real install; `SMAppService` once macOS 12 support is dropped.
 - Left from the sync core: the host keeping and signing the audit log (the computers' logs stay
   on them for now); a new organization recovery sheet or key reaching every computer's key file.
