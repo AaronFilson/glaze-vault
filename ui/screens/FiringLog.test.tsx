@@ -10,6 +10,12 @@ import { FiringLog, type FiringEditing } from './FiringLog';
 
 vi.setConfig({ testTimeout: 30_000 });
 
+// jsdom draws no pictures: a photo is kept as it came.
+vi.mock('../photos', async (original) => ({
+  ...(await original<typeof import('../photos')>()),
+  smallerPhoto: async (bytes: Uint8Array) => ({ bytes, mediaType: 'image/jpeg' })
+}))
+
 const recipe = (recordId: string, name: string, number: number, more: Partial<RecipeHead['content']> = {}): RecipeHead => ({
   recordId,
   revisionId: `${recordId}-${number}`,
@@ -64,12 +70,14 @@ function Log({
   firings,
   mixes = [],
   forRecipe = null,
-  start = null
+  start = null,
+  phone = false
 }: {
   firings: Firing[];
   mixes?: Mix[];
   forRecipe?: string | null;
   start?: FiringEditing | null;
+  phone?: boolean;
 }) {
   const [editing, setEditing] = useState<FiringEditing | null>(start);
   return (
@@ -84,6 +92,7 @@ function Log({
       onForRecipe={() => {}}
       onSaved={() => {}}
       onErased={() => {}}
+      phone={phone}
     />
   );
 }
@@ -188,5 +197,39 @@ describe('glaze fit', () => {
     expect(list).toHaveLength(3);
     // The curve is of the body's own bars, against its target of 1% absorption at most.
     expect(screen.getByText(/Inside the targets at cone 6\./)).toBeTruthy();
+  });
+});
+
+describe('photos on a phone', () => {
+  it('takes one with the camera, read in the page, and keeps it with the firing', async () => {
+    const saved = fakeCore();
+    const added: number[] = [];
+    let chooser = 0;
+    mockIPC((cmd, args) => {
+      const a = (args ?? {}) as Record<string, unknown>;
+      if (cmd === 'choose_photo') chooser++;
+      if (cmd === 'add_attachment') {
+        added.push((args as Uint8Array).length);
+        return { id: 'photo-1' };
+      }
+      if (cmd === 'save_record') {
+        saved.push(a.content as FiringContent);
+        return { recordId: 'new', revisionId: `new-${saved.length}`, number: saved.length, savedAt: 1, content: a.content };
+      }
+      return null;
+    });
+    const draft = newFiring({ recordId: 'g', number: 3, name: 'Clear' }, new Date(2026, 10, 2));
+    render(<Log firings={[]} start={{ current: null, draft }} phone />);
+    expect(screen.queryByRole('button', { name: 'Add photo…' })).toBeNull();
+    const camera = screen.getByLabelText('Take photo') as HTMLInputElement;
+    expect(camera.getAttribute('capture')).toBe('environment');
+    expect((screen.getByLabelText('Choose photo…') as HTMLInputElement).hasAttribute('capture')).toBe(false);
+
+    const file = new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])], 'tile.jpg', { type: 'image/jpeg' });
+    fireEvent.change(camera, { target: { files: [file] } });
+    await waitFor(() => expect(saved.at(-1)?.photos).toEqual([{ id: 'photo-1', mediaType: 'image/jpeg', caption: '' }]));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(added).toEqual([7]);
+    expect(chooser).toBe(0);
   });
 });

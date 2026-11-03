@@ -1,10 +1,12 @@
 // Photos for the firing log (docs/adr/0014-firing-log-and-photos.md). A photo straight from a
 // camera is several megabytes and far larger than a screen, so the page makes it smaller before
-// the core encrypts and keeps it: at most LONGEST_SIDE pixels across, as JPEG.
+// the core encrypts and keeps it: at most LONGEST_SIDE pixels across, as JPEG, and without what a
+// camera writes beside the picture (where it was taken, the phone's make), which drawing it again
+// leaves behind. The webview turns the picture upright as it draws it, so nothing is lost by that.
 
 /** The longest side a kept photo has, in pixels: enough to see crazing on a tile. */
-export const LONGEST_SIDE = 2400;
-const QUALITY = 0.88;
+export const LONGEST_SIDE = 2560;
+const QUALITY = 0.85;
 
 export class PhotoError extends Error {}
 
@@ -28,7 +30,7 @@ export async function smallerPhoto(bytes: Uint8Array): Promise<{ bytes: Uint8Arr
   try {
     const image = await loaded(url);
     const scale = Math.min(1, LONGEST_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
-    if (scale === 1 && type === 'image/jpeg') return { bytes, mediaType: type };
+    if (scale === 1 && type === 'image/jpeg' && !hasMetadata(bytes)) return { bytes, mediaType: type };
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(image.naturalWidth * scale);
     canvas.height = Math.round(image.naturalHeight * scale);
@@ -44,6 +46,21 @@ export async function smallerPhoto(bytes: Uint8Array): Promise<{ bytes: Uint8Arr
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** Whether a JPEG carries more than its picture: EXIF (with any location), XMP, a comment, or
+ * anything else in an APP1 to APP15 or COM segment. APP0 (JFIF) only says how to read it. */
+export function hasMetadata(bytes: Uint8Array): boolean {
+  let at = 2;
+  while (at + 4 <= bytes.length && bytes[at] === 0xff) {
+    const marker = bytes[at + 1];
+    // The picture itself starts: no segment past here says anything about the photo.
+    if (marker === 0xda) return false;
+    if ((marker >= 0xe1 && marker <= 0xef) || marker === 0xfe) return true;
+    at += 2 + ((bytes[at + 2] << 8) | bytes[at + 3]);
+  }
+  // A file that cannot be walked is redrawn, to be safe.
+  return at + 4 <= bytes.length;
 }
 
 function loaded(url: string): Promise<HTMLImageElement> {

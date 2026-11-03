@@ -75,7 +75,8 @@ export function FiringLog({
   forRecipe,
   onForRecipe,
   onSaved,
-  onErased
+  onErased,
+  phone = false
 }: {
   firings: Firing[];
   /** For a firing's lots: the mixes of the revision fired. */
@@ -89,6 +90,8 @@ export function FiringLog({
   onForRecipe: (recordId: string | null) => void;
   onSaved: (saved: Firing) => void;
   onErased: (recordId: string) => void;
+  /** A phone takes photos with its camera, and chooses them in the page (ADR 32). */
+  phone?: boolean;
 }) {
   const [search, setSearch] = useState('');
   const [pending, setPending] = useState<(() => void) | null>(null);
@@ -202,6 +205,7 @@ export function FiringLog({
             onEdit={onEdit}
             onSaved={onSaved}
             onErased={onErased}
+            phone={phone}
             registerSave={(save) => (saveRef.current = save)}
           />
         ) : (
@@ -268,6 +272,7 @@ function FiringEditor({
   onEdit,
   onSaved,
   onErased,
+  phone,
   registerSave
 }: {
   editing: FiringEditing;
@@ -278,6 +283,7 @@ function FiringEditor({
   onEdit: (editing: FiringEditing | null) => void;
   onSaved: (saved: Firing) => void;
   onErased: (recordId: string) => void;
+  phone: boolean;
   registerSave: (save: () => Promise<boolean>) => void;
 }) {
   const { current, draft } = editing;
@@ -332,11 +338,13 @@ function FiringEditor({
   };
   registerSave(async () => !!(await save()));
 
-  const addPhoto = async () => {
+  // From the computer's own file dialog, or on a phone from the page's inputs, which reach the
+  // camera and the phone's photos (a picked file on Android is no path the core could open).
+  const addPhoto = async (choose: () => Promise<Uint8Array> = api.choosePhoto) => {
     setAddingPhoto(true);
     setError('');
     try {
-      const chosen = await api.choosePhoto();
+      const chosen = await choose();
       if (!chosen.length) return;
       const photo = await smallerPhoto(chosen);
       // A photo belongs to a saved firing, so a new one, or one with changes, is saved first.
@@ -787,9 +795,20 @@ function FiringEditor({
             ))}
           </div>
         )}
-        <button type="button" disabled={addingPhoto || saving} onClick={() => void addPhoto()}>
-          {addingPhoto ? 'Adding the photo…' : 'Add photo…'}
-        </button>
+        {phone ? (
+          <div className="photo-inputs">
+            <PhotoInput camera disabled={addingPhoto || saving} onFile={(file) => void addPhoto(() => bytesOf(file))}>
+              {addingPhoto ? 'Adding the photo…' : 'Take photo'}
+            </PhotoInput>
+            <PhotoInput disabled={addingPhoto || saving} onFile={(file) => void addPhoto(() => bytesOf(file))}>
+              Choose photo…
+            </PhotoInput>
+          </div>
+        ) : (
+          <button type="button" disabled={addingPhoto || saving} onClick={() => void addPhoto()}>
+            {addingPhoto ? 'Adding the photo…' : 'Add photo…'}
+          </button>
+        )}
       </fieldset>
 
       {confirming && (
@@ -828,6 +847,43 @@ function FiringEditor({
 
 /** A section that opens when what it holds asks for it, and stays as the person leaves it:
  * clearing the field being typed in does not fold it shut. */
+async function bytesOf(file: File): Promise<Uint8Array> {
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+/** A button that opens the camera (`camera`) or the phone's photos. iOS hands over a JPEG even
+ * for a photo kept as HEIC, as the input takes only JPEG and PNG. */
+function PhotoInput({
+  camera = false,
+  disabled,
+  onFile,
+  children
+}: {
+  camera?: boolean;
+  disabled: boolean;
+  onFile: (file: File) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={`button${disabled ? ' disabled' : ''}`}>
+      {children}
+      <input
+        type="file"
+        className="visually-hidden"
+        accept="image/jpeg,image/png"
+        capture={camera ? 'environment' : undefined}
+        disabled={disabled}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          // Cleared, so the same photo can be chosen again after an error.
+          e.target.value = '';
+          if (file) onFile(file);
+        }}
+      />
+    </label>
+  );
+}
+
 export function Fold({ open, children }: { open: boolean; children: React.ReactNode }) {
   const [shown, setShown] = useState(open);
   useEffect(() => {

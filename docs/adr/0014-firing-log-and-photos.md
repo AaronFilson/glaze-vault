@@ -28,7 +28,8 @@ are far larger than anything the vault kept before.
   never changed. A firing's revisions name its photos with a caption each. A photo left out of a
   later revision stays for the history; erasing the firing removes its photos. Changing a
   collection's key re-encrypts its attachments, one at a time.
-- **The page makes photos smaller** before the core keeps them: at most 2,400 pixels across, as
+- **The page makes photos smaller** before the core keeps them: at most 2,400 pixels across (2,560 since [ADR 32](0032-photos-on-a-phone.md), which also drops
+  EXIF), as
   JPEG, which is plenty to see crazing and a fraction of a camera's file. The file is chosen in a
   native dialog, read by the core and handed to the page as bytes; the page decodes it, which
   reads HEIC on a Mac. Bytes travel as raw IPC bodies, not JSON.

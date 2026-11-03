@@ -1274,6 +1274,7 @@ export function Recipes({
           onForRecipe={setFiringsOf}
           onSaved={(saved) => setFirings((list) => [saved, ...list.filter((f) => f.recordId !== saved.recordId)])}
           onErased={(recordId) => setFirings((list) => list.filter((f) => f.recordId !== recordId))}
+          phone={phone}
         />
       ) : view === 'mixes' ? (
         <MixLog
