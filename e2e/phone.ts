@@ -84,7 +84,9 @@ export class Phone extends App {
     const tmp = `${this.devDir}/drive.txt.tmp`;
     const file = `${this.devDir}/drive.txt`;
     if (this.kind === 'android') {
-      must('adb', ['exec-in', 'run-as', ID, 'sh', '-c', `cat > '${tmp}' && mv '${tmp}' '${file}'`], script);
+      // adb runs its arguments as one line of the phone's shell, so the redirect is quoted for
+      // that shell to hand to run-as's.
+      must('adb', ['exec-in', `run-as ${ID} sh -c 'cat > ${tmp} && mv ${tmp} ${file}'`], script);
     } else {
       must('sh', ['-c', 'cat > "$0" && mv "$0" "$1"', tmp, file], script);
     }
@@ -128,7 +130,7 @@ export class Host {
     const at = (name: string) => join(this.dir, name);
     must(exe('examples/dev-client'), ['make-team', at('team'), '--as', 'Ana', '--add', 'Ben']);
     must(exe('examples/dev-client'), ['prepare', at('team'), at('host'), '--as', 'Ana']);
-    must(exe('examples/dev-client'), ['join-local', at('team'), at('host'), at('ana'), '--as', 'Ana']);
+    must(exe('examples/dev-client'), ['join-local', at('team'), at('host'), at('ana'), '--as', 'Ana', '--add', 'Ben']);
     this.hostd = spawn(exe('hostd'), ['run', at('host')], { stdio: 'inherit' });
     for (let i = 0; i < 60; i++) {
       if (spawnSync(exe('examples/dev-client'), ['sync', at('ana'), '127.0.0.1:47917', '--as', 'Ana']).status === 0) return;
@@ -161,6 +163,8 @@ export class Host {
     const approved = new Promise<void>((resolve, reject) =>
       child.on('exit', (status) => (status === 0 ? resolve() : reject(new Error(`Pairing failed:\n${out}`))))
     );
+    // Awaited only after the phone has joined; a failure before then shows there, not as a crash.
+    approved.catch(() => {});
     return { code, approved };
   }
 

@@ -5,8 +5,9 @@
 //!                                     a new team vault; others get GLAZE_PASSWORD as a one-time
 //!                                     password, formulators on Shared
 //!   dev-client prepare <vault-dir> <host-dir> --as NAME     make a host's store from a team vault
-//!   dev-client join-local <vault-dir> <host-dir> <dir> --as NAME
-//!                                     this person's computer as a replica, without pairing
+//!   dev-client join-local <vault-dir> <host-dir> <dir> --as NAME [--add NAME...]
+//!                                     this person's computer as a replica, without pairing; with
+//!                                     --add, others' too, so an admin there can name them
 //!   dev-client sync <dir> <address> --as NAME
 //!   dev-client pair-start <dir> <address> --as NAME [--for NAME...]
 //!                                     an admin: show a code, wait, and approve the computer
@@ -133,14 +134,18 @@ fn prepare(vault: &str, host: &str, flags: &[(String, String)]) -> Result<()> {
     Ok(())
 }
 
-fn join_local(vault: &str, host: &str, dir: &str, flags: &[(String, String)]) -> Result<()> {
+fn join_local(vault_dir: &str, host: &str, dir: &str, flags: &[(String, String)]) -> Result<()> {
     let name = flag(flags, "as")?;
-    let id = person(Path::new(vault), name)?;
-    let vault = unlock(Path::new(vault), name)?;
+    let id = person(Path::new(vault_dir), name)?;
+    let vault = unlock(Path::new(vault_dir), name)?;
     let mut host = HostStore::open(Path::new(host)).map_err(|e| e.to_string())?;
     let device = DeviceKey::generate();
+    let mut people = vec![id];
+    for (_, other) in flags.iter().filter(|(f, _)| f == "add") {
+        people.push(person(Path::new(vault_dir), other)?);
+    }
     let certificate = vault
-        .certify_device(device.id, "dev client", &device.public(), &[id])
+        .certify_device(device.id, "dev client", &device.public(), &people)
         .map_err(|e| e.to_string())?;
     host.add_device(&certificate).map_err(|e| e.to_string())?;
     let package = host.join_package(device.id).map_err(|e| e.to_string())?;
