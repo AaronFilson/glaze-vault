@@ -9,8 +9,7 @@ mod syncing;
 
 use glaze_vault_core::{
     Attachment, AttachmentSigned, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error,
-    Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, Note, OwnBackup, Person, Revision, Role, SetAside, Settings, Signed,
-    Vault,
+    Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, Note, OwnBackup, Person, Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
