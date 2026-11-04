@@ -56,6 +56,16 @@ fn open_files(key_dir: &Path, dir: &Path) -> Result<(KeyPair, HostFile, Connecti
     Ok((host, file, conn))
 }
 
+/// The database key of the store in `dir`, for a copy of it made under the same key
+/// (host_backup.rs).
+pub(super) fn database_key(dir: &Path) -> Result<crypto::Key> {
+    let secret = super::host_key::read(dir)?;
+    let host = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the host key is not valid".into()))?;
+    let file: HostFile = serde_json::from_slice(&fs::read(dir.join(HOST_FILE))?)?;
+    crypto::open_key(&host, &file.database_key, &host_info(&file.vault_id))
+        .ok_or_else(|| Error::Corrupt("the host's database key does not open".into()))
+}
+
 fn host_info(vault_id: &Uuid) -> Vec<u8> {
     format!("glaze-vault v1 database-key vault {vault_id} host").into_bytes()
 }

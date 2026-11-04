@@ -161,7 +161,7 @@ fn join_local(vault_dir: &str, host: &str, dir: &str, flags: &[(String, String)]
 fn unpack(dir: &str, file: &str, host: &str, flags: &[(String, String)]) -> Result<()> {
     let mut vault = unlock(Path::new(dir), flag(flags, "as")?)?;
     let host = vault
-        .unpack_host_backup(Path::new(file), Path::new(host))
+        .unpack_host_backup(Path::new(file), Path::new(host), false)
         .map_err(|e| e.to_string())?;
     println!(
         "unpacked; the host's key is still {}",

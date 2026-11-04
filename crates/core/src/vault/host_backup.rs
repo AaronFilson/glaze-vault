@@ -17,6 +17,7 @@ use super::{DATABASE_FILE, Vault, now_ms};
 use crate::crypto::{self, KeyPair, SealedBox};
 use crate::error::{Error, Result};
 use crate::files;
+use crate::sync::DeviceInfo;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -196,10 +197,9 @@ impl HostStore {
     /// for syncs again.
     pub fn copy_for_export(&mut self, out: &Path) -> Result<ExportCopy> {
         let organization_key = self.organization_encryption_key()?;
-        self.conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         let copy = out.with_extension("db.tmp");
         let read = (|| {
-            fs::copy(self.dir().join(DATABASE_FILE), &copy)?;
+            self.snapshot(&copy)?;
             let secret = super::host_key::read(self.dir())?;
             let secret: crypto::Key = Zeroizing::new(
                 secret
@@ -223,6 +223,40 @@ impl HostStore {
                 Err(e)
             }
         }
+    }
+
+    /// Copies the database to `to` as it stands at one moment, under the same key. The store may
+    /// be serving from another process meanwhile (`hostd export`), so the file is not copied as
+    /// it lies: a checkpoint there could rewrite pages halfway through. SQLite's backup copies
+    /// every page inside one read transaction, which a writer elsewhere cannot change under it.
+    fn snapshot(&self, to: &Path) -> Result<()> {
+        for stale in ["", "-wal", "-shm", "-journal"] {
+            let _ = fs::remove_file(format!("{}{stale}", to.display()));
+        }
+        let key = super::host::database_key(self.dir())?;
+        let mut copy = rusqlite::Connection::open(to)?;
+        let pragma = Zeroizing::new(format!("PRAGMA key = \"x'{}'\";", hex::encode(key.as_ref())));
+        copy.execute_batch(&pragma)?;
+        {
+            use rusqlite::backup::{Backup, StepResult};
+            let backup = Backup::new(&self.conn, &mut copy)?;
+            // Every page in one step, so in one read transaction; a step told to wait tries again.
+            let mut tries = 0;
+            loop {
+                match backup.step(-1)? {
+                    StepResult::Done => break,
+                    _ if tries < 100 => {
+                        tries += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    _ => return Err(Error::Corrupt("the store stayed busy while it was copied".into())),
+                }
+            }
+        }
+        // One file, with nothing left in a log beside it.
+        copy.query_row("PRAGMA journal_mode = DELETE", [], |_| Ok(()))?;
+        copy.close().map_err(|(_, e)| e)?;
+        Ok(())
     }
 
     /// Takes a backup file an admin's computer kept, as one of the backups of the host in `dir`,
@@ -334,14 +368,22 @@ impl Vault {
     /// the certificate for it hold; the store gets a new generation, so each computer sends again
     /// what reached the old host after the file was made. On a computer that syncs, the file must
     /// be of the host it pinned.
-    pub fn unpack_host_backup(&mut self, file: &Path, staging: &Path) -> Result<HostStore> {
+    ///
+    /// The file may be older than what this computer knows (ADR 37): a computer revoked since it
+    /// was made would sync again with the host it makes, since only the host keeps revocations.
+    /// Such a file is refused with [`Error::HostBackupStale`] unless `anyway`, and then each
+    /// revocation this computer knows of is made again in the new store. A file this computer's
+    /// own device is not in, or is revoked in, is refused with [`Error::NotInHostBackup`].
+    pub fn unpack_host_backup(&mut self, file: &Path, staging: &Path, anyway: bool) -> Result<HostStore> {
         let (header, mut database) = read_header(file)?;
         if header.vault_id != self.keyring.vault_id {
             return Err(Error::NotABackup);
         }
         let secret = crypto::open_key(self.admin()?, &header.host_key, &host_key_info(&header.vault_id))
             .ok_or(Error::NotABackup)?;
-        if staging.join(HOST_FILE).exists() || staging.join(DATABASE_FILE).exists() {
+        // A folder of the caller's is used only if empty, and on failure only what this wrote goes.
+        let created = !staging.exists();
+        if !created && fs::read_dir(staging)?.next().is_some() {
             return Err(Error::VaultExists);
         }
         fs::create_dir_all(staging)?;
@@ -354,9 +396,36 @@ impl Vault {
                 header.database_bytes,
                 &header.sha256,
             )?;
-            let host = HostStore::open(staging)?;
+            let mut host = HostStore::open(staging)?;
+            // The hash says the file is as it was written; this says what was written is whole.
+            let check: String = host.conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+            if check != "ok" {
+                return Err(Error::NotABackup);
+            }
             if self.is_replica() && self.host_key()? != host.identity() {
                 return Err(Error::NotABackup);
+            }
+            let devices = host.devices()?;
+            if self.is_replica() {
+                let me = self.device()?;
+                if !devices.iter().any(|d| d.id == me && !d.revoked) {
+                    return Err(Error::NotInHostBackup);
+                }
+            }
+            let missing: Vec<(Uuid, bool)> = self
+                .known_revocations()?
+                .into_iter()
+                .filter(|(id, lost)| !devices.iter().any(|d| d.id == *id && d.revoked && (d.lost || !lost)))
+                .collect();
+            if !missing.is_empty() && !anyway {
+                return Err(Error::HostBackupStale);
+            }
+            for (id, lost) in missing {
+                match host.revoke_device(id, lost) {
+                    // A computer that joined after the file was made is not in it to revoke.
+                    Ok(_) | Err(Error::NotFound) => {}
+                    Err(e) => return Err(e),
+                }
             }
             host.new_generation()?;
             Ok(host)
@@ -364,13 +433,55 @@ impl Vault {
         let host = match unpacked {
             Ok(host) => host,
             Err(e) => {
-                let _ = fs::remove_dir_all(staging);
+                if created {
+                    let _ = fs::remove_dir_all(staging);
+                } else {
+                    for file in [HOST_KEY, HOST_FILE, DATABASE_FILE] {
+                        for suffix in ["", "-wal", "-shm"] {
+                            let _ = fs::remove_file(staging.join(format!("{file}{suffix}")));
+                        }
+                    }
+                }
                 return Err(e);
             }
         };
         // A host from before ADR 34 has its key certified now; it reaches the host at the next sync.
         self.certify_host(&host.identity())?;
         Ok(host)
+    }
+}
+
+/// Where a replica keeps the computers it knows were revoked, as JSON: `[[id, lost], ...]`.
+pub(super) const KNOWN_REVOKED: &str = "revoked_devices";
+
+impl Vault {
+    /// Remembers which computers the host says are revoked, from a listing of them an admin's
+    /// computer fetched, so a host file made before can be told apart (ADR 37). Only the host
+    /// keeps revocations; this is what this computer saw.
+    pub fn note_revocations(&mut self, devices: &[DeviceInfo]) -> Result<()> {
+        if !self.is_replica() {
+            return Ok(());
+        }
+        let mut known = self.known_revocations()?;
+        let before = known.clone();
+        for device in devices.iter().filter(|d| d.revoked) {
+            match known.iter_mut().find(|(id, _)| *id == device.id) {
+                Some((_, lost)) => *lost |= device.lost,
+                None => known.push((device.id, device.lost)),
+            }
+        }
+        if known != before {
+            self.set_meta(KNOWN_REVOKED, &serde_json::to_string(&known)?)?;
+        }
+        Ok(())
+    }
+
+    /// The computers this computer knows were revoked, and whether as lost.
+    pub fn known_revocations(&self) -> Result<Vec<(Uuid, bool)>> {
+        Ok(match self.meta(KNOWN_REVOKED)? {
+            Some(text) => serde_json::from_str(&text)?,
+            None => Vec::new(),
+        })
     }
 }
 

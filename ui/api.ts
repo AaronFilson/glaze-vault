@@ -296,6 +296,10 @@ export interface NetworkStatus {
   defaultPort: number;
   /** This computer, as the host knows it. */
   device: string | null;
+  /** The host moved here from its file: its store here is the only whole one (ADR 37). */
+  hostMovedHere: boolean;
+  /** This computer served the vault and stopped, to move the host elsewhere (ADR 37). */
+  hostRetired: boolean;
 }
 
 export interface SyncReport {
@@ -493,8 +497,9 @@ export const api = {
   syncNow: () => invoke<SyncReport>('sync_now'),
   /** Serves the vault from this computer; the system asks for an administrator. */
   startHosting: (port: number | null, name: string) => invoke<SyncReport>('start_hosting', { port, name }),
-  /** Stops serving; unless `anyway`, only after a last sync works. */
-  stopHosting: (anyway: boolean) => invoke<void>('stop_hosting', { anyway }),
+  /** Stops serving; unless `anyway`, only after a last sync works. When `moving`, or on a computer
+   * the host moved to, the store is kept and this vault stays the host's, to leave and join again. */
+  stopHosting: (anyway: boolean, moving: boolean) => invoke<{ kept: boolean }>('stop_hosting', { anyway, moving }),
   startPairing: () => invoke<PairingCode>('start_pairing'),
   waitForPairing: () => invoke<PairingComputer>('wait_for_pairing'),
   approvePairing: (people: string[]) => invoke<void>('approve_pairing', { people }),
@@ -533,9 +538,10 @@ export const api = {
   /** Null if the person cancelled; otherwise when the backup was made. */
   saveHostBackup: (suggestedName: string) => invoke<number | null>('save_host_backup', { suggestedName }),
   restoreHostFromFile: () => invoke<number | null>('restore_host_from_file'),
-  /** Null if the person cancelled (docs/adr/0037-moving-the-host.md). */
-  moveHostHere: (port: number | null, name: string) =>
-    invoke<SyncReport | null>('move_host_here', { port, name }),
+  /** Null if the person cancelled (docs/adr/0037-moving-the-host.md). A file older than a
+   * revocation this computer knows of fails with `host-backup-stale` unless `anyway`. */
+  moveHostHere: (port: number | null, name: string, anyway: boolean) =>
+    invoke<SyncReport | null>('move_host_here', { port, name, anyway }),
   auditLog: (limit: number | null) => invoke<AuditLog>('audit_log', { limit }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),
