@@ -64,6 +64,12 @@ function android() {
   if (!manifest.includes(multicast)) {
     manifest = manifest.replace(/(\s*)<application\b/, `$1<uses-permission android:name="${multicast}" />$1<application`);
   }
+  // That permission makes Play think Wi-Fi is needed: a phone without it still runs the app, and
+  // finds no hosts.
+  const wifi = '<uses-feature android:name="android.hardware.wifi" android:required="false" />';
+  if (!manifest.includes('android.hardware.wifi')) {
+    manifest = manifest.replace(/(\s*)<application\b/, `$1${wifi}$1<application`);
+  }
   fs.writeFileSync(manifestPath, manifest);
 
   // FLAG_SECURE: no recipe in the recent apps picture, and no screenshots.
@@ -88,13 +94,20 @@ function android() {
     if (!activity.includes('FLAG_SECURE')) throw new Error(`MainActivity.kt is not as expected:\n${activity}`);
     fs.writeFileSync(activityPath, activity);
   }
-  // The multicast lock, held while the app is on screen, when it may look for hosts.
+  // The multicast lock, held while the app is on screen, when it may look for hosts. A phone with
+  // no Wi-Fi has no WifiManager, and goes without.
+  const wifiLine = '    val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return';
+  const castLine = '    val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager';
+  if (activity.includes(castLine + '\n')) {
+    activity = activity.replace(castLine + '\n', wifiLine + '\n');
+    fs.writeFileSync(activityPath, activity);
+  }
   if (!activity.includes('MulticastLock')) {
     const lock =
       '\n  private var multicast: WifiManager.MulticastLock? = null\n\n' +
       '  override fun onResume() {\n' +
       '    super.onResume()\n' +
-      '    val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager\n' +
+      `${wifiLine}\n` +
       '    multicast = wifi.createMulticastLock("glaze-vault-discovery").apply {\n' +
       '      setReferenceCounted(false)\n' +
       '      acquire()\n' +
