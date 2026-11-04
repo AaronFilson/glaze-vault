@@ -456,6 +456,8 @@ export const api = {
       headers: { kind, 'record-id': recordId, 'media-type': mediaType }
     }),
   attachment: (id: string) => invoke<ArrayBuffer>('get_attachment', { id }),
+  /** Who signed an attachment and whether it checks; null for one kept before signing (ADR 19). */
+  attachmentSigned: (id: string) => invoke<Signed | null>('get_attachment_signed', { id }),
   saveMaterial: (parent: string | null, content: MaterialContent, collection: string | null = null) =>
     invoke<MaterialHead>('save_record', { kind: 'material', parent, collection, content }),
   saveRecord: <Content>(kind: Kind, parent: string | null, content: Content, collection: string | null = null) =>

@@ -200,6 +200,49 @@ describe('glaze fit', () => {
   });
 });
 
+describe('a photo’s signature', () => {
+  it('says who added each photo in a team, and warns of one changed outside the app', async () => {
+    mockIPC((cmd, args) => {
+      const a = (args ?? {}) as Record<string, unknown>;
+      if (cmd === 'get_attachment_signed') {
+        return a.id === 'tile' ? { by: 'ben', as: 'author', check: 'good' } : { by: 'ana', as: 'author', check: 'bad' };
+      }
+      if (cmd === 'vault_status') return { people: [{ id: 'ben', name: 'Ben' }, { id: 'ana', name: 'Ana' }] };
+      if (cmd === 'get_attachment') throw { code: 'not-fetched', message: 'not yet' };
+      return null;
+    });
+    const content = {
+      ...newFiring(null, new Date(2026, 10, 2)),
+      photos: [
+        { id: 'tile', mediaType: 'image/jpeg', caption: '' },
+        { id: 'changed', mediaType: 'image/jpeg', caption: '' }
+      ]
+    };
+    const team = {
+      team: true,
+      me: { id: 'ana', name: 'Ana', admin: true, mustSetPassword: false },
+      collections: []
+    };
+    render(
+      <FiringLog
+        firings={[]}
+        mixes={[]}
+        recipes={[]}
+        access={team}
+        editing={{ current: firing('f', content), draft: content }}
+        onEdit={() => {}}
+        forRecipe={null}
+        onForRecipe={() => {}}
+        onSaved={() => {}}
+        onErased={() => {}}
+        phone={false}
+      />
+    );
+    expect(await screen.findByText('added by Ben')).toBeTruthy();
+    expect(screen.getByText('⚠ changed outside the app: its signature does not match')).toBeTruthy();
+  });
+});
+
 describe('photos on a phone', () => {
   it('takes one with the camera, read in the page, and keeps it with the firing', async () => {
     const saved = fakeCore();

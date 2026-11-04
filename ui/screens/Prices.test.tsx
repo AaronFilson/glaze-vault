@@ -53,4 +53,18 @@ describe('price lists in a team', () => {
     expect(saved[0]).toMatchObject({ kind: 'prices', parent: null, collection: 'shared' });
     expect(lists[0].collectionId).toBe('shared');
   });
+
+  it('notes in the audit log the list that was opened', async () => {
+    const notes: unknown[] = [];
+    mockIPC((cmd, args) => {
+      if (cmd === 'note') notes.push((args as { note: unknown }).note);
+      return null;
+    });
+    render(<PriceLists lists={[production]} access={TEAM} names={{}} library={materialLibrary([])} onSaved={() => {}} />);
+    await waitFor(() => expect(notes).toEqual([{ action: 'opened', kind: 'prices', record: 'p-1' }]));
+    // A collection with no list of its own opens nothing.
+    fireEvent.change(screen.getByLabelText('Prices for'), { target: { value: 'shared' } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(notes).toHaveLength(1);
+  });
 });

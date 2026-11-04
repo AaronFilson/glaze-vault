@@ -381,6 +381,36 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_mix_a_limit_set_or_a_price_list_is_noted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let kinds = [Kind::Mix, Kind::Limits, Kind::Prices];
+        let mut records = Vec::new();
+        for kind in kinds {
+            let saved = vault.save(kind, None, &json!({ "name": "Studio" })).unwrap();
+            for _ in 0..2 {
+                vault
+                    .note(Note::Opened {
+                        kind,
+                        record: saved.record_id,
+                    })
+                    .unwrap();
+            }
+            records.push(saved.record_id);
+        }
+        let log = vault.audit_log(None).unwrap();
+        assert!(log.intact);
+        let opened: Vec<_> = log
+            .entries
+            .iter()
+            .rev()
+            .filter(|e| e.action == "opened")
+            .map(|e| (e.kind.unwrap(), e.record.unwrap()))
+            .collect();
+        assert_eq!(opened, kinds.into_iter().zip(records).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn in_a_team_only_admins_read_the_log_and_it_names_who_changed_what() {
         let dir = tempfile::tempdir().unwrap();
         let (mut ana, _) = Vault::create(dir.path(), PASSWORD).unwrap();

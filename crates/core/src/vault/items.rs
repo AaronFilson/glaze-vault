@@ -508,6 +508,22 @@ pub(super) fn unstage_into(conn: &Connection, id: &Uuid) -> Result<()> {
     unstage(conn, id)
 }
 
+/// The hash of a stored attachment's nonce and ciphertext, read from its BLOB a piece at a time.
+pub(super) fn ciphertext_hash(conn: &Connection, id: &Uuid, nonce: &[u8]) -> Result<Vec<u8>> {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(nonce);
+    let mut offset = 0;
+    while let Some((total, piece)) = ciphertext_piece(conn, id, offset)? {
+        hasher.update(&piece);
+        offset += piece.len() as u64;
+        if piece.is_empty() || offset >= total {
+            break;
+        }
+    }
+    Ok(hasher.finalize().to_vec())
+}
+
 /// Up to `CHUNK_BYTES` of an attachment's ciphertext from `offset`, and its whole length, read
 /// from its BLOB without loading the rest; none if there is no such attachment.
 pub(super) fn ciphertext_piece(conn: &Connection, id: &Uuid, offset: u64) -> Result<Option<(u64, Vec<u8>)>> {

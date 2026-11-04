@@ -44,6 +44,7 @@ import { Compare, type Side } from './Compare';
 import { FiringLog, type FiringEditing } from './FiringLog';
 import { firingOf, newFiring, sameFiring, type Firing, type FiringContent } from '../firing';
 import { MixLog, type MixEditing } from './MixLog';
+import { useOpened } from '../useOpened';
 import { mixOf, newMix, sameMix, type Mix, type MixContent } from '../mix';
 import { ConfirmNotice } from './Deleted';
 import { Import } from './Import';
@@ -333,6 +334,7 @@ export function Recipes({
   useOpened('material', material.current?.recordId);
   useOpened('batch', sheet?.recordId);
   useOpened('firing', firing?.current?.recordId);
+  useOpened('mix', mix?.current?.recordId);
 
   const library = useMemo(() => materialLibrary(materials.map((m) => m.content)), [materials]);
   const shownRecipe = recipe.viewing?.content ?? recipe.draft;
@@ -1530,11 +1532,4 @@ function PrintOptions({
       </div>
     </form>
   );
-}
-
-/** Notes in the audit log that a record was opened. A note that fails does not stop the page. */
-function useOpened(kind: Kind, recordId: string | undefined) {
-  useEffect(() => {
-    if (recordId) api.note({ action: 'opened', kind, record: recordId }).catch(() => {});
-  }, [kind, recordId]);
 }
