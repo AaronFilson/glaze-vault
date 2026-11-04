@@ -812,24 +812,23 @@ impl HostStore {
                     return self.again(conn, "attachments", &a.id, &a.signed.signature);
                 }
                 // Sent without its bytes, which came before it in pieces.
-                let whole;
-                let a = if a.ciphertext.is_empty() {
+                // Their hash is read a piece at a time, and they go into the BLOB the same way.
+                let in_pieces = a.ciphertext.is_empty();
+                let hash = if in_pieces {
                     let (_, from) = items::staged_length(conn, &a.id)?;
                     if from != Some(device.id.to_string()) {
                         return Ok(Err(Refusal::BytesMissing));
                     }
-                    let mut joined = a.clone();
-                    joined.ciphertext = items::staged(conn, &a.id)?;
-                    whole = joined;
-                    if store::attachment_hash(&whole.nonce, &whole.ciphertext) != whole.sha256 {
+                    let hash = items::staged_hash(conn, &a.id, &a.nonce)?;
+                    if hash != a.sha256 {
                         items::unstage(conn, &a.id)?;
                         return Ok(Err(Refusal::BytesMissing));
                     }
-                    &whole
+                    hash
                 } else {
-                    a
+                    store::attachment_hash(&a.nonce, &a.ciphertext)
                 };
-                let signed = match items::check_attachment(&trust, &self.vault, a) {
+                let signed = match items::check_attachment(&trust, &self.vault, a, &hash) {
                     Ok(signed) => signed,
                     Err(refusal) => return Ok(Err(refusal)),
                 };
@@ -857,6 +856,9 @@ impl HostStore {
                     return Ok(Err(Refusal::ParentUnknown));
                 }
                 items::store_attachment(conn, a)?;
+                if in_pieces {
+                    items::unstage_into(conn, &a.id)?;
+                }
                 items::unstage(conn, &a.id)?;
                 let seq = items::log(conn, "attachment", &a.id, &a.collection, a.kind, None)?;
                 self.numbered(conn, &a.id)?;
@@ -1061,11 +1063,9 @@ impl HostStore {
         if sent(held, kind, true).is_none() || offset > total as u64 {
             return Ok(None);
         }
-        let bytes: Vec<u8> = self.conn.query_row(
-            "SELECT substr(ciphertext, ?2, ?3) FROM attachments WHERE id = ?1",
-            params![id.to_string(), offset as i64 + 1, CHUNK_BYTES as i64],
-            |row| row.get(0),
-        )?;
+        let Some((_, bytes)) = items::ciphertext_piece(&self.conn, &id, offset)? else {
+            return Ok(None);
+        };
         Ok(Some(Chunk {
             id,
             offset,

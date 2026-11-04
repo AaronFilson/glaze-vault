@@ -15,6 +15,7 @@ import {
 import { ConfirmNotice } from './Deleted';
 import { ForkChoice } from './ForkChoice';
 import { CheckoutBar } from './CheckoutBar';
+import { useOpened } from '../useOpened';
 
 const CHOICE_KEY = 'glaze-vault.limits';
 
@@ -116,6 +117,7 @@ export function LimitSets({
   onDeleted: (recordId: string) => void;
 }) {
   const [editing, setEditing] = useState<{ current: Revision<LimitsContent> | null; draft: LimitsContent } | null>(null);
+  useOpened('limits', editing?.current?.recordId);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState('');
 

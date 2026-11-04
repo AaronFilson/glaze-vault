@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, errorText, type Kind, type Revision } from '../api';
+import { api, errorText, type Kind, type Revision, type Signed } from '../api';
 
 const when = (savedAt: number) =>
   new Date(savedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -17,6 +17,17 @@ export function savedBy(revision: Revision<unknown>, names: Record<string, strin
     if (signed?.as === 'attester') parts.push(`vouched for by ${name(signed.by)}`);
     if (signed?.as === 'mover') parts.push(`moved by ${name(signed.by)}`);
   }
+  return parts.join(' · ');
+}
+
+/** Who added a photo, and what its signature says, as a revision's is said. A photo kept before
+ * attachments were signed says nothing. */
+export function photoSignedBy(signed: Signed | null, names: Record<string, string>, team: boolean): string {
+  if (!signed) return '';
+  if (signed.check === 'bad') return '⚠ changed outside the app: its signature does not match';
+  const parts: string[] = [];
+  if (team) parts.push(`added by ${names[signed.by] ?? 'someone no longer in the vault'}`);
+  if (signed.check === 'unconfirmed') parts.push('signed with a key no admin has certified yet');
   return parts.join(' · ');
 }
 

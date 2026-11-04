@@ -58,6 +58,12 @@ function android() {
       '$1<uses-feature android:name="android.hardware.camera.any" android:required="false" tools:replace="android:required" />$1<application'
     );
   }
+  // Finding hosts by mDNS needs multicast, which many phones drop without a lock the app holds
+  // (docs/adr/0036-photo-pieces-audit-and-phone-discovery.md).
+  const multicast = 'android.permission.CHANGE_WIFI_MULTICAST_STATE';
+  if (!manifest.includes(multicast)) {
+    manifest = manifest.replace(/(\s*)<application\b/, `$1<uses-permission android:name="${multicast}" />$1<application`);
+  }
   fs.writeFileSync(manifestPath, manifest);
 
   // FLAG_SECURE: no recipe in the recent apps picture, and no screenshots.
@@ -80,6 +86,31 @@ function android() {
       if (!activity.includes(`import ${name}\n`)) activity = activity.replace(/^(package [^\n]+\n)/, `$1\nimport ${name}\n`);
     }
     if (!activity.includes('FLAG_SECURE')) throw new Error(`MainActivity.kt is not as expected:\n${activity}`);
+    fs.writeFileSync(activityPath, activity);
+  }
+  // The multicast lock, held while the app is on screen, when it may look for hosts.
+  if (!activity.includes('MulticastLock')) {
+    const lock =
+      '\n  private var multicast: WifiManager.MulticastLock? = null\n\n' +
+      '  override fun onResume() {\n' +
+      '    super.onResume()\n' +
+      '    val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager\n' +
+      '    multicast = wifi.createMulticastLock("glaze-vault-discovery").apply {\n' +
+      '      setReferenceCounted(false)\n' +
+      '      acquire()\n' +
+      '    }\n' +
+      '  }\n\n' +
+      '  override fun onPause() {\n' +
+      '    multicast?.release()\n' +
+      '    multicast = null\n' +
+      '    super.onPause()\n' +
+      '  }\n';
+    const end = activity.lastIndexOf('}');
+    if (end < 0) throw new Error(`MainActivity.kt is not as expected:\n${activity}`);
+    activity = activity.slice(0, end).replace(/\s*$/, '\n') + lock + activity.slice(end);
+    for (const name of ['android.content.Context', 'android.net.wifi.WifiManager']) {
+      if (!activity.includes(`import ${name}\n`)) activity = activity.replace(/^(package [^\n]+\n)/, `$1\nimport ${name}\n`);
+    }
     fs.writeFileSync(activityPath, activity);
   }
 }

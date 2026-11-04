@@ -728,16 +728,12 @@ impl Vault {
         items::stage(&tx, &chunk.id, None, chunk.offset, &chunk.bytes)?;
         let whole = had + chunk.bytes.len() as u64 == chunk.total;
         if whole {
-            let ciphertext = items::staged(&tx, &chunk.id)?;
-            items::unstage(&tx, &chunk.id)?;
-            if store::attachment_hash(&nonce, &ciphertext) != sha256 {
+            if items::staged_hash(&tx, &chunk.id, &nonce)? != sha256 {
+                items::unstage(&tx, &chunk.id)?;
                 tx.commit()?;
                 return Err(Error::BadSignature);
             }
-            tx.execute(
-                "UPDATE attachments SET ciphertext = ?1 WHERE id = ?2",
-                params![ciphertext, chunk.id.to_string()],
-            )?;
+            items::unstage_into(&tx, &chunk.id)?;
         }
         tx.commit()?;
         Ok(whole)
@@ -1647,6 +1643,42 @@ mod tests {
         // Cleo's computer, which has no firings, is sent none of it.
         let cleo = t.computers[2].device().unwrap();
         assert!(t.host.chunk(cleo, photo.id, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_photo_whose_pieces_were_changed_on_the_way_is_not_kept() {
+        let mut t = team();
+        let big: Vec<u8> = (0..(CHUNK_BYTES + 500)).map(|i| (i % 13) as u8).collect();
+        let photo = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/jpeg", &big)
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+        let device = t.computers[0].device().unwrap();
+        let (_, levels) = t.computers[0].sync_state().unwrap();
+        t.computers[0]
+            .apply_welcome(&t.host.hello(device, &levels).unwrap())
+            .unwrap();
+        let (cursors, _) = t.computers[0].sync_state().unwrap();
+        let batch = t.host.pull(device, &cursors, usize::MAX).unwrap();
+        t.computers[0].apply_batch(&batch).unwrap();
+
+        // The host reads the last piece from the middle of its BLOB, and nothing past its end.
+        let total = t.host.chunk(device, photo.id, 0).unwrap().unwrap().total;
+        let past = t.host.chunk(device, photo.id, total).unwrap().unwrap();
+        assert!(past.bytes.is_empty());
+
+        let first = t.host.chunk(device, photo.id, 0).unwrap().unwrap();
+        let mut last = t.host.chunk(device, photo.id, CHUNK_BYTES as u64).unwrap().unwrap();
+        assert_eq!(last.offset + last.bytes.len() as u64, total);
+        last.bytes[0] ^= 1;
+        assert!(!t.computers[0].take_chunk(&first).unwrap());
+        assert!(matches!(t.computers[0].take_chunk(&last), Err(Error::BadSignature)));
+        // It is still missing, from the start, and comes whole when it is sent right.
+        assert_eq!(t.computers[0].missing_bytes().unwrap(), vec![(photo.id, 0)]);
+        last.bytes[0] ^= 1;
+        assert!(!t.computers[0].take_chunk(&first).unwrap());
+        assert!(t.computers[0].take_chunk(&last).unwrap());
+        assert_eq!(*t.computers[0].attachment(photo.id).unwrap().1, big);
     }
 
     #[test]

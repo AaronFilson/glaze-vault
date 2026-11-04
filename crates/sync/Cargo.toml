@@ -28,8 +28,8 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"
 
-# mDNS on desktops only (src/net/discover.rs).
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# mDNS by its own sockets on desktops and Android; iOS asks the system's Bonjour (src/net/discover.rs).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
 mdns-sd = { version = "0.21.6", default-features = false }
 
 [dev-dependencies]
