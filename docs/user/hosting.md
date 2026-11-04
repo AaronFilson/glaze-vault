@@ -99,3 +99,35 @@ as above.
 an administrator's password again), and makes the vault one on this computer alone. Other
 computers keep what they have, but can no longer sync, and anything saved on them that had not
 synced does not come here.
+
+To move the host to another computer instead, tick **The host is moving to another computer**
+first. The service stops, but the host's store stays on this computer, and this vault still
+belongs to the host. Then, here, **Leave this vault…**, and join the host on its new computer with
+a code from an admin, like any other computer. (If the service was removed by hand with
+`hostd uninstall`, **Leave this vault…** works the same way once nothing answers here.)
+
+On a computer the host was moved to, Stop serving always keeps the store: the vault there has only
+its own people's keys, so the host's store is the only whole copy. To serve from yet another
+computer, write it as a file there with `hostd export <file.gvhost>` (as an administrator) and move
+it as below.
+
+## Moving the host to another computer
+
+When the host computer is replaced, or its disk fails, an admin can serve the vault from another
+computer that already syncs with it, from a file of the host: one saved under **Backups of the
+host**, or written on the old host computer, as an administrator, with
+`hostd export <file.gvhost>`, which works while it serves. The file opens only with the
+organization's key.
+
+1. Stop the old host, if it still runs (above, or `hostd uninstall` there). While it answers, the
+   new computer will not take over, so two hosts never serve one vault.
+2. On an admin's computer, Settings, Network, **Move the host here…**, and choose the file.
+3. Other computers find the new host on the network and sync as before, sending again what reached
+   the old host after the file was made.
+
+The file is refused if it was made before a computer was revoked that this computer knows of, as
+the host it made would let that computer sync again. Use a newer file, or **use it anyway**: this
+computer then revokes those computers again on the new host. A file made before this computer
+joined is refused too; move the host from another admin's computer, or make a newer file. If the
+new host does not start, or this computer cannot sync with it, it is removed again, and this
+computer goes on with the old host's address as before.
