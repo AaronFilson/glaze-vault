@@ -160,7 +160,7 @@ extern "C" fn resolved(
 
 extern "C" fn addressed(
     _: ServiceRef,
-    _: u32,
+    flags: u32,
     _: u32,
     error: ErrorType,
     host: *const c_char,
@@ -186,9 +186,19 @@ extern "C" fn addressed(
         }
         _ => return,
     };
-    let list = heard.addresses.entry(host.to_string_lossy().into_owned()).or_default();
-    if !list.contains(&ip) {
-        list.push(ip);
+    heard.address(host.to_string_lossy().into_owned(), ip, flags & FLAGS_ADD != 0);
+}
+
+impl Heard {
+    /// A host's address added, or gone: Bonjour says so of one it heard before that no longer
+    /// answers, which must not be dialled.
+    fn address(&mut self, host: String, ip: IpAddr, added: bool) {
+        let list = self.addresses.entry(host).or_default();
+        if !added {
+            list.retain(|known| *known != ip);
+        } else if !list.contains(&ip) {
+            list.push(ip);
+        }
     }
 }
 
@@ -328,6 +338,17 @@ fn unescape(label: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_address_bonjour_says_is_gone_is_not_kept() {
+        let mut heard = super::Heard::default();
+        let (old, new) = ("10.0.0.4".parse().unwrap(), "10.0.0.9".parse().unwrap());
+        heard.address("kiln.local.".into(), old, true);
+        heard.address("kiln.local.".into(), new, true);
+        heard.address("kiln.local.".into(), new, true);
+        heard.address("kiln.local.".into(), old, false);
+        assert_eq!(heard.addresses["kiln.local."], [new]);
+    }
+
     use super::*;
 
     #[test]

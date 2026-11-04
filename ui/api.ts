@@ -224,6 +224,11 @@ export interface Signed {
   check: SignatureCheck;
 }
 
+/** A photo's signature, with who added it: one moved or vouched for is signed by someone else. */
+export interface PhotoSigned extends Signed {
+  author: string;
+}
+
 export type SignatureCheck = 'good' | 'unconfirmed' | 'bad';
 
 /** What the page tells the audit log, which only it knows (ADR 19). */
@@ -457,7 +462,7 @@ export const api = {
     }),
   attachment: (id: string) => invoke<ArrayBuffer>('get_attachment', { id }),
   /** Who signed an attachment and whether it checks; null for one kept before signing (ADR 19). */
-  attachmentSigned: (id: string) => invoke<Signed | null>('get_attachment_signed', { id }),
+  attachmentSigned: (id: string) => invoke<PhotoSigned | null>('get_attachment_signed', { id }),
   saveMaterial: (parent: string | null, content: MaterialContent, collection: string | null = null) =>
     invoke<MaterialHead>('save_record', { kind: 'material', parent, collection, content }),
   saveRecord: <Content>(kind: Kind, parent: string | null, content: Content, collection: string | null = null) =>

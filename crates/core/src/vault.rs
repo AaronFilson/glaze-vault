@@ -20,7 +20,7 @@ mod signatures;
 mod summaries;
 mod team;
 
-pub use attachments::{Attachment, MAX_ATTACHMENT_BYTES};
+pub use attachments::{Attachment, AttachmentSigned, MAX_ATTACHMENT_BYTES};
 pub use audit::{AuditEntry, AuditLog, Note};
 pub(crate) use events::Body;
 pub use host::HostStore;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, errorText, type Kind, type Revision, type Signed } from '../api';
+import { api, errorText, type Kind, type PhotoSigned, type Revision } from '../api';
 
 const when = (savedAt: number) =>
   new Date(savedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -20,15 +20,25 @@ export function savedBy(revision: Revision<unknown>, names: Record<string, strin
   return parts.join(' · ');
 }
 
-/** Who added a photo, and what its signature says, as a revision's is said. A photo kept before
- * attachments were signed says nothing. */
-export function photoSignedBy(signed: Signed | null, names: Record<string, string>, team: boolean): string {
-  if (!signed) return '';
-  if (signed.check === 'bad') return '⚠ changed outside the app: its signature does not match';
+/** Who added a photo, and what its signature says, as a revision's is said, and whether it is a
+ * warning. A photo kept before attachments were signed says nothing; until the list of people has
+ * come (`names` null), nobody is named. */
+export function photoSignedBy(
+  signed: PhotoSigned | null,
+  names: Record<string, string> | null,
+  team: boolean
+): { text: string; bad: boolean } {
+  if (!signed) return { text: '', bad: false };
+  if (signed.check === 'bad') return { text: '⚠ changed outside the app: its signature does not match', bad: true };
+  const name = (id: string) => names?.[id] ?? 'someone no longer in the vault';
   const parts: string[] = [];
-  if (team) parts.push(`added by ${names[signed.by] ?? 'someone no longer in the vault'}`);
+  if (team && names) {
+    parts.push(`added by ${name(signed.author)}`);
+    if (signed.as === 'attester') parts.push(`vouched for by ${name(signed.by)}`);
+    if (signed.as === 'mover') parts.push(`moved by ${name(signed.by)}`);
+  }
   if (signed.check === 'unconfirmed') parts.push('signed with a key no admin has certified yet');
-  return parts.join(' · ');
+  return { text: parts.join(' · '), bad: false };
 }
 
 /** A record's earlier revisions, to look at one. Loaded when opened. */

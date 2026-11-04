@@ -20,8 +20,8 @@ pub use error::Error;
 pub use keyring::PersonEntry;
 pub use recovery::RecoveryKey;
 pub use vault::{
-    Attachment, AuditEntry, AuditLog, BackupInfo, Capabilities, Collection, Credential, CustomRole, Fork, Grant, Kind,
-    LastBackup, MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS, Note, OWN_BACKUPS_KEPT, OfflinePolicy, OfflineStatus,
-    OwnBackup, Person, Revision, RoleLimit, SetAside, Settings, SignatureCheck, Signed, SignedAs, Vault,
+    Attachment, AttachmentSigned, AuditEntry, AuditLog, BackupInfo, Capabilities, Collection, Credential, CustomRole,
+    Fork, Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, MIN_PASSWORD_CHARS, Note, OWN_BACKUPS_KEPT, OfflinePolicy,
+    OfflineStatus, OwnBackup, Person, Revision, RoleLimit, SetAside, Settings, SignatureCheck, Signed, SignedAs, Vault,
 };
 pub use vault::{BACKUPS as HOST_BACKUPS, ExportCopy, HOST_BACKUP_EXTENSION, HostBackup, HostStore, RESTORE_FILE};

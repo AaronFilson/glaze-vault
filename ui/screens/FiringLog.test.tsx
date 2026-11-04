@@ -201,13 +201,18 @@ describe('glaze fit', () => {
 });
 
 describe('a photo’s signature', () => {
-  it('says who added each photo in a team, and warns of one changed outside the app', async () => {
+  it('says who added each photo in a team, and who moved it, and warns of one changed outside the app', async () => {
+    // The list of people comes late: until then nobody is said to be gone from the vault.
+    let listed: (value: unknown) => void = () => {};
+    const people = new Promise((resolve) => (listed = resolve));
     mockIPC((cmd, args) => {
       const a = (args ?? {}) as Record<string, unknown>;
       if (cmd === 'get_attachment_signed') {
-        return a.id === 'tile' ? { by: 'ben', as: 'author', check: 'good' } : { by: 'ana', as: 'author', check: 'bad' };
+        if (a.id === 'tile') return { author: 'ben', by: 'ben', as: 'author', check: 'good' };
+        if (a.id === 'moved') return { author: 'ben', by: 'ana', as: 'mover', check: 'good' };
+        return { author: 'ana', by: 'ana', as: 'author', check: 'bad' };
       }
-      if (cmd === 'vault_status') return { people: [{ id: 'ben', name: 'Ben' }, { id: 'ana', name: 'Ana' }] };
+      if (cmd === 'vault_status') return people;
       if (cmd === 'get_attachment') throw { code: 'not-fetched', message: 'not yet' };
       return null;
     });
@@ -215,6 +220,7 @@ describe('a photo’s signature', () => {
       ...newFiring(null, new Date(2026, 10, 2)),
       photos: [
         { id: 'tile', mediaType: 'image/jpeg', caption: '' },
+        { id: 'moved', mediaType: 'image/jpeg', caption: '' },
         { id: 'changed', mediaType: 'image/jpeg', caption: '' }
       ]
     };
@@ -238,8 +244,14 @@ describe('a photo’s signature', () => {
         phone={false}
       />
     );
-    expect(await screen.findByText('added by Ben')).toBeTruthy();
-    expect(screen.getByText('⚠ changed outside the app: its signature does not match')).toBeTruthy();
+    const warning = await screen.findByText('⚠ changed outside the app: its signature does not match');
+    expect(warning.className).toBe('warn');
+    expect(screen.queryByText(/no longer in the vault/)).toBeNull();
+    expect(screen.queryByText(/added by/)).toBeNull();
+    listed({ people: [{ id: 'ben', name: 'Ben' }, { id: 'ana', name: 'Ana' }] });
+    expect((await screen.findByText('added by Ben')).className).toBe('hint');
+    expect(screen.getByText('added by Ben · moved by Ana')).toBeTruthy();
+    expect(screen.queryByText(/no longer in the vault/)).toBeNull();
   });
 });
 

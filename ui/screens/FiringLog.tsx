@@ -1,7 +1,7 @@
 // The firing log (docs/adr/0014-firing-log-and-photos.md): every firing of the recipes this person
 // can open, newest first, and one at a time to fill in, with a test bar's readings and photos.
 import { useEffect, useRef, useState } from 'react';
-import { api, errorCode, errorText, onEvent, type Access, type RecipeHead, type Signed, type VaultChanged } from '../api';
+import { api, errorCode, errorText, onEvent, type Access, type RecipeHead, type PhotoSigned, type VaultChanged } from '../api';
 import { photoSignedBy } from './RevisionHistory';
 import { isBody } from '../body';
 import {
@@ -793,8 +793,8 @@ function FiringEditor({
                     Remove
                   </button>
                 </figcaption>
-                {signatures[photo.id] && (
-                  <p className={signatures[photo.id].startsWith('⚠') ? 'warn' : 'hint'}>{signatures[photo.id]}</p>
+                {signatures[photo.id].text && (
+                  <p className={signatures[photo.id].bad ? 'warn' : 'hint'}>{signatures[photo.id].text}</p>
                 )}
               </figure>
             ))}
@@ -953,15 +953,16 @@ function usePhotoUrls(photos: Photo[]): Record<string, string> {
 /** What each photo's signature says, once asked (docs/adr/0019-signatures-and-audit-log.md), with
  * the names the lock screen's list of people gives. A photo whose signature cannot be read says
  * nothing. */
-function usePhotoSignatures(photos: Photo[], team: boolean): Record<string, string> {
-  const [signed, setSigned] = useState<Record<string, Signed | null>>({});
-  const [names, setNames] = useState<Record<string, string>>({});
+function usePhotoSignatures(photos: Photo[], team: boolean): Record<string, { text: string; bad: boolean }> {
+  const [signed, setSigned] = useState<Record<string, PhotoSigned | null>>({});
+  // None until the list of people has come, so nobody is said to be gone from the vault meanwhile.
+  const [names, setNames] = useState<Record<string, string> | null>(null);
   useEffect(() => {
     if (!team) return;
     api
       .status()
       .then((status) => setNames(Object.fromEntries(status.people.map((p) => [p.id, p.name]))))
-      .catch(() => {});
+      .catch(() => setNames({}));
   }, [team]);
   const ids = photos.map((p) => p.id).join();
   useEffect(() => {

@@ -1714,6 +1714,17 @@ mod tests {
             total: ciphertext.len() as u64,
             bytes: ciphertext[offset..(offset + CHUNK_BYTES).min(ciphertext.len())].to_vec(),
         };
+        // Pieces that do not hash right, as when the photo was sealed again under a new key
+        // at the same length, are let go when it is refused, so the right ones can come.
+        let wrong = |offset: usize| {
+            let mut chunk = piece(offset);
+            chunk.bytes[0] ^= 1;
+            chunk
+        };
+        t.host.take_chunk(device, &wrong(0)).unwrap();
+        t.host.take_chunk(device, &wrong(CHUNK_BYTES)).unwrap();
+        let result = t.host.accept(device, stripped.clone()).unwrap();
+        assert_eq!(result.refused, vec![(photo.id, Refusal::BytesMissing)]);
         assert_eq!(t.host.take_chunk(device, &piece(0)).unwrap(), CHUNK_BYTES as u64);
         // Sent again after a break, the host says how far it got.
         assert_eq!(t.host.take_chunk(device, &piece(0)).unwrap(), CHUNK_BYTES as u64);

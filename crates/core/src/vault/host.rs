@@ -76,6 +76,9 @@ pub struct HostStore {
     /// Over the network, the computer holding the directory, if any; directory changes from any
     /// other are refused. None until `guard_directory`: in one process there is nothing to clash.
     directory_holder: Option<Option<Uuid>>,
+    /// Attachments whose staged pieces did not hash right in the push being taken, let go of
+    /// once its savepoint is rolled back.
+    bad_pieces: std::cell::RefCell<Vec<Uuid>>,
 }
 
 /// A computer the host syncs with, from its certificate.
@@ -310,6 +313,7 @@ impl HostStore {
             port: file.port,
             checkouts: Vec::new(),
             directory_holder: None,
+            bad_pieces: Default::default(),
         })
     }
 
@@ -681,6 +685,7 @@ impl HostStore {
             };
             let (group, after) = rest.split_at(run);
             rest = after;
+            self.bad_pieces.borrow_mut().clear();
             self.conn.execute_batch("SAVEPOINT items")?;
             let mut accepted = Vec::new();
             let mut refused = None;
@@ -704,6 +709,9 @@ impl HostStore {
                 }
                 Some((id, refusal)) => {
                     self.conn.execute_batch("ROLLBACK TO items; RELEASE items")?;
+                    for bad in self.bad_pieces.take() {
+                        items::unstage(&self.conn, &bad)?;
+                    }
                     for item in group {
                         // The rest wait with it if it is only to be sent again.
                         let why = if item.id() == id || refusal == Refusal::DirectoryNotHeld {
@@ -821,7 +829,9 @@ impl HostStore {
                     }
                     let hash = items::staged_hash(conn, &a.id, &a.nonce)?;
                     if hash != a.sha256 {
-                        items::unstage(conn, &a.id)?;
+                        // Let go of outside the savepoint, which the refusal rolls back, as the
+                        // replica does: kept, they would be skipped as had and never sent right.
+                        self.bad_pieces.borrow_mut().push(a.id);
                         return Ok(Err(Refusal::BytesMissing));
                     }
                     hash

@@ -8,8 +8,8 @@ mod smoke;
 mod syncing;
 
 use glaze_vault_core::{
-    Attachment, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error, Grant, Kind,
-    LastBackup, MAX_ATTACHMENT_BYTES, Note, OwnBackup, Person, Revision, Role, SetAside, Settings, Signed, Vault,
+    Attachment, AttachmentSigned, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error,
+    Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, Note, OwnBackup, Person, Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -466,9 +466,9 @@ fn get_attachment(state: State<AppState>, id: Uuid) -> CommandResult<tauri::ipc:
         .map(|(_, mut bytes)| tauri::ipc::Response::new(std::mem::take(&mut *bytes)))
 }
 
-/// Who signed an attachment and whether it checks (ADR 19); none for one kept before signing.
+/// Who added an attachment, who signed it and whether it checks (ADR 19); none for one kept before signing.
 #[tauri::command(async)]
-fn get_attachment_signed(state: State<AppState>, id: Uuid) -> CommandResult<Option<Signed>> {
+fn get_attachment_signed(state: State<AppState>, id: Uuid) -> CommandResult<Option<AttachmentSigned>> {
     with_vault(&state, |vault| vault.attachment_signed(id))
 }
 

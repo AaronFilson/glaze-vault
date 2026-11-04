@@ -28,28 +28,41 @@ Without discovery a phone also could not find its host again when the host's add
   rusqlite's incremental BLOB I/O (`blob_open`, the `blob` feature). The host does the same for a
   photo a computer sent in pieces: `check_attachment` takes the hash of the bytes rather than the
   bytes. A piece to send is read with `blob_open` too, from its offset only. No schema change.
+  Pieces whose hash is wrong are let go, so the right ones can be sent: on the host, after the
+  push's savepoint is rolled back, as a refusal rolls back everything done inside it. Kept, they
+  would be skipped as already had (a photo sealed again under a newer key keeps its length), and
+  the photo would never arrive.
 - **Opening a mix, a limit set or a price list is noted**, as opening the other records is: once a
   sign-in, by the page (`useOpened`, now in `ui/useOpened.ts`). A price list counts as opened when
   Settings shows it, not when a recipe's cost uses it. The audit log screen and its CSV already
   name every kind.
 - **A photo shows its signature** under it in the firing log, worded as a revision's history words
-  one: in a team, who added it; a key no admin has certified yet; or a warning when it does not
-  check. `Vault::attachment_signed` checks the signature over what is known of the attachment and
-  its hash, and, once its bytes are here, that they have that hash, read from the BLOB a piece at
-  a time. A photo kept before attachments were signed says nothing.
+  one: in a team, who added it, and who moved it or vouched for it when they signed it instead
+  (`attachment_signed` returns the author with the signature); a key no admin has certified yet;
+  or a warning when it does not check. Nobody is named until the list of people has come.
+  `Vault::attachment_signed` checks the signature over what is known of the attachment and its
+  hash, and, once its bytes are here, that they have that hash, read through one BLOB handle front
+  to back (a handle opened again for each piece walks the BLOB's pages from the start each time:
+  1.6 s for a 25 MiB photo in a debug build, against 0.4 s). A photo kept before attachments were
+  signed says nothing.
 - **Phones find hosts.** Android browses with `mdns-sd`, as desktops do, now built for Android.
   The app holds a Wi-Fi multicast lock while it is on screen (`MainActivity.onResume`, let go in
-  `onPause`), with `CHANGE_WIFI_MULTICAST_STATE`; `crates/app/mobile/patch.cjs` adds both.
+  `onPause`), with `CHANGE_WIFI_MULTICAST_STATE`; `crates/app/mobile/patch.cjs` adds both. A
+  device without Wi-Fi has no `WifiManager` and goes without the lock, and the manifest says
+  `android.hardware.wifi` is not required, so such devices can install the app.
   `NEARBY_WIFI_DEVICES` is not needed: it is for Wi-Fi Direct and Aware, not multicast. iOS asks
   the system's Bonjour through `dns_sd.h` (`crates/sync/src/net/dnssd.rs`): browse, resolve and
-  look up addresses, polled until the wait is over. That needs only the
+  look up addresses, polled until the wait is over; an address Bonjour says is gone is dropped.
+  That needs only the
   `NSLocalNetworkUsageDescription` and `NSBonjourServices` (`_glazevault._tcp`) that ADR 29 put
   in `Info.plist`, not the multicast entitlement. Only desktops advertise.
 - **Discovery only fills in the address.** Joining a host found this way still takes the pairing
   code, which proves the host by SPAKE2 (ADR 21), and the fingerprint check. The QR code stays,
   and is still the only way that pins the host's key before pairing. Once joined, the host's key
   is pinned, so a host found again at a new address by its vault tag is used only if it has that
-  key. The join screen on a phone says that a found host still needs the code.
+  key: every address advertising the tag is tried in turn, and only one a sync has worked with is
+  kept as the host's address. Anyone can advertise the tag; if no address works, the one the
+  computer had stays. The join screen on a phone says that a found host still needs the code.
 
 ## Consequences
 
