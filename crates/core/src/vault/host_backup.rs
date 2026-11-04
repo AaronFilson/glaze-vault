@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::host::{BACKUP_PREFIX, HOST_FILE, HOST_KEY, HostStore, SAVED_SUFFIX};
+use super::host::{BACKUP_PREFIX, HOST_FILE, HOST_KEY, HostStore, SAVED_SUFFIX, write_secret};
 
 /// The folder in the host's own where hostd keeps its backups.
 pub const BACKUPS: &str = "backups";
@@ -200,7 +200,7 @@ impl HostStore {
         let copy = out.with_extension("db.tmp");
         let read = (|| {
             fs::copy(self.dir().join(DATABASE_FILE), &copy)?;
-            let secret = Zeroizing::new(fs::read(self.dir().join(HOST_KEY))?);
+            let secret = super::host_key::read(self.dir())?;
             let secret: crypto::Key = Zeroizing::new(
                 secret
                     .as_slice()
@@ -326,6 +326,51 @@ impl Vault {
             return Err(Error::NotABackup);
         }
         Ok(header.created_at)
+    }
+
+    /// Makes the host's store in `staging` from a backup of this vault's host, opened with the
+    /// organization's key, for an admin moving the host to this computer
+    /// (docs/adr/0037-moving-the-host.md). The host keeps its key, so every computer's pin and
+    /// the certificate for it hold; the store gets a new generation, so each computer sends again
+    /// what reached the old host after the file was made. On a computer that syncs, the file must
+    /// be of the host it pinned.
+    pub fn unpack_host_backup(&mut self, file: &Path, staging: &Path) -> Result<HostStore> {
+        let (header, mut database) = read_header(file)?;
+        if header.vault_id != self.keyring.vault_id {
+            return Err(Error::NotABackup);
+        }
+        let secret = crypto::open_key(self.admin()?, &header.host_key, &host_key_info(&header.vault_id))
+            .ok_or(Error::NotABackup)?;
+        if staging.join(HOST_FILE).exists() || staging.join(DATABASE_FILE).exists() {
+            return Err(Error::VaultExists);
+        }
+        fs::create_dir_all(staging)?;
+        let unpacked = (|| {
+            write_secret(&staging.join(HOST_KEY), secret.as_slice())?;
+            fs::write(staging.join(HOST_FILE), &header.host_file)?;
+            copy_checked(
+                &mut database,
+                &staging.join(DATABASE_FILE),
+                header.database_bytes,
+                &header.sha256,
+            )?;
+            let host = HostStore::open(staging)?;
+            if self.is_replica() && self.host_key()? != host.identity() {
+                return Err(Error::NotABackup);
+            }
+            host.new_generation()?;
+            Ok(host)
+        })();
+        let host = match unpacked {
+            Ok(host) => host,
+            Err(e) => {
+                let _ = fs::remove_dir_all(staging);
+                return Err(e);
+            }
+        };
+        // A host from before ADR 34 has its key certified now; it reaches the host at the next sync.
+        self.certify_host(&host.identity())?;
+        Ok(host)
     }
 }
 

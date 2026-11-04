@@ -1257,6 +1257,7 @@ pub fn run() {
             network::restore_host_backup,
             network::save_host_backup,
             network::restore_host_from_file,
+            network::move_host_here,
             #[cfg(debug_assertions)]
             dev_screen,
             #[cfg(debug_assertions)]

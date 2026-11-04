@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The MSI's part of the host service (docs/adr/0038-hardening-hostd.md), as hooks.nsh is the NSIS
+  setup's: a running program cannot be replaced on Windows, so an install or update stops the
+  host service, if this computer has one, before any file goes, and starts it again after.
+  Removing the app removes the service; an upgrade, which removes the old version first, does not.
+  The host's store stays in ProgramData. On a computer that does not serve, nothing happens.
+
+  Custom actions rather than ServiceControl: the service is made by hostd, not by the MSI, so
+  ServiceControl's start fails an install where there is none, and its stop comes after
+  RemoveExistingProducts, which already needs hostd.exe free. Tauri's MSI removes the old version
+  just after InstallInitialize, so the stop goes between the two. Plain commands run from the
+  system folder, so no WiX extension is needed. Linked by the component, through componentRefs in
+  tauri.sidecar.conf.json.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="TARGETDIR">
+      <Component Id="HostServiceControl" Guid="6E0A2F4B-9C1D-4F7B-8E2A-3B5C7D9E1F20">
+        <RegistryValue Root="HKLM" Key="Software\Glaze Vault" Name="HostServiceControl" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Stop-Service waits until the service has stopped and let go of hostd.exe. -->
+    <CustomAction Id="StopHostService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
+      ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;Stop-Service -Name GlazeVaultHost -ErrorAction SilentlyContinue&quot;" />
+    <CustomAction Id="RemoveHostService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
+      ExeCommand="&quot;[System64Folder]sc.exe&quot; delete GlazeVaultHost" />
+    <CustomAction Id="StartHostService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
+      ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;Start-Service -Name GlazeVaultHost -ErrorAction SilentlyContinue&quot;" />
+
+    <InstallExecuteSequence>
+      <Custom Action="StopHostService" Before="RemoveExistingProducts" />
+      <Custom Action="RemoveHostService" After="StopHostService">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+      <Custom Action="StartHostService" Before="InstallFinalize">NOT REMOVE="ALL"</Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>

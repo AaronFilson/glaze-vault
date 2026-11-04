@@ -90,7 +90,18 @@ export function Network({
           />
         )
       ) : (
-        <LeaveVault onLeft={onLeft} />
+        <>
+          {admin && status.canHost && (
+            <MoveHostHere
+              status={status}
+              onMoved={() => {
+                void load();
+                onChanged();
+              }}
+            />
+          )}
+          <LeaveVault onLeft={onLeft} />
+        </>
       )}
     </>
   );
@@ -785,6 +796,66 @@ function StopHosting({ onStopped }: { onStopped: () => void }) {
           <div className="row">
             <button type="button" disabled={busy} onClick={stop}>
               {anyway ? 'Stop anyway' : 'Stop serving'}
+            </button>
+            <button type="button" onClick={() => setAsking(false)}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {error && <p role="alert" className="error">{error}</p>}
+    </section>
+  );
+}
+
+/** Serves the vault from this computer instead of the old host, from the file the old host or an
+ * admin saved (docs/adr/0037-moving-the-host.md). The old host must have stopped. */
+function MoveHostHere({ status, onMoved }: { status: NetworkStatus; onMoved: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const [port, setPort] = useState(String(status.defaultPort));
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const move = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      if ((await api.moveHostHere(Number(port) || null, name)) !== null) onMoved();
+    } catch (e) {
+      setError(errorText(e));
+      onMoved();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section aria-label="Move the host here">
+      <h3>Move the host here</h3>
+      {!asking ? (
+        <div className="row">
+          <button type="button" onClick={() => setAsking(true)}>
+            Move the host here…
+          </button>
+        </div>
+      ) : (
+        <>
+          <p>
+            Serve the vault from this computer instead, from the host's file: one saved under Backups of the host, or
+            written on the old host computer with <code>hostd export</code>. It opens only with the organization's key.
+            Stop the old host first; other computers then find this one and sync as before.
+          </p>
+          <label htmlFor="move-host-name">Name other computers see</label>
+          <input
+            id="move-host-name"
+            value={name}
+            placeholder="Glaze Vault host"
+            onChange={(e) => setName(e.target.value)}
+          />
+          <label htmlFor="move-host-port">Port</label>
+          <input id="move-host-port" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value)} />
+          <div className="row">
+            <button type="button" disabled={busy} onClick={() => void move()}>
+              {busy ? 'Moving…' : 'Choose the file and serve here'}
             </button>
             <button type="button" onClick={() => setAsking(false)}>
               Cancel

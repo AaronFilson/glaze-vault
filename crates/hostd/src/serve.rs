@@ -41,6 +41,10 @@ pub struct Options {
 
 pub async fn serve(options: Options, shutdown: impl Future<Output = ()>) -> Result<(), String> {
     restore_asked(&options.dir)?;
+    // A key from before it was kept under DPAPI moves there now (ADR 38); nothing elsewhere.
+    if HostStore::protect_key(&options.dir).map_err(|e| format!("protecting the host key: {e}"))? {
+        log::info!("the host key is kept under DPAPI now");
+    }
     let host = HostStore::open(&options.dir).map_err(|e| format!("the host's store does not open: {e}"))?;
     let port = options.port.or(host.port()).unwrap_or(DEFAULT_PORT);
     let organization_key = host.organization_key().map_err(|e| e.to_string())?;

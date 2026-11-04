@@ -26,6 +26,10 @@ uuid = { version = "1.28.0", features = ["v4", "serde"] }
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 zeroize = "1.9.1"
 
+# DPAPI for the host's key on Windows (vault/host_key.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography"] }
+
 [features]
 # Argon2id at its cheapest, for the tests of crates that build on this one (crates/sync). Never in
 # a release: CI checks.

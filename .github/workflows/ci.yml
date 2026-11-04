@@ -363,6 +363,12 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y xvfb libfuse2
 
+      # On Windows the self-test also installs the MSI again while hostd serves a team's store
+      # the dev client makes (docs/adr/0038-hardening-hostd.md).
+      - name: Build the dev client for the MSI update test
+        if: runner.os == 'Windows'
+        run: cargo build --locked -p glaze-vault-hostd --example dev-client
+
       - name: Install and open each installer
         shell: bash
         run: node .github/smoke-installer.cjs

@@ -526,6 +526,9 @@ export const api = {
   /** Null if the person cancelled; otherwise when the backup was made. */
   saveHostBackup: (suggestedName: string) => invoke<number | null>('save_host_backup', { suggestedName }),
   restoreHostFromFile: () => invoke<number | null>('restore_host_from_file'),
+  /** Null if the person cancelled (docs/adr/0037-moving-the-host.md). */
+  moveHostHere: (port: number | null, name: string) =>
+    invoke<SyncReport | null>('move_host_here', { port, name }),
   auditLog: (limit: number | null) => invoke<AuditLog>('audit_log', { limit }),
   /** Removes every revision of a deleted record; returns how many there were. */
   eraseRecord: (kind: Kind, recordId: string) => invoke<number>('erase_record', { kind, recordId }),

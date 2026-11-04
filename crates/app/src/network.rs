@@ -246,24 +246,43 @@ pub fn start_hosting(
     let host: HostStore = vault.convert_to_host(&staging, &format!("127.0.0.1:{port}"))?;
     // Closed, so its database is whole in one file before it is copied.
     drop(host);
+    if let Err(e) = serve_staging(&network, &hostd, &staging, port, &name, vault) {
+        vault.stop_syncing()?;
+        return Err(CommandError::new("host-failed", e));
+    }
+    first_sync(vault)
+}
+
+/// Has the system serve the host's store in `staging` as a service (or, in development, a child),
+/// and removes the staging copy.
+fn serve_staging(
+    network: &Network,
+    hostd: &Path,
+    staging: &Path,
+    port: u16,
+    name: &str,
+    vault: &mut Vault,
+) -> Result<(), String> {
     let served = if no_service() {
-        serve_as_child(&network, &hostd, &staging, port, vault)
+        serve_as_child(network, hostd, staging, port, vault)
     } else {
         let port_text = port.to_string();
         let from = staging.to_string_lossy().into_owned();
         let installed = elevated(
-            &hostd,
-            &["install", "--from", &from, "--port", &port_text, "--name", &name],
+            hostd,
+            &["install", "--from", &from, "--port", &port_text, "--name", name],
         );
-        let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_dir_all(staging);
         installed
     };
-    if let Err(e) = served {
-        let _ = fs::remove_dir_all(&staging);
-        vault.stop_syncing()?;
-        return Err(CommandError::new("host-failed", e));
+    if served.is_err() {
+        let _ = fs::remove_dir_all(staging);
     }
-    // The service takes a moment to start listening.
+    served
+}
+
+/// The first sync with a host just started here; the service takes a moment to start listening.
+fn first_sync(vault: &mut Vault) -> CommandResult<SyncReport> {
     let mut last = None;
     for _ in 0..20 {
         match sync(vault) {
@@ -273,6 +292,61 @@ pub fn start_hosting(
         std::thread::sleep(Duration::from_millis(500));
     }
     Err(last.expect("tried"))
+}
+
+/// Moves the vault's host to this computer (docs/adr/0037-moving-the-host.md): asks for the
+/// `.gvhost` file the old host or an admin's computer saved, opens it with the organization's key,
+/// and serves it here, on `port`, advertised as `name`, as `start_hosting` does. This computer must
+/// sync with that host already, and the old host must have stopped: while it still answers, this
+/// refuses, so two hosts never serve one vault. None if the person cancelled.
+#[tauri::command(async)]
+pub fn move_host_here(
+    window: WebviewWindow,
+    state: State<AppState>,
+    network: State<Network>,
+    port: Option<u16>,
+    name: String,
+) -> CommandResult<Option<SyncReport>> {
+    let hostd = hostd()
+        .ok_or_else(|| CommandError::new("no-hostd", "This copy of Glaze Vault cannot serve: hostd is missing."))?;
+    let port = port.unwrap_or(DEFAULT_PORT);
+    let name = match name.trim() {
+        "" => "Glaze Vault host".to_owned(),
+        name => name.to_owned(),
+    };
+    let Some(path) = crate::open_dialog(
+        &window,
+        "Choose the host's file",
+        "Glaze Vault host backup",
+        &[HOST_BACKUP_EXTENSION],
+    )?
+    else {
+        return Ok(None);
+    };
+    let staging = state.dir.with_file_name("host-staging");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(crate::file_error)?;
+    }
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let old_address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    if old_address.starts_with("127.0.0.1:") {
+        return Err(CommandError::new("host-here", "This computer is the host already."));
+    }
+    if sync(vault).is_ok() {
+        return Err(CommandError::new(
+            "old-host-serving",
+            "The old host still serves. Stop it there first (Stop serving, or hostd uninstall), then move it here.",
+        ));
+    }
+    let host = vault.unpack_host_backup(&path, &staging)?;
+    drop(host);
+    vault.set_host_address(&format!("127.0.0.1:{port}"))?;
+    if let Err(e) = serve_staging(&network, &hostd, &staging, port, &name, vault) {
+        vault.set_host_address(&old_address)?;
+        return Err(CommandError::new("host-failed", e));
+    }
+    first_sync(vault).map(Some)
 }
 
 /// In development: hostd run in the foreground as a child, serving the staging folder itself.

@@ -1,5 +1,6 @@
 //! Linux: a systemd unit with a user of its own made at each start (DynamicUser), its store in
-//! the unit's state folder. Hosting needs the .deb or .rpm: an AppImage has no fixed path.
+//! the unit's state folder, and the rest of the system closed to it as far as systemd can
+//! (docs/adr/0038-hardening-hostd.md). Hosting needs the .deb or .rpm: an AppImage has no fixed path.
 
 use super::{path_text, tool, try_tool};
 use std::fs;
@@ -49,10 +50,28 @@ StateDirectory=glaze-vault
 StateDirectoryMode=0700
 Restart=always
 RestartSec=2
+UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
 
 [Install]
 WantedBy=multi-user.target

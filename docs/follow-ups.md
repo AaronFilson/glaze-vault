@@ -38,17 +38,18 @@ Work decided on but not done yet, with the reason it waits.
   and photos in pieces ([ADR 23](adr/0023-client-mode.md)); and offline limits, revoking computers
   and the host's backups ([ADR 24](adr/0024-offline-limits-and-revocation.md)). Phase 2 is built.
 - Left after stage 8 ([ADR 25](adr/0025-host-backups-from-the-app.md) built the rest): the LAN
-  update mirror (ADR 5, after stage 8 in the plan), which needs signed updates first; putting a
-  `.gvhost` file on a new host computer, opened with the organization's key; making someone an
+  update mirror (ADR 5, after stage 8 in the plan), which needs signed updates first; making someone an
   admin or taking it away from a computer without their key file entry (from the host computer
   for now); joining photo pieces with rusqlite's incremental BLOB writes rather than in memory.
 - From the review of 2026-10-29, the rest fixed since: changes to people, roles and collections
   (`network::with_host` in the app) still hold the vault while they wait on the host, since they
   hold the directory there and sync the change at once; other network commands no longer do.
 - Left from the transport and host mode (the host key is certified since
-  [ADR 34](adr/0034-certified-host-keys.md)): hostd under a user of its own on macOS
-  (`_glazevault`) and `host.key` under DPAPI on Windows; MSI updates on a computer that serves (only the NSIS installer stops the service); trying the
-  Windows service and updates on a real install; `SMAppService` once macOS 12 support is dropped.
+  [ADR 34](adr/0034-certified-host-keys.md), and hostd hardened and MSI updates handled since
+  [ADR 38](adr/0038-hardening-hostd.md)): trying the Windows service and updates on a real
+  install, and an MSI upgrade from an older version; `SMAppService` once macOS 12 support is
+  dropped; a new host key when a host moves ([ADR 37](adr/0037-moving-the-host.md) carries the
+  old one), which needs computers to take a new certified pin and the old key retired.
 - Left from the sync core: the host keeping and signing the audit log (the computers' logs stay
   on them for now); a new organization recovery sheet or key reaching every computer's key file.
 - The audit log notes opening recipes, materials, batch sheets and firings; mixes, limit sets and
