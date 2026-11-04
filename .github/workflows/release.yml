@@ -12,14 +12,12 @@ permissions:
 
 jobs:
   check-version:
-    name: Check the version and updater key
+    name: Check the version and updater public key
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: The tag, package.json, Cargo.toml and the updater key agree
+      - name: The tag, package.json, Cargo.toml and the updater public key agree
         shell: bash
-        env:
-          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && 'yes' || '' }}
         run: |
           tag="${GITHUB_REF_NAME#v}"
           npm_version=$(node -p "require('./package.json').version")
@@ -29,7 +27,6 @@ jobs:
           [ "$tag" = "$npm_version" ] || { echo "::error::package.json is $npm_version, not $tag"; exit 1; }
           [ "$tag" = "$cargo_version" ] || { echo "::error::Cargo.toml is $cargo_version, not $tag"; exit 1; }
           [ -n "$pubkey" ] || { echo "::error::No updater public key in crates/app/tauri.conf.json (docs/releasing.md)"; exit 1; }
-          [ -n "$HAS_UPDATER_KEY" ] || { echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is not set (docs/releasing.md)"; exit 1; }
 
   release:
     name: Release (${{ matrix.name }})
@@ -51,12 +48,22 @@ jobs:
             args: ''
             targets: ''
     runs-on: ${{ matrix.os }}
+    # The signing secrets are environment secrets of `release`, which only runs for v* tags and
+    # waits for Aaron's approval (docs/releasing.md, "Where the keys live"). Branches and pull
+    # requests cannot read them.
+    environment: release
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       # Secrets cannot be tested in `if:`, so whether Windows signing is set up is kept here.
       AZURE_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' && 'yes' || '' }}
     steps:
+      - name: The updater's private key is set
+        shell: bash
+        run: |
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::The release environment has no TAURI_SIGNING_PRIVATE_KEY secret (docs/releasing.md)"; exit 1; }
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ] || { echo "::error::The release environment has no TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret (docs/releasing.md)"; exit 1; }
+
       - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v5
