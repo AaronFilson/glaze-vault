@@ -73,7 +73,7 @@ fn on_network<T: Send, F: Future<Output = T>>(work: impl FnOnce() -> F + Send) -
 
 /// Where hostd is: beside the app, as the installer puts its sidecar, or GLAZE_VAULT_HOSTD.
 #[cfg(desktop)]
-fn hostd() -> Option<PathBuf> {
+pub(crate) fn hostd() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("GLAZE_VAULT_HOSTD") {
         return Some(PathBuf::from(path));
     }
@@ -85,7 +85,7 @@ fn hostd() -> Option<PathBuf> {
 
 /// Phones and tablets never serve (docs/plans/phase-3-mobile.md).
 #[cfg(mobile)]
-fn hostd() -> Option<PathBuf> {
+pub(crate) fn hostd() -> Option<PathBuf> {
     None
 }
 

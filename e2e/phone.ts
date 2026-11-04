@@ -88,7 +88,11 @@ export class Phone extends App {
       // that shell to hand to run-as's. The move is a call of its own: after `exec-in` ends with
       // the script's end, the rest of its line is not run.
       must('adb', ['exec-in', `run-as ${ID} sh -c 'cat > ${tmp}'`], script);
-      must('adb', ['shell', `run-as ${ID} mv ${tmp} ${file}`]);
+      // exec-in can return before the phone has written the whole file, so wait until it is all
+      // there, then move it into place.
+      const size = Buffer.byteLength(script);
+      const wait = `for i in $(seq 50); do [ "$(wc -c < ${tmp} 2>/dev/null)" -ge ${size} ] && break; sleep 0.1; done`;
+      must('adb', ['shell', `run-as ${ID} sh -c '${wait}; mv ${tmp} ${file}'`]);
     } else {
       must('sh', ['-c', 'cat > "$0" && mv "$0" "$1"', tmp, file], script);
     }
@@ -213,8 +217,9 @@ export const phoneScenarios: PhoneScenario[] = [
         `type "The vault's host" ${quote(phone.hostAddress)}`,
         `type "Pairing code" ${quote(code)}`,
         'type "This device\'s name, for the admin to see" "Ben\'s phone"',
-        'click "Join"',
-        'expect "Waiting for the admin to approve this computer" 30000'
+        // The dev client approves at once, so the phone may be past "Waiting for the admin" before
+        // the screen is read; the next script waits for it to have joined.
+        'click "Join"'
       );
       await pairing.approved;
       const sheet = await phone.run(
