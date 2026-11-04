@@ -47,7 +47,7 @@ struct HostFile {
 
 /// The host's key from `key_dir`, and the host file and database from `dir`, opened.
 fn open_files(key_dir: &Path, dir: &Path) -> Result<(KeyPair, HostFile, Connection)> {
-    let secret = Zeroizing::new(fs::read(key_dir.join(HOST_KEY))?);
+    let secret = super::host_key::read(key_dir)?;
     let host = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the host key is not valid".into()))?;
     let file: HostFile = serde_json::from_slice(&fs::read(dir.join(HOST_FILE))?)?;
     let database_key = crypto::open_key(&host, &file.database_key, &host_info(&file.vault_id))
@@ -208,7 +208,7 @@ impl Vault {
 }
 
 /// Keeps a secret where only this user can read it.
-fn write_secret(path: &Path, secret: &[u8]) -> Result<()> {
+pub(super) fn write_secret(path: &Path, secret: &[u8]) -> Result<()> {
     crate::files::write_atomically(path, secret)?;
     #[cfg(unix)]
     {
@@ -1360,8 +1360,12 @@ impl HostStore {
         }
         fs::rename(staged(DATABASE_FILE), dir.join(DATABASE_FILE))?;
         fs::rename(staged(HOST_FILE), dir.join(HOST_FILE))?;
-        let host = HostStore::open(dir)?;
-        host.conn.execute(
+        HostStore::open(dir)?.new_generation()
+    }
+
+    /// Gives the store a new generation, so each computer sends again what it lacks.
+    pub(super) fn new_generation(&self) -> Result<()> {
+        self.conn.execute(
             "INSERT INTO meta (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = excluded.value",
             params![GENERATION, Uuid::new_v4().to_string()],
         )?;

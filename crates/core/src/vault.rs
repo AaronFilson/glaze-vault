@@ -8,6 +8,7 @@ mod audit;
 mod events;
 mod host;
 mod host_backup;
+mod host_key;
 mod hosting;
 mod items;
 mod moving;

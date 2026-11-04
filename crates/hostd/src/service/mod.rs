@@ -38,6 +38,7 @@ pub fn install(from: &Path, port: u16, name: &str) -> Result<(), String> {
         return Err(format!("{} exists already", data.display()));
     }
     copy_private(from, &data).map_err(|e| format!("copying the store: {e}"))?;
+    glaze_vault_core::HostStore::protect_key(&data).map_err(|e| format!("protecting the host key: {e}"))?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     os::install(&exe, &data, port, name)
 }
@@ -57,6 +58,41 @@ pub fn uninstall(keep_data: bool) -> Result<(), String> {
 /// Where the installed service keeps the host's store.
 pub fn data_dir() -> PathBuf {
     os::data_dir()
+}
+
+/// Gives what an administrator wrote in the store, such as a restore, to the service's user.
+/// Everything under the folder goes to whoever owns the folder itself.
+pub fn own(dir: &Path) -> Result<(), String> {
+    if dir == os::data_dir() && os::installed() {
+        own_as_folder(dir).map_err(|e| format!("giving {} to the service: {e}", dir.display()))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn own_as_folder(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let folder = fs::metadata(dir)?;
+    chown_all(dir, folder.uid(), folder.gid())
+}
+
+/// Gives a folder and everything in it to `uid` and `gid`, not following links.
+#[cfg(unix)]
+fn chown_all(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
+    std::os::unix::fs::lchown(path, Some(uid), Some(gid))?;
+    if fs::symlink_metadata(path)?.is_dir() {
+        for entry in fs::read_dir(path)? {
+            chown_all(&entry?.path(), uid, gid)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn own_as_folder(_dir: &Path) -> std::io::Result<()> {
+    // The folder's ACL is inherited by what is written in it.
+    Ok(())
 }
 
 /// Whether the service is installed and running, to restart itself for a restore.
