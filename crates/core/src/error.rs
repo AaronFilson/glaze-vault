@@ -84,6 +84,14 @@ pub enum Error {
     OfflineTooLong,
     #[error("That extension code is not for this computer, or was typed wrongly, or has run out.")]
     WrongExtensionCode,
+    #[error(
+        "That host file was made before a computer was revoked, so the host it makes would let that computer sync again. Use a newer file, or use this one anyway: this computer revokes again the computers it knows were revoked."
+    )]
+    HostBackupStale,
+    #[error(
+        "This computer is not in that host file, so it could not sync with the host it makes: the file was made before this computer joined, or after it was revoked. Use a newer file, or move the host from another admin's computer."
+    )]
+    NotInHostBackup,
     #[error("The vault's files do not match each other: {0}")]
     Corrupt(String),
     #[error("The vault could not be read or written: {0}")]
@@ -136,6 +144,8 @@ impl Error {
             Error::NeedsHost => "needs-host",
             Error::OfflineTooLong => "offline-too-long",
             Error::WrongExtensionCode => "wrong-extension-code",
+            Error::HostBackupStale => "host-backup-stale",
+            Error::NotInHostBackup => "not-in-host-backup",
             Error::Corrupt(_) => "corrupt",
             Error::Storage(_) => "storage",
             Error::Io(_) => "io",
