@@ -1,8 +1,8 @@
 // The installers' self-test (docs/adr/0035-installer-smoke-test.md), run by ci.yml after the
 // installers are built: installs each one as a person would, starts the installed app with
 // GLAZE_VAULT_SMOKE, and fails unless it reports "ok" (crates/app/src/smoke.rs). On Windows it
-// also installs the MSI again over a copy whose hostd serves as a service, as an update would,
-// and checks it needs no restart and the service serves after (docs/adr/0038-hardening-hostd.md).
+// also updates the MSI, to one a version later (ci.yml builds it in target/msi-later), over a
+// copy whose hostd serves as a service, and checks it needs no restart and the service serves after (docs/adr/0038-hardening-hostd.md).
 //
 //   node .github/smoke-installer.cjs
 const { spawnSync } = require('node:child_process');
@@ -79,7 +79,7 @@ if (process.platform === 'darwin') {
   let msiBinary;
   attempt('Windows installer (MSI)', () => {
     const log = path.join(work, 'msi.log');
-    sh('msiexec', ['/i', path.resolve(one(/\.msi$/)), '/qn', '/norestart', '/l*v', log]);
+    msiexec(path.resolve(one(/\.msi$/)), log);
     const places = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA].filter(Boolean);
     const binary = places.flatMap((place) => find(path.join(place, 'Glaze Vault'), /^glaze-vault\.exe$/))[0];
     if (!binary) {
@@ -92,9 +92,12 @@ if (process.platform === 'darwin') {
     msiBinary = binary;
     check('Windows installer (MSI)', binary);
   });
-  attempt('Windows installer (MSI) again while hostd serves', () => {
+  attempt('Windows installer (MSI) updated while hostd serves', () => {
     if (!msiBinary) throw new Error('the MSI did not install');
-    msiUpdateWhileServing(path.resolve(one(/\.msi$/)), path.join(path.dirname(msiBinary), 'hostd.exe'));
+    const [later] = find(path.join('target', 'msi-later'), /\.msi$/);
+    if (!later) throw new Error('no later MSI in target/msi-later');
+    msiUpdateWhileServing(path.resolve(later), path.join(path.dirname(msiBinary), 'hostd.exe'));
+    check('Windows installer (MSI) after the update', msiBinary);
   });
   attempt('Windows setup (NSIS)', () => {
     sh(one(/-setup\.exe$/), ['/S']);
@@ -117,8 +120,20 @@ if (process.platform === 'darwin') {
   });
 }
 
-/** The installed hostd as a service, serving a team's store from the dev client, then the MSI
- * installed again over it with every file replaced, as an update replaces them. */
+/** Installs an MSI quietly; on failure, shows what its log says went wrong. */
+function msiexec(msi, log) {
+  try {
+    sh('msiexec', ['/i', msi, '/qn', '/norestart', '/l*v', log]);
+  } catch (e) {
+    const text = fs.existsSync(log) ? fs.readFileSync(log, 'utf16le') : '';
+    console.log(text.split(/\r?\n/).filter((l) => /return value 3|Error \d|HostService/i.test(l)).slice(-30).join('\n'));
+    throw e;
+  }
+}
+
+/** The installed hostd as a service, serving a team's store from the dev client, then a later MSI
+ * installed over it: a major upgrade, which removes the old version and its files first, keeping
+ * the service, which the new version's hostd.exe then serves. */
 function msiUpdateWhileServing(msi, hostd) {
   const client = path.resolve('target', 'debug', 'examples', 'dev-client.exe');
   if (!fs.existsSync(client)) throw new Error(`${client} is not built`);
@@ -144,8 +159,8 @@ function msiUpdateWhileServing(msi, hostd) {
       throw new Error('host.key is not kept under DPAPI');
     }
     // Exit 0, not 3010: hostd.exe was free to replace, as the service had stopped.
-    const log = path.join(work, 'msi-again.log');
-    sh('msiexec', ['/i', msi, '/qn', '/norestart', 'REINSTALL=ALL', 'REINSTALLMODE=vamus', '/l*v', log]);
+    const log = path.join(work, 'msi-later.log');
+    msiexec(msi, log);
     synced();
   } finally {
     spawnSync(hostd, ['uninstall'], { stdio: 'inherit' });

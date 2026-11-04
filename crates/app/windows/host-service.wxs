@@ -7,11 +7,15 @@
   The host's store stays in ProgramData. On a computer that does not serve, nothing happens.
 
   Custom actions rather than ServiceControl: the service is made by hostd, not by the MSI, so
-  ServiceControl's start fails an install where there is none, and its stop comes after
-  RemoveExistingProducts, which already needs hostd.exe free. Tauri's MSI removes the old version
-  just after InstallInitialize, so the stop goes between the two. Plain commands run from the
-  system folder, so no WiX extension is needed. Linked by the component, through componentRefs in
-  tauri.sidecar.conf.json.
+  ServiceControl's start fails an install where there is none. Tauri's MSI removes the old version
+  just after InstallInitialize, and Windows Installer refuses (error 2613) any action that writes
+  to the script before it, so the stop comes just after RemoveExistingProducts. That is still in
+  time: in a major upgrade the old version's own uninstall, run by RemoveExistingProducts, stops
+  the service before it removes hostd.exe (and leaves the service, as UPGRADINGPRODUCTCODE is
+  set); a repair or reinstall of the same version removes nothing there, and its files are
+  replaced later, at InstallFiles. If the install fails after the stop, a rollback action starts the
+  service again. Plain commands run from the system folder, so no WiX extension is needed.
+  Linked by the component, through componentRefs in tauri.sidecar.conf.json.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
@@ -24,13 +28,19 @@
     <!-- Stop-Service waits until the service has stopped and let go of hostd.exe. -->
     <CustomAction Id="StopHostService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
       ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;Stop-Service -Name GlazeVaultHost -ErrorAction SilentlyContinue&quot;" />
+    <!-- A rollback action goes before the action it undoes, and runs after what later steps undo,
+      such as files put back. In a failed major upgrade the old version's own one starts the service
+      once its hostd.exe is back; this one finds nothing to start then. -->
+    <CustomAction Id="RestartHostServiceOnRollback" Directory="TARGETDIR" Execute="rollback" Impersonate="no" Return="ignore"
+      ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;Start-Service -Name GlazeVaultHost -ErrorAction SilentlyContinue&quot;" />
     <CustomAction Id="RemoveHostService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
       ExeCommand="&quot;[System64Folder]sc.exe&quot; delete GlazeVaultHost" />
     <CustomAction Id="StartHostService" Directory="TARGETDIR" Execute="deferred" Impersonate="no" Return="ignore"
       ExeCommand="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -WindowStyle Hidden -Command &quot;Start-Service -Name GlazeVaultHost -ErrorAction SilentlyContinue&quot;" />
 
     <InstallExecuteSequence>
-      <Custom Action="StopHostService" Before="RemoveExistingProducts" />
+      <Custom Action="RestartHostServiceOnRollback" After="RemoveExistingProducts" />
+      <Custom Action="StopHostService" After="RestartHostServiceOnRollback" />
       <Custom Action="RemoveHostService" After="StopHostService">REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="StartHostService" Before="InstallFinalize">NOT REMOVE="ALL"</Custom>
     </InstallExecuteSequence>
