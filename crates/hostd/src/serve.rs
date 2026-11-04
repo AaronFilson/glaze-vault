@@ -14,20 +14,41 @@ use std::time::{Duration, SystemTime};
 pub use glaze_vault_core::{HOST_BACKUPS as BACKUPS, RESTORE_FILE};
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Restores the backup a restore asked for, if one did, before the store opens.
-fn restore_asked(dir: &Path) -> Result<(), String> {
+/// Where `hostd restore` copies a backup from outside the store, for the service to read, and
+/// where the service says how a restore it was asked for went: "ok", or why not.
+pub const RESTORE_COPY: &str = "restore-copy";
+pub const RESTORE_RESULT: &str = "restore-result";
+
+/// Restores the backup a restore asked for, if one did, before the store opens. A request that
+/// cannot be read or restored is removed, said in the log and to `hostd restore`, and the store
+/// serves as it was.
+fn restore_asked(dir: &Path) {
     let file = dir.join(RESTORE_FILE);
-    let Ok(backup) = std::fs::read_to_string(&file) else {
-        return Ok(());
+    let done = match std::fs::read_to_string(&file) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => Err(format!("the restore asked for could not be read: {e}")),
+        Ok(backup) => {
+            let backup = PathBuf::from(backup.trim());
+            HostStore::restore(dir, &backup).map_err(|e| format!("restoring {}: {e}", backup.display()))
+        }
     };
-    let _ = std::fs::remove_file(&file);
-    let backup = PathBuf::from(backup.trim());
-    HostStore::restore(dir, &backup).map_err(|e| format!("restoring {}: {e}", backup.display()))?;
-    log::info!(
-        "restored the backup {}: computers send again what it lacks",
-        backup.display()
-    );
-    Ok(())
+    if let Err(e) = std::fs::remove_file(&file) {
+        log::error!("removing {}: {e}", file.display());
+    }
+    let _ = std::fs::remove_dir_all(dir.join(RESTORE_COPY));
+    let said = match &done {
+        Ok(()) => {
+            log::info!("restored the backup asked for: computers send again what it lacks");
+            "ok".to_owned()
+        }
+        Err(e) => {
+            log::error!("{e}; serving the store as it was");
+            e.clone()
+        }
+    };
+    if let Err(e) = std::fs::write(dir.join(RESTORE_RESULT), said) {
+        log::error!("writing {RESTORE_RESULT}: {e}");
+    }
 }
 
 pub struct Options {
@@ -40,7 +61,7 @@ pub struct Options {
 }
 
 pub async fn serve(options: Options, shutdown: impl Future<Output = ()>) -> Result<(), String> {
-    restore_asked(&options.dir)?;
+    restore_asked(&options.dir);
     // A key from before it was kept under DPAPI moves there now (ADR 38); nothing elsewhere.
     if HostStore::protect_key(&options.dir).map_err(|e| format!("protecting the host key: {e}"))? {
         log::info!("the host key is kept under DPAPI now");
@@ -114,7 +135,8 @@ async fn backing_up(server: Arc<Server>, backups: PathBuf) {
 async fn restore_requested(dir: &Path) {
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
-        if dir.join(RESTORE_FILE).exists() {
+        // Only a readable request stops the service: one that is not would stop it for nothing.
+        if std::fs::File::open(dir.join(RESTORE_FILE)).is_ok() {
             return;
         }
     }

@@ -144,13 +144,13 @@ pub fn install(exe: &Path, data: &Path, port: u16, name: &str) -> Result<(), Str
     let (exe, data_text) = (path_text(exe)?, path_text(data)?);
     let id = make_user()?;
     // The store and the log are the user's alone; the folders above stay root's.
-    super::chown_all(data, id, id).map_err(|e| format!("giving the store to {USER}: {e}"))?;
+    super::give(data, 0, id, id).map_err(|e| format!("giving the store to {USER}: {e}"))?;
     fs::create_dir_all(LOGS).map_err(|e| e.to_string())?;
     let log = Path::new(LOGS).join("hostd.log");
     if !log.exists() {
         fs::write(&log, "").map_err(|e| e.to_string())?;
     }
-    super::chown_all(&log, id, id).map_err(|e| e.to_string())?;
+    super::give(&log, 0, id, id).map_err(|e| e.to_string())?;
     fs::write(PLIST, plist(exe, data_text, port, name)).map_err(|e| format!("writing {PLIST}: {e}"))?;
     // Lets the program take connections when the application firewall is on; nothing when off.
     try_tool(FIREWALL, &["--add", exe]);
@@ -172,12 +172,48 @@ pub fn uninstall(exe: &Path) -> Result<(), String> {
 /// The user goes; a store kept goes back to root, so no file is left to an id the system may give
 /// someone else.
 pub fn after_uninstall(keep_data: bool) {
+    let Some(id) = user_id() else { return };
     let data = data_dir();
     if keep_data && data.exists() {
-        let _ = super::chown_all(&data, 0, 0);
+        let _ = super::give(&data, id, 0, 0);
     }
-    let _ = super::chown_all(&Path::new(LOGS).join("hostd.log"), 0, 0);
+    let _ = super::give(&Path::new(LOGS).join("hostd.log"), id, 0, 0);
     remove_user();
+}
+
+/// A host installed before the service had a user of its own runs as root, from a LaunchDaemon
+/// that an update leaves as it was. As it starts it moves itself over: the user made, the store
+/// and log given to it, the LaunchDaemon written as `install` writes it now for the next boot,
+/// and this process then gives up root for that user, so nothing is written as root meanwhile.
+pub fn harden(dir: &Path, port: u16, name: &str) -> Result<(), String> {
+    // SAFETY: no preconditions.
+    if unsafe { libc::geteuid() } != 0 || !installed() || dir != data_dir() {
+        return Ok(());
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let id = make_user()?;
+    super::give(dir, 0, id, id).map_err(|e| format!("giving the store to {USER}: {e}"))?;
+    let log = Path::new(LOGS).join("hostd.log");
+    if log.exists() {
+        super::give(&log, 0, id, id).map_err(|e| e.to_string())?;
+    }
+    let written = plist(path_text(&exe)?, path_text(dir)?, port, name);
+    let partial = format!("{PLIST}.partial");
+    fs::write(&partial, written)
+        .and_then(|()| fs::rename(&partial, PLIST))
+        .map_err(|e| format!("writing {PLIST}: {e}"))?;
+    // SAFETY: plain calls; each result is checked, and the user's ids are checked after.
+    unsafe {
+        libc::umask(0o077);
+        if libc::setgroups(0, std::ptr::null()) != 0 || libc::setgid(id) != 0 || libc::setuid(id) != 0 {
+            return Err(format!("becoming {USER}: {}", std::io::Error::last_os_error()));
+        }
+        if libc::getuid() != id || libc::geteuid() != id || libc::getegid() != id {
+            return Err(format!("still not {USER} after giving up root"));
+        }
+    }
+    log::info!("this host ran as root: it runs as {USER} now, as installed hosts do (ADR 38)");
+    Ok(())
 }
 
 pub fn run_as_service(_args: Vec<String>) -> Result<(), String> {

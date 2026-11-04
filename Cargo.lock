@@ -1443,8 +1443,10 @@ version = "0.1.0"
 dependencies = [
  "glaze-vault-core",
  "glaze-vault-sync",
+ "libc",
  "log",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
  "windows-service",

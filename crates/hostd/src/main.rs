@@ -67,8 +67,8 @@ fn host_dir(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String> 
     }
 }
 
-/// Puts the host's store back as a backup had it. A running service is asked to, and restarts
-/// itself to; otherwise it is done now.
+/// Puts the host's store back as a backup had it. A running service is asked to, restarts itself
+/// to, and says how it went; otherwise it is done now.
 fn restore(dir: &std::path::Path, backup: &std::path::Path) -> Result<(), String> {
     let mut backup = backup
         .canonicalize()
@@ -80,18 +80,45 @@ fn restore(dir: &std::path::Path, backup: &std::path::Path) -> Result<(), String
             glaze_vault_core::HostStore::import_backup(dir, host.vault_id(), &backup).map_err(|e| e.to_string())?;
         backup = dir.join(serve::BACKUPS).join(name);
     }
-    // Run as root, what this writes goes to the service's user (ADR 38).
-    service::own(dir)?;
-    if service::running() && dir == service::data_dir() {
-        std::fs::write(dir.join(serve::RESTORE_FILE), backup.to_string_lossy().as_bytes())
-            .map_err(|e| e.to_string())?;
-        println!("the service restores it as it starts again, in a few seconds");
+    if !(service::running() && dir == service::data_dir()) {
+        glaze_vault_core::HostStore::restore(dir, &backup).map_err(|e| e.to_string())?;
+        // Run as root, what this wrote goes to the service's user (ADR 38).
+        service::own(dir)?;
+        println!("restored: computers send again what the backup lacks when they next sync");
         return Ok(());
     }
-    glaze_vault_core::HostStore::restore(dir, &backup).map_err(|e| e.to_string())?;
-    service::own(dir)?;
-    println!("restored: computers send again what the backup lacks when they next sync");
-    Ok(())
+    // The service runs as a user of its own, which cannot read a folder elsewhere: a backup from
+    // outside the store is copied in for it.
+    let dir = dir.canonicalize().map_err(|e| e.to_string())?;
+    if !backup.starts_with(&dir) {
+        let copy = dir.join(serve::RESTORE_COPY);
+        let _ = std::fs::remove_dir_all(&copy);
+        service::copy_private(&backup, &copy).map_err(|e| format!("copying {}: {e}", backup.display()))?;
+        backup = copy;
+    }
+    let result = dir.join(serve::RESTORE_RESULT);
+    let _ = std::fs::remove_file(&result);
+    // Written aside, given to the service with the rest, then put in place whole, so the service
+    // never finds it half written or unreadable.
+    let asking = dir.join(format!("{}.partial", serve::RESTORE_FILE));
+    std::fs::write(&asking, backup.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
+    service::own(&dir)?;
+    std::fs::rename(&asking, dir.join(serve::RESTORE_FILE)).map_err(|e| e.to_string())?;
+    println!("the service restores it as it starts again, in a few seconds");
+    for _ in 0..120 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Ok(said) = std::fs::read_to_string(&result) {
+            let _ = std::fs::remove_file(&result);
+            return match said.trim() {
+                "ok" => {
+                    println!("restored: computers send again what the backup lacks when they next sync");
+                    Ok(())
+                }
+                failed => Err(format!("the service did not restore it: {failed}")),
+            };
+        }
+    }
+    Err("the service did not say it restored the backup within a minute: see its log".into())
 }
 
 /// Writes the host's store now as one `.gvhost` file, for an admin to take to a new host computer.
@@ -118,6 +145,11 @@ fn main() -> ExitCode {
                 .ok_or_else(|| USAGE.to_owned())
                 .and_then(|dir| run_options(PathBuf::from(dir), args))
                 .and_then(|options| {
+                    service::harden(
+                        &options.dir,
+                        options.port.unwrap_or(glaze_vault_sync::net::DEFAULT_PORT),
+                        options.name.as_deref().unwrap_or(DEFAULT_NAME),
+                    )?;
                     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
                     runtime.block_on(serve::serve(options, async {
                         let _ = tokio::signal::ctrl_c().await;
