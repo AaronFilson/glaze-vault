@@ -5,7 +5,12 @@
 # approval, and a ruleset so only repository admins can create, move or delete v* tags.
 # Safe to run again: the environment is updated in place, and an existing ruleset is kept.
 set -euo pipefail
-gh=${GH:-gh}
+# gh: $GH if given, else gh on the PATH, else the copy in ~/gh_*/bin. A stale GITHUB_TOKEN in the
+# environment would override gh's own login, so it is dropped.
+unset GITHUB_TOKEN
+gh=${GH:-$(command -v gh || ls -d "$HOME"/gh_*/bin/gh 2>/dev/null | tail -1)}
+[ -n "$gh" ] && [ -x "${gh%% *}" -o -n "$(command -v "${gh%% *}")" ] || { echo "Can't find gh: install it or run with GH=/path/to/gh" >&2; exit 1; }
+$gh auth status >/dev/null 2>&1 || { echo "gh isn't logged in: run '$gh auth login' first" >&2; exit 1; }
 repo=${REPO:-AaronFilson/glaze-vault}
 me=$($gh api user --jq .id)
 
