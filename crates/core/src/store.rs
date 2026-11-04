@@ -330,7 +330,18 @@ fn migrate(conn: &Connection) -> Result<()> {
 
 /// What an attachment's `sha256` holds: the hash of its nonce and then its ciphertext.
 pub(crate) fn attachment_hash(nonce: &[u8], ciphertext: &[u8]) -> Vec<u8> {
-    crypto::sha256(&[nonce, ciphertext]).to_vec()
+    use sha2::Digest;
+    let mut hasher = attachment_hasher(nonce);
+    hasher.update(ciphertext);
+    hasher.finalize().to_vec()
+}
+
+/// The same hash, begun, for ciphertext read a piece at a time: each piece is added with `update`.
+pub(crate) fn attachment_hasher(nonce: &[u8]) -> sha2::Sha256 {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(nonce);
+    hasher
 }
 
 /// What a revision's `content_hash` holds: the hash of its nonce and then its ciphertext.

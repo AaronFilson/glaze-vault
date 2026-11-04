@@ -3,7 +3,6 @@
 //! their own table so a revision only names them. An attachment is never changed: a record stops
 //! naming it in a new revision, and erasing the record removes it.
 
-use super::events::SignedBy;
 use super::{Change, Kind, SignatureCheck, Signed, Vault, audit, items, log_change, now_ms, parse_id};
 use crate::crypto;
 use crate::error::{Error, Result};
@@ -176,79 +175,33 @@ impl Vault {
     /// Who signed an attachment, and whether it checks, for a photo's details: the signature is
     /// over what is known of it and the hash of its bytes, and the bytes kept, once they are here,
     /// must have that hash. None for one kept before attachments were signed.
-    pub fn attachment_signed(&self, id: Uuid) -> Result<Option<Signed>> {
-        type Row = (
-            String,
-            String,
-            String,
-            String,
-            i64,
-            String,
-            i64,
-            i64,
-            Vec<u8>,
-            Option<Vec<u8>>,
-            (Option<Vec<u8>>, Option<String>, Option<String>),
-            i64,
-        );
-        let row: Option<Row> = self
-            .conn
-            .query_row(
-                "SELECT record_id, kind, collection_id, media_type, size, author_id, created_at, epoch, nonce, sha256,
-                        signature, signer_id, signed_as, length(ciphertext)
-                 FROM attachments WHERE id = ?1",
-                params![id.to_string()],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                        row.get(8)?,
-                        row.get(9)?,
-                        (row.get(10)?, row.get(11)?, row.get(12)?),
-                        row.get(13)?,
-                    ))
-                },
-            )
-            .optional()?;
-        let (record, kind, collection, media_type, size, author, at, epoch, nonce, sha256, signed, length) =
-            row.ok_or(Error::NotFound)?;
-        let collection = parse_id(&collection)?;
-        self.readable(&collection)?;
-        let (Some(sha256), (Some(signature), Some(signer), Some(role))) = (sha256, signed) else {
+    pub fn attachment_signed(&self, id: Uuid) -> Result<Option<AttachmentSigned>> {
+        let found = self.signed_attachment_row(&id)?.ok_or(Error::NotFound)?;
+        self.readable(&found.row.collection())?;
+        let Some(signed) = found.signed.filter(|_| !found.row.sha256().is_empty()) else {
             return Ok(None);
         };
-        let role = signing::As::parse(&role).ok_or_else(|| Error::Corrupt(format!("signed as {role}")))?;
-        let signed = SignedBy {
-            signature,
-            signer: parse_id(&signer)?,
-            role,
-        };
-        let facts = AttachmentFacts {
-            vault: &self.keyring.vault_id,
-            id: &id,
-            record: &parse_id(&record)?,
-            kind: &kind,
-            collection: &collection,
-            epoch,
-            media_type: &media_type,
-            size,
-            author: &parse_id(&author)?,
-            at,
-            sha256: &sha256,
-        };
-        let payload = signing::attachment_payload(&facts, role, &signed.signer);
-        let mut found = self.trust()?.check(&signed, &payload);
-        if length > 0 && items::ciphertext_hash(&self.conn, &id, &nonce)? != sha256 {
-            found.check = SignatureCheck::Bad;
+        let payload =
+            signing::attachment_payload(&found.row.facts(&self.keyring.vault_id), signed.role, &signed.signer);
+        let mut check = self.trust()?.check(&signed, &payload);
+        if found.length > 0 && items::ciphertext_hash(&self.conn, &id, &found.nonce)? != found.row.sha256() {
+            check.check = SignatureCheck::Bad;
         }
-        Ok(Some(found))
+        Ok(Some(AttachmentSigned {
+            author: found.row.author(),
+            signed: check,
+        }))
     }
+}
+
+/// Who added an attachment, and who signed it, as what, and whether it checks: a photo moved to
+/// another collection, or vouched for by an admin, is signed by them, not its author.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentSigned {
+    pub author: Uuid,
+    #[serde(flatten)]
+    pub signed: Signed,
 }
 
 /// Binds an attachment's bytes to it, its record and collection, and what kind of file it is.
@@ -340,7 +293,9 @@ mod tests {
         let photo = vault
             .add_attachment(Kind::Firing, firing.record_id, "image/jpeg", b"a test tile")
             .unwrap();
-        let signed = vault.attachment_signed(photo.id).unwrap().unwrap();
+        let found = vault.attachment_signed(photo.id).unwrap().unwrap();
+        assert_eq!(found.author, vault.me().id);
+        let signed = found.signed;
         assert_eq!(signed.by, vault.me().id);
         assert_eq!(signed.signed_as, crate::vault::SignedAs::Author);
         assert_eq!(signed.check, SignatureCheck::Good);
@@ -354,7 +309,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            vault.attachment_signed(photo.id).unwrap().unwrap().check,
+            vault.attachment_signed(photo.id).unwrap().unwrap().signed.check,
             SignatureCheck::Bad
         );
         // So does what is said of it.
@@ -369,7 +324,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            vault.attachment_signed(other.id).unwrap().unwrap().check,
+            vault.attachment_signed(other.id).unwrap().unwrap().signed.check,
             SignatureCheck::Bad
         );
         assert!(matches!(vault.attachment_signed(Uuid::new_v4()), Err(Error::NotFound)));

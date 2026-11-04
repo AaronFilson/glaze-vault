@@ -475,8 +475,7 @@ pub(super) fn stage(conn: &Connection, id: &Uuid, device: Option<Uuid>, offset: 
 /// have arrived, read a piece at a time.
 pub(super) fn staged_hash(conn: &Connection, id: &Uuid, nonce: &[u8]) -> Result<Vec<u8>> {
     use sha2::Digest;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(nonce);
+    let mut hasher = store::attachment_hasher(nonce);
     let mut statement = conn.prepare("SELECT bytes FROM incoming_attachments WHERE id = ?1 ORDER BY offset")?;
     let mut rows = statement.query(params![id.to_string()])?;
     while let Some(row) = rows.next()? {
@@ -508,18 +507,29 @@ pub(super) fn unstage_into(conn: &Connection, id: &Uuid) -> Result<()> {
     unstage(conn, id)
 }
 
-/// The hash of a stored attachment's nonce and ciphertext, read from its BLOB a piece at a time.
+/// The hash of a stored attachment's nonce and ciphertext, read from its BLOB a piece at a time
+/// through one handle, front to back: a handle opened again for each piece would walk the BLOB's
+/// pages from the start each time.
 pub(super) fn ciphertext_hash(conn: &Connection, id: &Uuid, nonce: &[u8]) -> Result<Vec<u8>> {
     use sha2::Digest;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(nonce);
-    let mut offset = 0;
-    while let Some((total, piece)) = ciphertext_piece(conn, id, offset)? {
-        hasher.update(&piece);
-        offset += piece.len() as u64;
-        if piece.is_empty() || offset >= total {
+    use std::io::Read;
+    let mut hasher = store::attachment_hasher(nonce);
+    let rowid: i64 = conn
+        .query_row(
+            "SELECT rowid FROM attachments WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(Error::NotFound)?;
+    let mut blob = conn.blob_open("main", "attachments", "ciphertext", rowid, true)?;
+    let mut piece = vec![0; CHUNK_BYTES];
+    loop {
+        let read = blob.read(&mut piece)?;
+        if read == 0 {
             break;
         }
+        hasher.update(&piece[..read]);
     }
     Ok(hasher.finalize().to_vec())
 }
