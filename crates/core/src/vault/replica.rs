@@ -1945,6 +1945,59 @@ mod tests {
     }
 
     #[test]
+    fn a_host_moves_to_another_computer_from_its_file_and_computers_carry_on() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let file = kept.path().join("host.gvhost");
+        t.host.export_backup(&file).unwrap();
+        let old = t.host.generation().unwrap();
+        // Ben saves after the file was made, and only the old host has it.
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let saved = t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "After", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+
+        // Only an admin opens it, and not into a store already there.
+        let staging = kept.path().join("staging");
+        assert!(t.computers[1].unpack_host_backup(&file, &staging).is_err());
+        assert!(!staging.exists());
+        assert!(matches!(
+            t.computers[0].unpack_host_backup(&file, t.host.dir()),
+            Err(Error::VaultExists)
+        ));
+
+        let moved = t.computers[0].unpack_host_backup(&file, &staging).unwrap();
+        assert_eq!(moved.identity(), t.host.identity());
+        assert_ne!(moved.generation().unwrap(), old);
+        drop(moved);
+        t.host = HostStore::open(&staging).unwrap();
+        for computer in &t.computers {
+            assert!(computer.host_certified(&t.host.identity()).unwrap());
+        }
+        // Ben's computer sends again what the old host had and the file did not.
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(result.accepted.iter().any(|(id, _)| *id == saved.revision_id));
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(head(&t.computers[0], t.recipe).content["name"], "After");
+
+        // A computer that pinned another host's key does not take this one's file.
+        let pinned = t.computers[0].host_key().unwrap();
+        t.computers[0].set_meta("host_key", &hex::encode([7u8; 32])).unwrap();
+        let elsewhere = kept.path().join("elsewhere");
+        assert!(matches!(
+            t.computers[0].unpack_host_backup(&file, &elsewhere),
+            Err(Error::NotABackup)
+        ));
+        assert!(!elsewhere.exists());
+        t.computers[0].set_meta("host_key", &hex::encode(pinned)).unwrap();
+    }
+
+    #[test]
     fn after_the_host_is_restored_each_computer_sends_again_what_its_people_saved() {
         let mut t = team();
         let backups = tempfile::tempdir().unwrap();

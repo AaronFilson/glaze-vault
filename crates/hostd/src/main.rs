@@ -6,9 +6,12 @@
 //!   hostd status
 //!   hostd backups [--dir <host-dir>]
 //!   hostd restore <backup-folder | file.gvhost> [--dir <host-dir>]  elevated
+//!   hostd export <file.gvhost> [--dir <host-dir>]                   elevated
 //!
 //! `run` serves in the foreground. `install` moves a host's store, made by the app, into the
 //! system's data folder and runs this same binary there as a service from boot.
+//! `export` writes the store as one `.gvhost` file, opened with the organization's key, to move
+//! the host to another computer (docs/adr/0037-moving-the-host.md).
 
 mod log_to;
 mod serve;
@@ -23,7 +26,8 @@ const USAGE: &str = "usage: hostd run <host-dir> [--port N] [--port-file FILE] [
        hostd uninstall [--keep-data]
        hostd status
        hostd backups [--dir <host-dir>]
-       hostd restore <backup-folder | file.gvhost> [--dir <host-dir>]";
+       hostd restore <backup-folder | file.gvhost> [--dir <host-dir>]
+       hostd export <file.gvhost> [--dir <host-dir>]";
 
 /// The name the host is advertised by when none is given.
 pub const DEFAULT_NAME: &str = "Glaze Vault host";
@@ -76,6 +80,8 @@ fn restore(dir: &std::path::Path, backup: &std::path::Path) -> Result<(), String
             glaze_vault_core::HostStore::import_backup(dir, host.vault_id(), &backup).map_err(|e| e.to_string())?;
         backup = dir.join(serve::BACKUPS).join(name);
     }
+    // Run as root, what this writes goes to the service's user (ADR 38).
+    service::own(dir)?;
     if service::running() && dir == service::data_dir() {
         std::fs::write(dir.join(serve::RESTORE_FILE), backup.to_string_lossy().as_bytes())
             .map_err(|e| e.to_string())?;
@@ -83,7 +89,22 @@ fn restore(dir: &std::path::Path, backup: &std::path::Path) -> Result<(), String
         return Ok(());
     }
     glaze_vault_core::HostStore::restore(dir, &backup).map_err(|e| e.to_string())?;
+    service::own(dir)?;
     println!("restored: computers send again what the backup lacks when they next sync");
+    Ok(())
+}
+
+/// Writes the host's store now as one `.gvhost` file, for an admin to take to a new host computer.
+/// The service may go on serving meanwhile; what reaches it after, computers send the new host
+/// again.
+fn export(dir: &std::path::Path, file: &std::path::Path) -> Result<(), String> {
+    let mut host = glaze_vault_core::HostStore::open(dir).map_err(|e| e.to_string())?;
+    host.export_backup(file)
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    println!(
+        "wrote {}: it opens only with the organization's key. Stop this host before the new one serves.",
+        file.display()
+    );
     Ok(())
 }
 
@@ -143,6 +164,10 @@ fn main() -> ExitCode {
             made.iter().for_each(|p| println!("{}", p.display()));
             Ok(())
         }),
+        "export" => match args.next() {
+            Some(file) => host_dir(&mut args).and_then(|dir| export(&dir, &PathBuf::from(file))),
+            None => Err(USAGE.into()),
+        },
         "restore" => match args.next() {
             Some(backup) => host_dir(&mut args).and_then(|dir| restore(&dir, &PathBuf::from(backup))),
             None => Err(USAGE.into()),
