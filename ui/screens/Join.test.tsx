@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { mockIPC } from '@tauri-apps/api/mocks';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Join } from './Join';
 
@@ -64,6 +64,34 @@ describe('joining a vault on this network', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Scan the code' }));
     await waitFor(() => expect(joined).toBe(true));
     expect(calls).toContainEqual(['join_vault', { address: '', code: '', name: 'An iPhone', invite }]);
+  });
+
+  it('on a phone, joins a host it found with the typed code, which still proves the host', async () => {
+    const calls: [string, unknown][] = [];
+    let joined = false;
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'prepare_join') return { fingerprint: '428b-ec49-9b19-3bd5', suggestedName: 'Pixel 8' };
+      if (command === 'discover_hosts')
+        return [
+          { name: 'Studio', address: '192.168.1.20:47917' },
+          { name: 'Shed', address: '192.168.1.30:47917' }
+        ];
+    });
+    render(<Join onJoined={() => (joined = true)} onBack={() => {}} platform="android" />);
+    expect(await screen.findByText(/choose the host found on this network/)).toBeTruthy();
+    const found = await screen.findByRole('list', { name: 'Hosts found on this network' });
+    // Two found, so neither is chosen for the person.
+    expect((screen.getByLabelText("The vault's host") as HTMLInputElement).value).toBe('');
+    fireEvent.click(within(found).getByRole('button', { name: /Shed/ }));
+    expect((screen.getByLabelText("The vault's host") as HTMLInputElement).value).toBe('192.168.1.30:47917');
+    fireEvent.change(screen.getByLabelText('Pairing code'), { target: { value: '4821-0937' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+    await waitFor(() => expect(joined).toBe(true));
+    expect(calls).toContainEqual([
+      'join_vault',
+      { address: '192.168.1.30:47917', code: '4821-0937', name: 'Pixel 8', invite: null }
+    ]);
   });
 
   it('shows no scanning on a computer', async () => {

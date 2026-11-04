@@ -1,10 +1,12 @@
 //! The network around the sync (docs/adr/0021-transport-and-pairing.md): TLS 1.3 with pinned
 //! Ed25519 keys and no certificate authority, pairing a new computer with a short code by SPAKE2,
-//! finding the host by mDNS on desktops, and the server that `hostd` runs.
+//! finding the host by mDNS, and the server that `hostd` runs.
 
 mod client;
 mod conn;
 mod discover;
+#[cfg(any(target_os = "ios", all(target_os = "macos", test)))]
+mod dnssd;
 mod invite;
 mod pairing;
 mod server;

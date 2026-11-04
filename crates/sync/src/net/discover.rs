@@ -2,18 +2,22 @@
 //! the protocol version and a short tag of its organization's signing key, so a computer can
 //! tell its own vault's host without learning anything about whose it is.
 //!
-//! Desktops only. On phones and tablets `mdns-sd`'s own multicast sockets would need an
-//! entitlement from Apple, so they find no hosts here and are paired by address (ADR 26).
+//! Desktops and Android browse with `mdns-sd`'s own multicast sockets; on Android the app holds a
+//! Wi-Fi multicast lock while it is on screen, or many phones drop what comes. iOS allows those
+//! sockets only with an entitlement from Apple, so there it asks the system's Bonjour
+//! (`dnssd.rs`). Only desktops advertise (docs/adr/0036-photo-pieces-audit-and-phone-discovery.md).
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 use crate::Error;
 use crate::Result;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::ServiceInfo;
+#[cfg(not(target_os = "ios"))]
+use mdns_sd::{ServiceDaemon, ServiceEvent};
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use std::time::Duration;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 use std::time::Instant;
 
 pub const SERVICE: &str = "_glazevault._tcp.local.";
@@ -34,7 +38,7 @@ impl Drop for Advertised {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn mdns_error(e: mdns_sd::Error) -> Error {
     Error::Discovery(e.to_string())
 }
@@ -67,46 +71,53 @@ pub struct Found {
     pub vault: Option<String>,
 }
 
+/// A host that answered, as found, if it speaks a protocol version this side does.
+pub(super) fn found<'a>(
+    name: String,
+    addresses: Vec<IpAddr>,
+    port: u16,
+    txt: impl Fn(&str) -> Option<&'a str>,
+) -> Option<Found> {
+    let version = |key| txt(key).and_then(|v| v.parse::<u32>().ok());
+    let newest = version("proto")?;
+    crate::agree(version("oldest").unwrap_or(newest), newest)?;
+    Some(Found {
+        name,
+        addresses,
+        port,
+        vault: txt("vault").map(str::to_owned),
+    })
+}
+
 /// The hosts that answer within `wait`. Blocking.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 pub fn browse(wait: Duration) -> Result<Vec<Found>> {
     let daemon = ServiceDaemon::new().map_err(mdns_error)?;
     let events = daemon.browse(SERVICE).map_err(mdns_error)?;
     let deadline = Instant::now() + wait;
-    let mut found: Vec<Found> = Vec::new();
+    let mut hosts: Vec<Found> = Vec::new();
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         let Ok(event) = events.recv_timeout(left) else { break };
         if let ServiceEvent::ServiceResolved(service) = event {
-            let version = |key| {
-                service
-                    .txt_properties
-                    .get_property_val_str(key)
-                    .and_then(|v| v.parse::<u32>().ok())
-            };
-            let Some(newest) = version("proto") else { continue };
-            if crate::agree(version("oldest").unwrap_or(newest), newest).is_none() {
-                continue;
-            }
             let name = service
                 .fullname
                 .strip_suffix(&format!(".{SERVICE}"))
                 .unwrap_or(&service.fullname)
                 .to_owned();
-            found.retain(|f| f.name != name);
-            found.push(Found {
-                name,
-                addresses: service.addresses.iter().map(|a| a.to_ip_addr()).collect(),
-                port: service.port,
-                vault: service.txt_properties.get_property_val_str("vault").map(str::to_owned),
-            });
+            let addresses = service.addresses.iter().map(|a| a.to_ip_addr()).collect();
+            let txt = |key: &str| service.txt_properties.get_property_val_str(key);
+            if let Some(host) = found(name, addresses, service.port, txt) {
+                hosts.retain(|f| f.name != host.name);
+                hosts.push(host);
+            }
         }
     }
     let _ = daemon.shutdown();
-    Ok(found)
+    Ok(hosts)
 }
 
-/// Phones and tablets find no hosts by mDNS (see the top of this file).
-#[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn browse(_wait: Duration) -> Result<Vec<Found>> {
-    Ok(Vec::new())
+/// The hosts that answer within `wait`, by the system's Bonjour. Blocking.
+#[cfg(target_os = "ios")]
+pub fn browse(wait: Duration) -> Result<Vec<Found>> {
+    super::dnssd::browse(wait)
 }
