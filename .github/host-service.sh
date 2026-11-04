@@ -94,6 +94,11 @@ $sudo "$hostd" install --from "$work/moved" --name "Smoke test"
 synced
 hardened
 
+# A restore while the service runs: it restarts to restore, and says how that went (ADR 38).
+$sudo "$hostd" restore "$work/moving.gvhost"
+synced
+hardened
+
 $sudo "$hostd" uninstall
 "$hostd" status
 if [ "${RUNNER_OS:-}" = macOS ] && dscl . -read /Users/_glazevault >/dev/null 2>&1; then
