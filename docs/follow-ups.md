@@ -41,7 +41,7 @@ Work decided on but not done yet, with the reason it waits.
   update mirror (ADR 5, after stage 8 in the plan), which needs signed updates first; putting a
   `.gvhost` file on a new host computer, opened with the organization's key; making someone an
   admin or taking it away from a computer without their key file entry (from the host computer
-  for now); joining photo pieces with rusqlite's incremental BLOB writes rather than in memory.
+  for now).
 - From the review of 2026-10-29, the rest fixed since: changes to people, roles and collections
   (`network::with_host` in the app) still hold the vault while they wait on the host, since they
   hold the directory there and sync the change at once; other network commands no longer do.
@@ -51,8 +51,6 @@ Work decided on but not done yet, with the reason it waits.
   Windows service and updates on a real install; `SMAppService` once macOS 12 support is dropped.
 - Left from the sync core: the host keeping and signing the audit log (the computers' logs stay
   on them for now); a new organization recovery sheet or key reaching every computer's key file.
-- The audit log notes opening recipes, materials, batch sheets and firings; mixes, limit sets and
-  price lists could be noted too. Signatures of attachments are kept but not shown anywhere yet.
 
 ## Clay bodies
 

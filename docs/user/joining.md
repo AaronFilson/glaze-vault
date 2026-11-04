@@ -42,18 +42,19 @@ A phone or tablet joins the same way, and can scan the code instead of typing it
 Scanning also checks that the phone reaches your vault's own host, and not some other computer
 on the network: if it does not, the phone says so and nothing is sent.
 
-If the camera cannot be used, type the host's address and the code, as on a computer. Phones do
-not list the hosts on the network yet, so ask the admin for the address Settings shows.
+If the camera cannot be used, choose the host the phone found on the network, or type its
+address, and type the code, as on a computer. The code proves it is your vault's host.
 
 **If an iPhone cannot reach the host**, and once said no to finding devices on the local network,
 turn it on in **Settings, Privacy & Security, Local Network, Glaze Vault**, then try again.
 
 ### Give the host a fixed address
 
-Phones find the host only by the address they joined with. If the host computer's address
-changes, as some routers do when it restarts, phones stop syncing until it is back. Ask whoever
-runs your network to give the host computer a fixed address (a "DHCP reservation" in most
-routers' settings), or set one on the computer itself. Computers find the host by name anyway.
+Phones and computers look for the host on the network when its address changes, as some
+routers do when it restarts. Some networks, such as a guest Wi-Fi, keep devices from finding
+each other; there a phone stops syncing until the host is back at the address it joined with.
+If that happens, ask whoever runs your network to give the host computer a fixed address (a
+"DHCP reservation" in most routers' settings), or set one on the computer itself.
 
 ## Syncing
 
