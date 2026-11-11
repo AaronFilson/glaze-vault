@@ -237,6 +237,11 @@ mod tests {
         assert_eq!(history[0].revision_id, second.revision_id);
         assert_eq!(ana.heads(Kind::Firing).unwrap()[0].collection_id, production);
         assert_eq!(&ana.attachment(photo.id).unwrap().1[..], b"tile");
+        // The photo is signed again by who moved it, and still says who added it.
+        let signed = ana.attachment_signed(photo.id).unwrap().unwrap();
+        assert_eq!(signed.author, ana.me().id);
+        assert_eq!(signed.signed.signed_as, crate::vault::SignedAs::Mover);
+        assert_eq!(signed.signed.check, crate::vault::SignatureCheck::Good);
         // The next revision goes where the record is now.
         let third = ana
             .save(Kind::Recipe, Some(second.revision_id), &json!({ "name": "Shino 3" }))

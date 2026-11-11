@@ -728,16 +728,12 @@ impl Vault {
         items::stage(&tx, &chunk.id, None, chunk.offset, &chunk.bytes)?;
         let whole = had + chunk.bytes.len() as u64 == chunk.total;
         if whole {
-            let ciphertext = items::staged(&tx, &chunk.id)?;
-            items::unstage(&tx, &chunk.id)?;
-            if store::attachment_hash(&nonce, &ciphertext) != sha256 {
+            if items::staged_hash(&tx, &chunk.id, &nonce)? != sha256 {
+                items::unstage(&tx, &chunk.id)?;
                 tx.commit()?;
                 return Err(Error::BadSignature);
             }
-            tx.execute(
-                "UPDATE attachments SET ciphertext = ?1 WHERE id = ?2",
-                params![ciphertext, chunk.id.to_string()],
-            )?;
+            items::unstage_into(&tx, &chunk.id)?;
         }
         tx.commit()?;
         Ok(whole)
@@ -1650,6 +1646,42 @@ mod tests {
     }
 
     #[test]
+    fn a_photo_whose_pieces_were_changed_on_the_way_is_not_kept() {
+        let mut t = team();
+        let big: Vec<u8> = (0..(CHUNK_BYTES + 500)).map(|i| (i % 13) as u8).collect();
+        let photo = t.computers[1]
+            .add_attachment(Kind::Firing, t.firing, "image/jpeg", &big)
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+        let device = t.computers[0].device().unwrap();
+        let (_, levels) = t.computers[0].sync_state().unwrap();
+        t.computers[0]
+            .apply_welcome(&t.host.hello(device, &levels).unwrap())
+            .unwrap();
+        let (cursors, _) = t.computers[0].sync_state().unwrap();
+        let batch = t.host.pull(device, &cursors, usize::MAX).unwrap();
+        t.computers[0].apply_batch(&batch).unwrap();
+
+        // The host reads the last piece from the middle of its BLOB, and nothing past its end.
+        let total = t.host.chunk(device, photo.id, 0).unwrap().unwrap().total;
+        let past = t.host.chunk(device, photo.id, total).unwrap().unwrap();
+        assert!(past.bytes.is_empty());
+
+        let first = t.host.chunk(device, photo.id, 0).unwrap().unwrap();
+        let mut last = t.host.chunk(device, photo.id, CHUNK_BYTES as u64).unwrap().unwrap();
+        assert_eq!(last.offset + last.bytes.len() as u64, total);
+        last.bytes[0] ^= 1;
+        assert!(!t.computers[0].take_chunk(&first).unwrap());
+        assert!(matches!(t.computers[0].take_chunk(&last), Err(Error::BadSignature)));
+        // It is still missing, from the start, and comes whole when it is sent right.
+        assert_eq!(t.computers[0].missing_bytes().unwrap(), vec![(photo.id, 0)]);
+        last.bytes[0] ^= 1;
+        assert!(!t.computers[0].take_chunk(&first).unwrap());
+        assert!(t.computers[0].take_chunk(&last).unwrap());
+        assert_eq!(*t.computers[0].attachment(photo.id).unwrap().1, big);
+    }
+
+    #[test]
     fn an_attachment_sent_in_pieces_is_taken_once_they_have_all_come() {
         let mut t = team();
         let bytes: Vec<u8> = (0..(CHUNK_BYTES + 10)).map(|i| (i % 7) as u8).collect();
@@ -1682,6 +1714,17 @@ mod tests {
             total: ciphertext.len() as u64,
             bytes: ciphertext[offset..(offset + CHUNK_BYTES).min(ciphertext.len())].to_vec(),
         };
+        // Pieces that do not hash right, as when the photo was sealed again under a new key
+        // at the same length, are let go when it is refused, so the right ones can come.
+        let wrong = |offset: usize| {
+            let mut chunk = piece(offset);
+            chunk.bytes[0] ^= 1;
+            chunk
+        };
+        t.host.take_chunk(device, &wrong(0)).unwrap();
+        t.host.take_chunk(device, &wrong(CHUNK_BYTES)).unwrap();
+        let result = t.host.accept(device, stripped.clone()).unwrap();
+        assert_eq!(result.refused, vec![(photo.id, Refusal::BytesMissing)]);
         assert_eq!(t.host.take_chunk(device, &piece(0)).unwrap(), CHUNK_BYTES as u64);
         // Sent again after a break, the host says how far it got.
         assert_eq!(t.host.take_chunk(device, &piece(0)).unwrap(), CHUNK_BYTES as u64);
@@ -1942,6 +1985,206 @@ mod tests {
         assert!(!items::exists(&t.host.conn, "revisions", &saved.revision_id).unwrap());
         let result = sync(&mut t.computers[1], &mut t.host);
         assert!(result.accepted.iter().any(|(id, _)| *id == saved.revision_id));
+    }
+
+    #[test]
+    fn a_host_moves_to_another_computer_from_its_file_and_computers_carry_on() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let file = kept.path().join("host.gvhost");
+        t.host.export_backup(&file).unwrap();
+        let old = t.host.generation().unwrap();
+        // Ben saves after the file was made, and only the old host has it.
+        let shino = head(&t.computers[1], t.recipe).revision_id;
+        let saved = t.computers[1]
+            .save(
+                Kind::Recipe,
+                Some(shino),
+                &json!({ "name": "After", "lines": [], "notes": "" }),
+            )
+            .unwrap();
+        sync(&mut t.computers[1], &mut t.host);
+
+        // Only an admin opens it, and not into a store already there.
+        let staging = kept.path().join("staging");
+        assert!(matches!(
+            t.computers[1].unpack_host_backup(&file, &staging, false),
+            Err(Error::NotAllowed)
+        ));
+        assert!(!staging.exists());
+        assert!(matches!(
+            t.computers[0].unpack_host_backup(&file, t.host.dir(), false),
+            Err(Error::VaultExists)
+        ));
+
+        let moved = t.computers[0].unpack_host_backup(&file, &staging, false).unwrap();
+        assert_eq!(moved.identity(), t.host.identity());
+        assert_ne!(moved.generation().unwrap(), old);
+        drop(moved);
+        t.host = HostStore::open(&staging).unwrap();
+        for computer in &t.computers {
+            assert!(computer.host_certified(&t.host.identity()).unwrap());
+        }
+        // Ben's computer sends again what the old host had and the file did not.
+        let result = sync(&mut t.computers[1], &mut t.host);
+        assert!(result.accepted.iter().any(|(id, _)| *id == saved.revision_id));
+        sync(&mut t.computers[0], &mut t.host);
+        assert_eq!(head(&t.computers[0], t.recipe).content["name"], "After");
+
+        // A computer that pinned another host's key does not take this one's file.
+        let pinned = t.computers[0].host_key().unwrap();
+        t.computers[0].set_meta("host_key", &hex::encode([7u8; 32])).unwrap();
+        let elsewhere = kept.path().join("elsewhere");
+        assert!(matches!(
+            t.computers[0].unpack_host_backup(&file, &elsewhere, false),
+            Err(Error::NotABackup)
+        ));
+        assert!(!elsewhere.exists());
+        t.computers[0].set_meta("host_key", &hex::encode(pinned)).unwrap();
+    }
+
+    #[test]
+    fn a_host_file_from_before_a_revocation_is_refused_unless_used_anyway_and_then_revokes_again() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let file = kept.path().join("host.gvhost");
+        t.host.export_backup(&file).unwrap();
+        // Cleo's computer is revoked as lost after the file was made; Ana's computer saw it.
+        let cleo = t.computers[2].device().unwrap();
+        t.host.revoke_device(cleo, true).unwrap();
+        t.computers[0].note_revocations(&t.host.devices().unwrap()).unwrap();
+        assert_eq!(t.computers[0].known_revocations().unwrap(), vec![(cleo, true)]);
+
+        let staging = kept.path().join("staging");
+        assert!(matches!(
+            t.computers[0].unpack_host_backup(&file, &staging, false),
+            Err(Error::HostBackupStale)
+        ));
+        assert!(!staging.exists());
+        let moved = t.computers[0].unpack_host_backup(&file, &staging, true).unwrap();
+        let again = moved.devices().unwrap().into_iter().find(|d| d.id == cleo).unwrap();
+        assert!(again.revoked && again.lost);
+        drop(moved);
+
+        // A file made after it is taken as it is.
+        let newer = kept.path().join("newer.gvhost");
+        t.host.export_backup(&newer).unwrap();
+        let staging = kept.path().join("staging-newer");
+        t.computers[0].unpack_host_backup(&newer, &staging, false).unwrap();
+    }
+
+    #[test]
+    fn a_host_file_this_computer_is_not_in_is_refused() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let file = kept.path().join("host.gvhost");
+        let me = t.computers[0].device().unwrap();
+        // As a computer that joined after the file was made.
+        t.computers[0].set_meta("device", &Uuid::new_v4().to_string()).unwrap();
+        t.host.export_backup(&file).unwrap();
+        let staging = kept.path().join("staging");
+        assert!(matches!(
+            t.computers[0].unpack_host_backup(&file, &staging, true),
+            Err(Error::NotInHostBackup)
+        ));
+        assert!(!staging.exists());
+        t.computers[0].set_meta("device", &me.to_string()).unwrap();
+        // Or one revoked in it.
+        t.host.revoke_device(me, false).unwrap();
+        t.host.export_backup(&file).unwrap();
+        assert!(matches!(
+            t.computers[0].unpack_host_backup(&file, &staging, true),
+            Err(Error::NotInHostBackup)
+        ));
+    }
+
+    #[test]
+    fn unpacking_into_a_folder_of_the_callers_leaves_it_and_what_is_in_it() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let file = kept.path().join("host.gvhost");
+        t.host.export_backup(&file).unwrap();
+        let theirs = kept.path().join("theirs");
+        fs::create_dir(&theirs).unwrap();
+        fs::write(theirs.join("notes.txt"), b"mine").unwrap();
+        assert!(matches!(
+            t.computers[0].unpack_host_backup(&file, &theirs, false),
+            Err(Error::VaultExists)
+        ));
+        assert_eq!(fs::read(theirs.join("notes.txt")).unwrap(), b"mine");
+
+        // An empty one that fails stays, empty.
+        let empty = kept.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        let pinned = t.computers[0].host_key().unwrap();
+        t.computers[0].set_meta("host_key", &hex::encode([7u8; 32])).unwrap();
+        assert!(t.computers[0].unpack_host_backup(&file, &empty, false).is_err());
+        assert!(empty.is_dir());
+        assert_eq!(fs::read_dir(&empty).unwrap().count(), 0);
+        t.computers[0].set_meta("host_key", &hex::encode(pinned)).unwrap();
+        t.computers[0].unpack_host_backup(&file, &empty, false).unwrap();
+    }
+
+    #[test]
+    fn a_host_file_written_while_the_store_is_written_and_checkpointed_elsewhere_unpacks() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let dir = t.host.dir().to_owned();
+        // The serving host, as hostd export finds it: another connection, writing and checkpointing.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = {
+            let stop = stop.clone();
+            let serving = HostStore::open(&dir).unwrap();
+            std::thread::spawn(move || {
+                let mut n = 0u64;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    serving
+                        .conn
+                        .execute(
+                            "INSERT INTO meta (name, value) VALUES (?1, ?2)",
+                            params![format!("filler-{n}"), "x".repeat(4000)],
+                        )
+                        .unwrap();
+                    if n.is_multiple_of(8) {
+                        serving
+                            .conn
+                            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+                            .ok();
+                    }
+                    n += 1;
+                }
+            })
+        };
+        for round in 0..6 {
+            let file = kept.path().join(format!("host-{round}.gvhost"));
+            t.host.export_backup(&file).unwrap();
+            let staging = kept.path().join(format!("staging-{round}"));
+            t.computers[0].unpack_host_backup(&file, &staging, false).unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn a_host_file_whose_database_is_damaged_before_it_was_hashed_is_refused() {
+        let mut t = team();
+        let kept = tempfile::tempdir().unwrap();
+        let file = kept.path().join("host.gvhost");
+        let copy = t.host.copy_for_export(&file).unwrap();
+        // A page in the middle changed, as a torn copy would have it, and then hashed as it is.
+        let path = file.with_extension("db.tmp");
+        let mut bytes = fs::read(&path).unwrap();
+        let page = 4096;
+        assert!(bytes.len() >= 3 * page);
+        let at = bytes.len() / page / 2 * page + 100;
+        for b in &mut bytes[at..at + 64] {
+            *b ^= 0x5a;
+        }
+        fs::write(&path, &bytes).unwrap();
+        copy.write().unwrap();
+        let staging = kept.path().join("staging");
+        assert!(t.computers[0].unpack_host_backup(&file, &staging, false).is_err());
+        assert!(!staging.exists());
     }
 
     #[test]

@@ -17,6 +17,8 @@ const status = (fields: Partial<NetworkStatus>): NetworkStatus => ({
   canHost: true,
   defaultPort: 47917,
   device: null,
+  hostMovedHere: false,
+  hostRetired: false,
   ...fields
 });
 
@@ -189,5 +191,93 @@ describe('the network section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Put it back' }));
     expect(await screen.findByText(/The host is putting the backup back/)).toBeTruthy();
     expect(calls).toContainEqual(['restore_host_backup', { name: 'backup-1' }]);
+  });
+
+  it('moving the host here: a file older than a revocation is refused, then used anyway; a failure is shown and changes nothing', async () => {
+    const calls: [string, unknown][] = [];
+    let statuses = 0;
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'network_status') {
+        statuses += 1;
+        return status({ replica: true, hostAddress: '192.168.1.20:47917' });
+      }
+      if (command === 'devices') return [];
+      if (command === 'host_backups') return [];
+      if (command === 'move_host_here') {
+        if (!(args as { anyway: boolean }).anyway)
+          throw { code: 'host-backup-stale', message: 'That host file was made before a computer was revoked.' };
+        throw { code: 'host-failed', message: 'This computer could not sync with the host it started.' };
+      }
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Move the host here…' }));
+    fireEvent.change(screen.getByLabelText('Port'), { target: { value: '5000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Choose the file and serve here' }));
+    expect(await screen.findByText(/made before a computer was revoked/)).toBeTruthy();
+    expect(calls).toContainEqual(['move_host_here', { port: 5000, name: '', anyway: false }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Choose it again and use it anyway' }));
+    expect(await screen.findByText(/could not sync with the host it started/)).toBeTruthy();
+    expect(calls).toContainEqual(['move_host_here', { port: 5000, name: '', anyway: true }]);
+    // The section stays, with its error: nothing changed here.
+    expect(screen.getByRole('region', { name: 'Move the host here' })).toBeTruthy();
+    expect(statuses).toBe(1);
+  });
+
+  it('on a computer the host moved to, stopping keeps the store', async () => {
+    const calls: [string, unknown][] = [];
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'network_status')
+        return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917', hostMovedHere: true });
+      if (command === 'stop_hosting') return { kept: true };
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop serving on this network…' }));
+    expect(screen.getByText(/the only whole copy of the vault: it\s+is kept/)).toBeTruthy();
+    expect(screen.queryByLabelText(/The host is moving to another computer/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop serving' }));
+    await waitFor(() => expect(calls).toContainEqual(['stop_hosting', { anyway: false, moving: true }]));
+  });
+
+  it('stops serving to move the host, and then the old host computer can leave', async () => {
+    const calls: [string, unknown][] = [];
+    let retired = false;
+    let left = false;
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'network_status')
+        return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917', hostRetired: retired });
+      if (command === 'stop_hosting') {
+        retired = true;
+        return { kept: true };
+      }
+      if (command === 'sync_status')
+        return { replica: true, syncing: false, lastSynced: 1, error: null, watching: false, waiting: 0, refused: 0, photosWaiting: 0 };
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => (left = true)} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop serving on this network…' }));
+    fireEvent.click(screen.getByLabelText(/The host is moving to another computer/));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop serving' }));
+    await waitFor(() => expect(calls).toContainEqual(['stop_hosting', { anyway: false, moving: true }]));
+    expect(await screen.findByText(/no longer serves the vault/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Stop serving on this network…' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave this vault…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave and remove it' }));
+    await waitFor(() => expect(left).toBe(true));
+  });
+
+  it('stopping without moving leaves the vault on this computer alone', async () => {
+    const calls: [string, unknown][] = [];
+    mockIPC((command, args) => {
+      calls.push([command, args]);
+      if (command === 'network_status') return status({ replica: true, hostHere: true, hostAddress: '127.0.0.1:47917' });
+      if (command === 'stop_hosting') return { kept: false };
+    });
+    render(<Network people={PEOPLE} admin onChanged={() => {}} onLeft={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop serving on this network…' }));
+    expect(screen.getByText(/goes back to being on this computer alone/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop serving' }));
+    await waitFor(() => expect(calls).toContainEqual(['stop_hosting', { anyway: false, moving: false }]));
   });
 });

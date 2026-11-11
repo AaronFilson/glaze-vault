@@ -14,7 +14,10 @@ use std::path::Path;
 use uuid::Uuid;
 
 /// What a replica keeps in `meta` that a vault on one computer does not.
-const REPLICA_META: [&str; 12] = [
+const REPLICA_META: [&str; 15] = [
+    super::host_backup::KNOWN_REVOKED,
+    MOVED_HERE,
+    RETIRED,
     MODE,
     super::replica::HOST_CERTIFICATE,
     "device",
@@ -29,7 +32,44 @@ const REPLICA_META: [&str; 12] = [
     "offline_extended_until",
 ];
 
+/// Set on a computer that took the host over from its `.gvhost` file (ADR 37): its own vault is a
+/// replica with only its own people's keys, so the host's store there is the only whole one.
+const MOVED_HERE: &str = "host_moved_here";
+/// Set on a computer that stopped serving to move the host elsewhere (ADR 37): its vault stays a
+/// replica of the host, now elsewhere, until it leaves and joins it again.
+const RETIRED: &str = "host_retired";
+
 impl Vault {
+    /// Marks this computer as the one the host moved to.
+    pub fn mark_host_moved_here(&mut self) -> Result<()> {
+        self.set_host_retired(false)?;
+        self.set_meta(MOVED_HERE, "1")
+    }
+
+    /// Whether the host moved to this computer from its file, rather than this vault becoming it.
+    pub fn host_moved_here(&self) -> bool {
+        self.meta(MOVED_HERE).ok().flatten().is_some()
+    }
+
+    /// Marks this computer as no longer serving, though its vault still syncs over loopback.
+    pub fn set_host_retired(&mut self, retired: bool) -> Result<()> {
+        if !self.is_replica() {
+            return Err(Error::NotAllowed);
+        }
+        if retired {
+            self.set_meta(RETIRED, "1")
+        } else {
+            self.conn
+                .execute("DELETE FROM meta WHERE name = ?1", params![RETIRED])?;
+            Ok(())
+        }
+    }
+
+    /// Whether this computer served the vault and stopped, to move the host elsewhere.
+    pub fn host_retired(&self) -> bool {
+        self.meta(RETIRED).ok().flatten().is_some()
+    }
+
     /// Makes the host's store in `staging` (prepare_host), and this vault its first computer, for
     /// everyone in the vault, who all sign in here today. It has everything the host has, so it
     /// has nothing to push: each change is marked as the host's, under the same number. The host

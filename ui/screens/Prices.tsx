@@ -7,6 +7,7 @@ import { EMPTY_PRICES, money, recipeCost, type PricesContent } from '../prices';
 import { canEdit, collectionLabel, editableCollections } from '../team';
 import { ForkChoice } from './ForkChoice';
 import { CheckoutBar } from './CheckoutBar';
+import { useOpened } from '../useOpened';
 
 /** What the recipe costs, from the price list, if it has prices for any of it. */
 export function CostLine({ lines, list }: { lines: RecipeLine[]; list: PricesContent | null }) {
@@ -102,6 +103,7 @@ export function PriceList({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  useOpened('prices', list?.recordId);
 
   const setLine = (index: number, change: Partial<PricesContent['prices'][number]>) =>
     setDraft((now) => withEmptyLine({ ...now, prices: now.prices.map((p, i) => (i === index ? { ...p, ...change } : p)) }));

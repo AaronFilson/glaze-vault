@@ -1,7 +1,8 @@
 // The firing log (docs/adr/0014-firing-log-and-photos.md): every firing of the recipes this person
 // can open, newest first, and one at a time to fill in, with a test bar's readings and photos.
 import { useEffect, useRef, useState } from 'react';
-import { api, errorCode, errorText, onEvent, type Access, type RecipeHead, type VaultChanged } from '../api';
+import { api, errorCode, errorText, onEvent, type Access, type RecipeHead, type PhotoSigned, type VaultChanged } from '../api';
+import { photoSignedBy } from './RevisionHistory';
 import { isBody } from '../body';
 import {
   barResults,
@@ -299,6 +300,7 @@ function FiringEditor({
   const slip = draft.slip ?? EMPTY_SLIP;
   const results = barResults(draft.bar);
   const urls = usePhotoUrls(draft.photos);
+  const signatures = usePhotoSignatures(draft.photos, !!access?.team);
   const fired = useRevisionLines('recipe', recipe, draft.recipeNumber);
   // Lots go with the fired revision's materials, by their order; without their names (a role that
   // reads no chemistry, or a recipe this person cannot open), they are numbered.
@@ -791,6 +793,9 @@ function FiringEditor({
                     Remove
                   </button>
                 </figcaption>
+                {signatures[photo.id].text && (
+                  <p className={signatures[photo.id].bad ? 'warn' : 'hint'}>{signatures[photo.id].text}</p>
+                )}
               </figure>
             ))}
           </div>
@@ -943,4 +948,35 @@ function usePhotoUrls(photos: Photo[]): Record<string, string> {
     }
   }, [photos.map((p) => p.id).join(), fetched]);
   return urls;
+}
+
+/** What each photo's signature says, once asked (docs/adr/0019-signatures-and-audit-log.md), with
+ * the names the lock screen's list of people gives. A photo whose signature cannot be read says
+ * nothing. */
+function usePhotoSignatures(photos: Photo[], team: boolean): Record<string, { text: string; bad: boolean }> {
+  const [signed, setSigned] = useState<Record<string, PhotoSigned | null>>({});
+  // None until the list of people has come, so nobody is said to be gone from the vault meanwhile.
+  const [names, setNames] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    if (!team) return;
+    api
+      .status()
+      .then((status) => setNames(Object.fromEntries(status.people.map((p) => [p.id, p.name]))))
+      .catch(() => setNames({}));
+  }, [team]);
+  const ids = photos.map((p) => p.id).join();
+  useEffect(() => {
+    let live = true;
+    for (const photo of photos) {
+      if (photo.id in signed) continue;
+      api
+        .attachmentSigned(photo.id)
+        .then((found) => live && setSigned((now) => ({ ...now, [photo.id]: found })))
+        .catch(() => {});
+    }
+    return () => {
+      live = false;
+    };
+  }, [ids]);
+  return Object.fromEntries(photos.map((p) => [p.id, photoSignedBy(signed[p.id] ?? null, names, team)]));
 }

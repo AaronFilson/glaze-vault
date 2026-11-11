@@ -8,8 +8,8 @@ mod smoke;
 mod syncing;
 
 use glaze_vault_core::{
-    Attachment, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error, Grant, Kind,
-    LastBackup, MAX_ATTACHMENT_BYTES, Note, OwnBackup, Person, Revision, Role, SetAside, Settings, Vault,
+    Attachment, AttachmentSigned, AuditLog, BACKUP_EXTENSION, Capabilities, Collection, Credential, CustomRole, Error,
+    Grant, Kind, LastBackup, MAX_ATTACHMENT_BYTES, Note, OwnBackup, Person, Revision, Role, SetAside, Settings, Vault,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -464,6 +464,12 @@ fn get_attachment(state: State<AppState>, id: Uuid) -> CommandResult<tauri::ipc:
     // Tauri frees it once the page has it, without wiping it.
     with_vault(&state, |vault| vault.attachment(id))
         .map(|(_, mut bytes)| tauri::ipc::Response::new(std::mem::take(&mut *bytes)))
+}
+
+/// Who added an attachment, who signed it and whether it checks (ADR 19); none for one kept before signing.
+#[tauri::command(async)]
+fn get_attachment_signed(state: State<AppState>, id: Uuid) -> CommandResult<Option<AttachmentSigned>> {
+    with_vault(&state, |vault| vault.attachment_signed(id))
 }
 
 #[tauri::command(async)]
@@ -1204,6 +1210,7 @@ pub fn run() {
             choose_photo,
             add_attachment,
             get_attachment,
+            get_attachment_signed,
             get_settings,
             set_settings,
             lock_with_draft,
@@ -1257,6 +1264,7 @@ pub fn run() {
             network::restore_host_backup,
             network::save_host_backup,
             network::restore_host_from_file,
+            network::move_host_here,
             #[cfg(debug_assertions)]
             dev_screen,
             #[cfg(debug_assertions)]

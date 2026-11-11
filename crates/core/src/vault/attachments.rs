@@ -3,7 +3,7 @@
 //! their own table so a revision only names them. An attachment is never changed: a record stops
 //! naming it in a new revision, and erasing the record removes it.
 
-use super::{Change, Kind, Vault, audit, log_change, now_ms, parse_id};
+use super::{Change, Kind, SignatureCheck, Signed, Vault, audit, items, log_change, now_ms, parse_id};
 use crate::crypto;
 use crate::error::{Error, Result};
 use crate::signing::{self, AttachmentFacts};
@@ -171,6 +171,39 @@ impl Vault {
     }
 }
 
+impl Vault {
+    /// Who signed an attachment, and whether it checks, for a photo's details: the signature is
+    /// over what is known of it and the hash of its bytes, and the bytes kept, once they are here,
+    /// must have that hash. None for one kept before attachments were signed.
+    pub fn attachment_signed(&self, id: Uuid) -> Result<Option<AttachmentSigned>> {
+        let found = self.signed_attachment_row(&id)?.ok_or(Error::NotFound)?;
+        self.readable(&found.row.collection())?;
+        let Some(signed) = found.signed.filter(|_| !found.row.sha256().is_empty()) else {
+            return Ok(None);
+        };
+        let payload =
+            signing::attachment_payload(&found.row.facts(&self.keyring.vault_id), signed.role, &signed.signer);
+        let mut check = self.trust()?.check(&signed, &payload);
+        if found.length > 0 && items::ciphertext_hash(&self.conn, &id, &found.nonce)? != found.row.sha256() {
+            check.check = SignatureCheck::Bad;
+        }
+        Ok(Some(AttachmentSigned {
+            author: found.row.author(),
+            signed: check,
+        }))
+    }
+}
+
+/// Who added an attachment, and who signed it, as what, and whether it checks: a photo moved to
+/// another collection, or vouched for by an admin, is signed by them, not its author.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentSigned {
+    pub author: Uuid,
+    #[serde(flatten)]
+    pub signed: Signed,
+}
+
 /// Binds an attachment's bytes to it, its record and collection, and what kind of file it is.
 pub(super) fn aad(id: &Uuid, record_id: &Uuid, kind: &str, collection_id: &Uuid, media_type: &str) -> Vec<u8> {
     format!(
@@ -250,6 +283,51 @@ mod tests {
         let deleted = vault.delete(Kind::Firing, firing.revision_id).unwrap();
         vault.erase(Kind::Firing, deleted.record_id).unwrap();
         assert!(matches!(vault.attachment(added.id), Err(Error::NotFound)));
+    }
+
+    #[test]
+    fn a_photos_signature_says_who_added_it_and_whether_its_bytes_are_as_signed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut vault, _) = Vault::create(dir.path(), PASSWORD).unwrap();
+        let firing = vault.save(Kind::Firing, None, &json!({ "cone": "6" })).unwrap();
+        let photo = vault
+            .add_attachment(Kind::Firing, firing.record_id, "image/jpeg", b"a test tile")
+            .unwrap();
+        let found = vault.attachment_signed(photo.id).unwrap().unwrap();
+        assert_eq!(found.author, vault.me().id);
+        let signed = found.signed;
+        assert_eq!(signed.by, vault.me().id);
+        assert_eq!(signed.signed_as, crate::vault::SignedAs::Author);
+        assert_eq!(signed.check, SignatureCheck::Good);
+
+        // Bytes changed around the app no longer match the hash the signature covers.
+        vault
+            .conn
+            .execute(
+                "UPDATE attachments SET ciphertext = zeroblob(length(ciphertext)) WHERE id = ?1",
+                params![photo.id.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            vault.attachment_signed(photo.id).unwrap().unwrap().signed.check,
+            SignatureCheck::Bad
+        );
+        // So does what is said of it.
+        let other = vault
+            .add_attachment(Kind::Firing, firing.record_id, "image/png", b"another")
+            .unwrap();
+        vault
+            .conn
+            .execute(
+                "UPDATE attachments SET created_at = created_at + 1 WHERE id = ?1",
+                params![other.id.to_string()],
+            )
+            .unwrap();
+        assert_eq!(
+            vault.attachment_signed(other.id).unwrap().unwrap().signed.check,
+            SignatureCheck::Bad
+        );
+        assert!(matches!(vault.attachment_signed(Uuid::new_v4()), Err(Error::NotFound)));
     }
 
     #[test]

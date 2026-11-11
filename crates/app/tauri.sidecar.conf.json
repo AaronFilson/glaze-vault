@@ -4,6 +4,10 @@
     "windows": {
       "nsis": {
         "installerHooks": "windows/hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["windows/host-service.wxs"],
+        "componentRefs": ["HostServiceControl"]
       }
     }
   }

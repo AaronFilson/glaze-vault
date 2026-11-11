@@ -363,6 +363,25 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y xvfb libfuse2
 
+      # On Windows the self-test also updates the MSI while hostd serves a team's store the dev
+      # client makes (docs/adr/0038-hardening-hostd.md): to a second MSI, the same build one patch
+      # version later, so the update is a major upgrade, as a real one is. Only the app crate is
+      # built again for it. It goes to target/msi-later, outside bundle/, so it is not uploaded.
+      - name: Build the dev client and a later MSI for the MSI update test
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --locked -p glaze-vault-hostd --example dev-client
+          later=$(node -p "require('./package.json').version.replace(/\d+$/, (n) => +n + 1)")
+          mv target/release/bundle/msi target/msi-earlier
+          npx tauri build --ci --config crates/app/tauri.sidecar.conf.json --config "{\"version\":\"$later\"}" --bundles msi 2>&1 | tee later.log || {
+            node .github/annotate.cjs later.log "tauri build of the later MSI failed"
+            exit 1
+          }
+          mv target/release/bundle/msi target/msi-later
+          mv target/msi-earlier target/release/bundle/msi
+
       - name: Install and open each installer
         shell: bash
         run: node .github/smoke-installer.cjs

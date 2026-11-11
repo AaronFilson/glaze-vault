@@ -342,9 +342,10 @@ pub(super) fn check_attachment(
     trust: &Trust,
     vault: &Uuid,
     item: &AttachmentItem,
+    hash: &[u8],
 ) -> std::result::Result<SignedBy, Refusal> {
     let signed = signed_by(&item.signed)?;
-    if store::attachment_hash(&item.nonce, &item.ciphertext) != item.sha256 {
+    if hash != item.sha256 {
         return Err(Refusal::BadSignature);
     }
     trust.check_now(&signed, &attachment_payload(vault, item, &signed))?;
@@ -470,13 +471,88 @@ pub(super) fn stage(conn: &Connection, id: &Uuid, device: Option<Uuid>, offset: 
     Ok(())
 }
 
-/// The pieces of an attachment's ciphertext that have arrived, joined.
-pub(super) fn staged(conn: &Connection, id: &Uuid) -> Result<Vec<u8>> {
-    let pieces = conn
-        .prepare("SELECT bytes FROM incoming_attachments WHERE id = ?1 ORDER BY offset")?
-        .query_map(params![id.to_string()], |row| row.get::<_, Vec<u8>>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(pieces.concat())
+/// The hash an attachment's `sha256` holds, of its nonce and the pieces of its ciphertext that
+/// have arrived, read a piece at a time.
+pub(super) fn staged_hash(conn: &Connection, id: &Uuid, nonce: &[u8]) -> Result<Vec<u8>> {
+    use sha2::Digest;
+    let mut hasher = store::attachment_hasher(nonce);
+    let mut statement = conn.prepare("SELECT bytes FROM incoming_attachments WHERE id = ?1 ORDER BY offset")?;
+    let mut rows = statement.query(params![id.to_string()])?;
+    while let Some(row) = rows.next()? {
+        hasher.update(blob_of(row.get_ref(0)?)?);
+    }
+    Ok(hasher.finalize().to_vec())
+}
+
+/// Moves the pieces of an attachment's ciphertext that have arrived into the attachment stored
+/// without its bytes, a piece at a time: its BLOB is made at its full length, then each piece is
+/// written into it, so the photo is never whole in memory.
+pub(super) fn unstage_into(conn: &Connection, id: &Uuid) -> Result<()> {
+    let (total, _) = staged_length(conn, id)?;
+    let rowid: i64 = conn.query_row(
+        "UPDATE attachments SET ciphertext = zeroblob(?1) WHERE id = ?2 RETURNING rowid",
+        params![total as i64, id.to_string()],
+        |row| row.get(0),
+    )?;
+    {
+        let mut blob = conn.blob_open("main", "attachments", "ciphertext", rowid, false)?;
+        let mut statement =
+            conn.prepare("SELECT offset, bytes FROM incoming_attachments WHERE id = ?1 ORDER BY offset")?;
+        let mut rows = statement.query(params![id.to_string()])?;
+        while let Some(row) = rows.next()? {
+            let offset: i64 = row.get(0)?;
+            blob.write_at(blob_of(row.get_ref(1)?)?, offset as usize)?;
+        }
+    }
+    unstage(conn, id)
+}
+
+/// The hash of a stored attachment's nonce and ciphertext, read from its BLOB a piece at a time
+/// through one handle, front to back: a handle opened again for each piece would walk the BLOB's
+/// pages from the start each time.
+pub(super) fn ciphertext_hash(conn: &Connection, id: &Uuid, nonce: &[u8]) -> Result<Vec<u8>> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut hasher = store::attachment_hasher(nonce);
+    let rowid: i64 = conn
+        .query_row(
+            "SELECT rowid FROM attachments WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(Error::NotFound)?;
+    let mut blob = conn.blob_open("main", "attachments", "ciphertext", rowid, true)?;
+    let mut piece = vec![0; CHUNK_BYTES];
+    loop {
+        let read = blob.read(&mut piece)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&piece[..read]);
+    }
+    Ok(hasher.finalize().to_vec())
+}
+
+/// Up to `CHUNK_BYTES` of an attachment's ciphertext from `offset`, and its whole length, read
+/// from its BLOB without loading the rest; none if there is no such attachment.
+pub(super) fn ciphertext_piece(conn: &Connection, id: &Uuid, offset: u64) -> Result<Option<(u64, Vec<u8>)>> {
+    let rowid: Option<i64> = conn
+        .query_row(
+            "SELECT rowid FROM attachments WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(rowid) = rowid else {
+        return Ok(None);
+    };
+    let blob = conn.blob_open("main", "attachments", "ciphertext", rowid, true)?;
+    let total = blob.len() as u64;
+    let start = offset.min(total) as usize;
+    let mut bytes = vec![0; (total as usize - start).min(CHUNK_BYTES)];
+    blob.read_at_exact(&mut bytes, start)?;
+    Ok(Some((total, bytes)))
 }
 
 pub(super) fn unstage(conn: &Connection, id: &Uuid) -> Result<()> {
@@ -485,4 +561,11 @@ pub(super) fn unstage(conn: &Connection, id: &Uuid) -> Result<()> {
         params![id.to_string()],
     )?;
     Ok(())
+}
+
+fn blob_of(value: rusqlite::types::ValueRef<'_>) -> Result<&[u8]> {
+    match value {
+        rusqlite::types::ValueRef::Blob(bytes) => Ok(bytes),
+        _ => Err(Error::Corrupt("a piece of a photo is not bytes".into())),
+    }
 }

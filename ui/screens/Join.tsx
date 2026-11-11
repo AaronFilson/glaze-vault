@@ -6,7 +6,8 @@ import { api, errorText, type FoundHost, type Joining, type Platform } from '../
  * the host or type its address, type the code an admin reads out, and wait for them to approve
  * this computer. Then its people sign in with the passwords they have. A phone or tablet can scan
  * the QR code the admin's screen shows instead, which also pins the host's key
- * (docs/adr/0029-phones-as-replicas.md). */
+ * (docs/adr/0029-phones-as-replicas.md), or choose a host it found, which only fills in the
+ * address (docs/adr/0036-photo-pieces-audit-and-phone-discovery.md). */
 export function Join({
   onJoined,
   onBack,
@@ -82,6 +83,12 @@ export function Join({
           Another computer serves the team's vault. Ask an admin to choose <strong>Pair a computer</strong> in Settings,
           Network, and {phone ? 'scan the code their screen shows, or type it' : 'type the code they read out'}.
         </p>
+        {phone && (
+          <p className="hint">
+            Without scanning, choose the host found on this network, or type its address, and type the pairing code. The
+            code proves it is your vault's host, so check the key below with the admin as well.
+          </p>
+        )}
         {platform === 'ios' && (
           <p className="hint">
             The first time, this iPhone or iPad asks whether Glaze Vault may find devices on your local network. Choose

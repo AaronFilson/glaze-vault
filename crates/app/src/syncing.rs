@@ -138,9 +138,9 @@ impl Syncing {
         let mut synced = net::sync_shared(&AppVault(&state.vault), &address).await;
         // The host's address may have changed: look for it on the network by its vault's tag.
         if matches!(synced, Err(Error::Io(_)))
-            && let Some(found) = self.find_host(app, &address)
+            && let Some(found) = self.find_host(app, &address).await
         {
-            synced = net::sync_shared(&AppVault(&state.vault), &found).await;
+            synced = Ok(found);
         }
         self.update(app, |s| {
             s.syncing = false;
@@ -174,9 +174,12 @@ impl Syncing {
         synced
     }
 
-    /// The host advertising this vault's tag, at an address other than `tried`, kept as the
-    /// replica's host address if the sync that follows can use it.
-    fn find_host(&self, app: &AppHandle, tried: &str) -> Option<String> {
+    /// Looks for the host advertising this vault's tag at an address other than `tried`, and
+    /// syncs with each address found until one works. Only an address the sync used, so one whose
+    /// host showed the key this vault pinned, is kept as the replica's host address: anyone can
+    /// advertise the tag, and one that does must not move a computer off its host. If none works,
+    /// the address it had is kept.
+    async fn find_host(&self, app: &AppHandle, tried: &str) -> Option<Report> {
         let state = app.state::<AppState>();
         let tag = {
             let vault = state.vault.lock().unwrap();
@@ -187,19 +190,49 @@ impl Syncing {
             return None;
         }
         let found = net::browse(BROWSE).ok()?;
-        let host = found.iter().find(|f| f.vault.as_deref() == Some(tag.as_str()))?;
-        let ip = host.addresses.iter().find(|a| a.is_ipv4()).or(host.addresses.first())?;
-        let address = match ip {
-            std::net::IpAddr::V6(ip) => format!("[{ip}]:{}", host.port),
-            ip => format!("{ip}:{}", host.port),
-        };
-        if address == tried {
-            return None;
-        }
+        let shared = &state.vault;
+        let (address, report) = first_that_syncs(candidates(&found, &tag, tried), |address| async move {
+            net::sync_shared(&AppVault(shared), &address).await
+        })
+        .await?;
         let mut vault = state.vault.lock().unwrap();
         vault.as_mut()?.set_host_address(&address).ok()?;
-        Some(address)
+        Some(report)
     }
+}
+
+/// Every address of every host advertising `tag`, but `tried`: IPv4 first for each host, as a
+/// phone reaches it more often.
+fn candidates(found: &[net::Found], tag: &str, tried: &str) -> Vec<String> {
+    let mut addresses = Vec::new();
+    for host in found.iter().filter(|f| f.vault.as_deref() == Some(tag)) {
+        let mut ips = host.addresses.clone();
+        ips.sort_by_key(|ip| !ip.is_ipv4());
+        for ip in ips {
+            let address = match ip {
+                std::net::IpAddr::V6(ip) => format!("[{ip}]:{}", host.port),
+                ip => format!("{ip}:{}", host.port),
+            };
+            if address != tried && !addresses.contains(&address) {
+                addresses.push(address);
+            }
+        }
+    }
+    addresses
+}
+
+/// The first address a sync with works, and what it brought.
+async fn first_that_syncs<F, Fut>(addresses: Vec<String>, mut sync: F) -> Option<(String, Report)>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Report>>,
+{
+    for address in addresses {
+        if let Ok(report) = sync(address.clone()).await {
+            return Some((address, report));
+        }
+    }
+    None
 }
 
 /// Starts the thread that syncs in the background, for as long as the app runs.
@@ -286,5 +319,60 @@ async fn watching(app: &AppHandle) {
         }
         syncing.update(app, |s| s.watching = false);
         tokio::time::sleep(TICK).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn host(vault: &str, addresses: &[&str], port: u16) -> net::Found {
+        net::Found {
+            name: vault.into(),
+            addresses: addresses.iter().map(|a| a.parse::<IpAddr>().unwrap()).collect(),
+            port,
+            vault: Some(vault.into()),
+        }
+    }
+
+    #[test]
+    fn every_address_advertising_the_vault_is_a_candidate_but_the_one_tried() {
+        let found = [
+            host("ours", &["fe80::1", "192.168.1.9"], 7400),
+            host("theirs", &["192.168.1.5"], 7400),
+            host("ours", &["192.168.1.20"], 7400),
+        ];
+        assert_eq!(
+            candidates(&found, "ours", "192.168.1.20:7400"),
+            ["192.168.1.9:7400", "[fe80::1]:7400"]
+        );
+    }
+
+    #[test]
+    fn the_address_kept_is_the_first_a_sync_works_with_and_none_if_none_does() {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        // A computer advertising the vault's tag without its host's key fails the pinned sync;
+        // the real host found after it is the one kept.
+        let tried = std::cell::RefCell::new(Vec::new());
+        let found = runtime.block_on(first_that_syncs(
+            vec!["10.0.0.6:7400".into(), "10.0.0.7:7400".into(), "10.0.0.8:7400".into()],
+            |address| {
+                tried.borrow_mut().push(address.clone());
+                async move {
+                    match address.as_str() {
+                        "10.0.0.7:7400" => Ok(Report::default()),
+                        _ => Err(Error::Protocol("not the host this vault pinned".into())),
+                    }
+                }
+            },
+        ));
+        assert_eq!(found.map(|(address, _)| address).as_deref(), Some("10.0.0.7:7400"));
+        assert_eq!(*tried.borrow(), ["10.0.0.6:7400", "10.0.0.7:7400"]);
+
+        let none = runtime.block_on(first_that_syncs(vec!["10.0.0.6:7400".into()], |_| async {
+            Err::<Report, _>(Error::Protocol("not the host this vault pinned".into()))
+        }));
+        assert!(none.is_none());
     }
 }

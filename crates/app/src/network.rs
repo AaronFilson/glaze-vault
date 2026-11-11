@@ -107,6 +107,10 @@ pub struct NetworkStatus {
     default_port: u16,
     /// This computer, as the host knows it.
     device: Option<Uuid>,
+    /// The host moved here from its file (ADR 37): this computer's store is the only whole one.
+    host_moved_here: bool,
+    /// This computer served the vault and stopped, to move the host elsewhere (ADR 37).
+    host_retired: bool,
 }
 
 #[tauri::command(async)]
@@ -121,6 +125,8 @@ pub fn network_status(state: State<AppState>) -> CommandResult<NetworkStatus> {
         can_host: hostd().is_some(),
         default_port: DEFAULT_PORT,
         device: vault.device().ok(),
+        host_moved_here: vault.host_moved_here(),
+        host_retired: vault.host_retired(),
     })
 }
 
@@ -246,24 +252,43 @@ pub fn start_hosting(
     let host: HostStore = vault.convert_to_host(&staging, &format!("127.0.0.1:{port}"))?;
     // Closed, so its database is whole in one file before it is copied.
     drop(host);
+    if let Err(e) = serve_staging(&network, &hostd, &staging, port, &name, vault) {
+        vault.stop_syncing()?;
+        return Err(CommandError::new("host-failed", e));
+    }
+    first_sync(vault)
+}
+
+/// Has the system serve the host's store in `staging` as a service (or, in development, a child),
+/// and removes the staging copy.
+fn serve_staging(
+    network: &Network,
+    hostd: &Path,
+    staging: &Path,
+    port: u16,
+    name: &str,
+    vault: &mut Vault,
+) -> Result<(), String> {
     let served = if no_service() {
-        serve_as_child(&network, &hostd, &staging, port, vault)
+        serve_as_child(network, hostd, staging, port, vault)
     } else {
         let port_text = port.to_string();
         let from = staging.to_string_lossy().into_owned();
         let installed = elevated(
-            &hostd,
-            &["install", "--from", &from, "--port", &port_text, "--name", &name],
+            hostd,
+            &["install", "--from", &from, "--port", &port_text, "--name", name],
         );
-        let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_dir_all(staging);
         installed
     };
-    if let Err(e) = served {
-        let _ = fs::remove_dir_all(&staging);
-        vault.stop_syncing()?;
-        return Err(CommandError::new("host-failed", e));
+    if served.is_err() {
+        let _ = fs::remove_dir_all(staging);
     }
-    // The service takes a moment to start listening.
+    served
+}
+
+/// The first sync with a host just started here; the service takes a moment to start listening.
+fn first_sync(vault: &mut Vault) -> CommandResult<SyncReport> {
     let mut last = None;
     for _ in 0..20 {
         match sync(vault) {
@@ -273,6 +298,106 @@ pub fn start_hosting(
         std::thread::sleep(Duration::from_millis(500));
     }
     Err(last.expect("tried"))
+}
+
+/// Moves the vault's host to this computer (docs/adr/0037-moving-the-host.md): asks for the
+/// `.gvhost` file the old host or an admin's computer saved, opens it with the organization's key,
+/// and serves it here, on `port`, advertised as `name`, as `start_hosting` does. This computer must
+/// sync with that host already, and the old host must have stopped: while it still answers, this
+/// refuses, so two hosts never serve one vault. A file older than a revocation this computer knows
+/// of is refused unless `anyway` (`host-backup-stale`). If the service does not start, or this
+/// computer cannot sync with it, it is removed again and this computer goes back to the old
+/// host's address. None if the person cancelled.
+#[tauri::command(async)]
+pub fn move_host_here(
+    window: WebviewWindow,
+    state: State<AppState>,
+    network: State<Network>,
+    port: Option<u16>,
+    name: String,
+    anyway: bool,
+) -> CommandResult<Option<SyncReport>> {
+    let hostd = hostd()
+        .ok_or_else(|| CommandError::new("no-hostd", "This copy of Glaze Vault cannot serve: hostd is missing."))?;
+    let port = port.unwrap_or(DEFAULT_PORT);
+    let name = match name.trim() {
+        "" => "Glaze Vault host".to_owned(),
+        name => name.to_owned(),
+    };
+    let Some(path) = crate::open_dialog(
+        &window,
+        "Choose the host's file",
+        "Glaze Vault host backup",
+        &[HOST_BACKUP_EXTENSION],
+    )?
+    else {
+        return Ok(None);
+    };
+    let staging = state.dir.with_file_name("host-staging");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(crate::file_error)?;
+    }
+    let mut vault = state.vault.lock().unwrap();
+    let vault = vault.as_mut().ok_or_else(locked)?;
+    let old_address = vault.host_address()?.ok_or(Error::NeedsHost)?;
+    if old_address.starts_with("127.0.0.1:") {
+        return Err(CommandError::new("host-here", "This computer is the host already."));
+    }
+    if sync(vault).is_ok() {
+        return Err(CommandError::new(
+            "old-host-serving",
+            "The old host still serves. Stop it there first (Stop serving, or hostd uninstall), then move it here.",
+        ));
+    }
+    if let Err(e) = vault.unpack_host_backup(&path, &staging, anyway) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(e.into());
+    }
+    vault.set_host_address(&format!("127.0.0.1:{port}"))?;
+    if let Err(e) = serve_staging(&network, &hostd, &staging, port, &name, vault) {
+        vault.set_host_address(&old_address)?;
+        return Err(CommandError::new("host-failed", e));
+    }
+    match first_sync(vault) {
+        Ok(report) => {
+            vault.mark_host_moved_here()?;
+            Ok(Some(report))
+        }
+        Err(e) => {
+            // Not a host this computer can use: it goes, and the old address comes back. The file
+            // is as it was, to try again.
+            let removed = remove_service(&network, &hostd, &state.dir, false);
+            vault.set_host_address(&old_address)?;
+            let mut message = format!(
+                "This computer could not sync with the host it started, so it was stopped again: {}",
+                e.message
+            );
+            if let Err(removing) = removed {
+                message.push_str(&format!(
+                    " Removing the service failed too ({removing}): run hostd uninstall here as an administrator."
+                ));
+            }
+            Err(CommandError::new("host-failed", message))
+        }
+    }
+}
+
+/// Stops the host this computer serves: the child in development, or the service. Unless
+/// `keep_data`, the store goes with it.
+fn remove_service(network: &Network, hostd: &Path, dir: &Path, keep_data: bool) -> Result<(), String> {
+    let child = network.child.lock().unwrap().take();
+    match child {
+        Some(mut child) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            if !keep_data {
+                let _ = fs::remove_dir_all(dir.with_file_name("host-staging"));
+            }
+            Ok(())
+        }
+        None if keep_data => elevated(hostd, &["uninstall", "--keep-data"]),
+        None => elevated(hostd, &["uninstall"]),
+    }
 }
 
 /// In development: hostd run in the foreground as a child, serving the staging folder itself.
@@ -297,11 +422,29 @@ fn serve_as_child(network: &Network, hostd: &Path, dir: &Path, port: u16, vault:
     Err("hostd did not start".into())
 }
 
-/// Stops serving: syncs a last time, has the system remove the service and the host's store, and
-/// makes this vault one on this computer alone again. Computers paired with the host keep what
-/// they had, and can no longer sync. Unless `anyway`, a failed last sync stops it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stopped {
+    /// The host's store was kept on this computer, for `hostd export` to take elsewhere, and this
+    /// vault still syncs with the host, wherever it goes next (ADR 37).
+    kept: bool,
+}
+
+/// Stops serving: syncs a last time and has the system remove the service. Unless `anyway`, a
+/// failed last sync stops it.
+///
+/// Usually the host's store goes too, and this vault is one on this computer alone again;
+/// computers paired with the host keep what they had, and can no longer sync. When `moving` the
+/// host to another computer, or on a computer the host moved to (whose vault has only its own
+/// people's keys, so the store is the only whole one), the store is kept for `hostd export` and
+/// this vault stays the host's replica, to leave and join the host again where it goes.
 #[tauri::command(async)]
-pub fn stop_hosting(state: State<AppState>, network: State<Network>, anyway: bool) -> CommandResult<()> {
+pub fn stop_hosting(
+    state: State<AppState>,
+    network: State<Network>,
+    anyway: bool,
+    moving: bool,
+) -> CommandResult<Stopped> {
     let hostd = hostd().ok_or_else(|| CommandError::new("no-hostd", "hostd is missing."))?;
     let mut vault = state.vault.lock().unwrap();
     let vault = vault.as_mut().ok_or_else(locked)?;
@@ -310,17 +453,15 @@ pub fn stop_hosting(state: State<AppState>, network: State<Network>, anyway: boo
     {
         return Err(e);
     }
-    let child = network.child.lock().unwrap().take();
-    match child {
-        Some(mut child) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = fs::remove_dir_all(state.dir.with_file_name("host-staging"));
-        }
-        None => elevated(&hostd, &["uninstall"]).map_err(|e| CommandError::new("host-failed", e))?,
-    }
+    let keep = moving || vault.host_moved_here();
+    remove_service(&network, &hostd, &state.dir, keep).map_err(|e| CommandError::new("host-failed", e))?;
     *network.pairing.lock().unwrap() = None;
-    Ok(vault.stop_syncing()?)
+    if keep {
+        vault.set_host_retired(true)?;
+    } else {
+        vault.stop_syncing()?;
+    }
+    Ok(Stopped { kept: keep })
 }
 
 #[derive(Serialize)]
@@ -461,7 +602,16 @@ fn asking(state: &State<AppState>) -> CommandResult<(net::Asking, String)> {
 #[tauri::command(async)]
 pub fn devices(state: State<AppState>) -> CommandResult<Vec<DeviceInfo>> {
     let (asking, address) = asking(&state)?;
-    on_network(move || async move { net::devices(&asking, &address).await }).map_err(network_error)
+    let devices = on_network(move || async move { net::devices(&asking, &address).await }).map_err(network_error)?;
+    note_revocations(&state, &devices);
+    Ok(devices)
+}
+
+/// Remembers the computers the host says are revoked, to tell a host file made before (ADR 37).
+fn note_revocations(state: &AppState, devices: &[DeviceInfo]) {
+    if let Some(vault) = state.vault.lock().unwrap().as_mut() {
+        let _ = vault.note_revocations(devices);
+    }
 }
 
 /// Runs hostd with an administrator's rights, which the system asks the person for.
@@ -712,7 +862,12 @@ pub fn leave_vault(state: State<AppState>) -> CommandResult<()> {
     if !open.is_replica() {
         return Err(Error::NotAllowed.into());
     }
-    if open.host_address()?.is_some_and(|a| a.starts_with("127.0.0.1:")) {
+    // A computer that served the vault leaves once it no longer does (ADR 37): stopped to move
+    // the host, or its service removed by hand, so nothing answers on loopback.
+    if open.host_address()?.is_some_and(|a| a.starts_with("127.0.0.1:"))
+        && !open.host_retired()
+        && sync(vault.as_mut().expect("open")).is_ok()
+    {
         return Err(CommandError::new(
             "host-here",
             "This computer serves the vault: stop serving instead.",
@@ -854,6 +1009,7 @@ pub fn revoke_device(state: State<AppState>, device: Uuid, lost: bool) -> Comman
     let (asking, address) = asking(&state)?;
     let devices = on_network(move || async move { net::revoke_device(&asking, &address, device, lost).await })
         .map_err(network_error)?;
+    note_revocations(&state, &devices);
     let people = devices
         .iter()
         .find(|d| d.id == device)

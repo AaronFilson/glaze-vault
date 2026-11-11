@@ -9,6 +9,9 @@
 //!                                     this person's computer as a replica, without pairing; with
 //!                                     --add, others' too, so an admin there can name them
 //!   dev-client sync <dir> <address> --as NAME
+//!   dev-client unpack <dir> <file.gvhost> <host-dir> --as NAME
+//!                                     an admin: a host's store from `hostd export`'s file, for
+//!                                     a new host computer (docs/adr/0037-moving-the-host.md)
 //!   dev-client pair-start <dir> <address> --as NAME [--for NAME...]
 //!                                     an admin: show a code, wait, and approve the computer
 //!   dev-client pair <address> <code> <device-name> <dir>
@@ -84,6 +87,7 @@ async fn main() {
         ["prepare", vault, host] => prepare(vault, host, &flags),
         ["join-local", vault, host, dir] => join_local(vault, host, dir, &flags),
         ["sync", dir, to] => sync(dir, to, &flags).await,
+        ["unpack", dir, file, host] => unpack(dir, file, host, &flags),
         ["pair-start", dir, to] => pair_start(dir, to, &flags).await,
         ["pair", to, code, name, dir] => {
             net::pair(&address(to), code, name, Path::new(dir), &DeviceKey::generate(), None)
@@ -151,6 +155,18 @@ fn join_local(vault_dir: &str, host: &str, dir: &str, flags: &[(String, String)]
     let package = host.join_package(device.id).map_err(|e| e.to_string())?;
     Vault::join(Path::new(dir), &package, &device).map_err(|e| e.to_string())?;
     println!("joined as {name}");
+    Ok(())
+}
+
+fn unpack(dir: &str, file: &str, host: &str, flags: &[(String, String)]) -> Result<()> {
+    let mut vault = unlock(Path::new(dir), flag(flags, "as")?)?;
+    let host = vault
+        .unpack_host_backup(Path::new(file), Path::new(host), false)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "unpacked; the host's key is still {}",
+        net::fingerprint(&host.identity())
+    );
     Ok(())
 }
 

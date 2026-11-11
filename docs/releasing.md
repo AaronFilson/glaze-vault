@@ -13,6 +13,38 @@ warning people about an unknown developer.
 Linux packages are not signed; that is normal for AppImage, deb and rpm downloads
 ([Tauri](https://v2.tauri.app/distribute/sign/linux/)).
 
+## Where the keys live
+
+Every signing secret lives in GitHub, as a secret of the repository's **`release` environment**,
+not as a plain repository secret. The environment only runs for `v*` tags, and each release
+waits for Aaron to approve it under the run's **Review deployments**. So a branch, a pull request
+or a changed workflow cannot read the keys, and nothing is signed without that click. A ruleset
+lets only repository admins create, move or delete `v*` tags.
+
+Set this up once, from the repository folder, with `gh` logged in as Aaron:
+
+```sh
+bash scripts/release/github-setup.sh
+```
+
+Secrets then go in with `scripts/release/set-secrets.sh`, which reads them from the key files and
+from hidden prompts, so they never pass through the clipboard or shell history. `bash
+scripts/release/set-secrets.sh list` shows which are set.
+
+GitHub keeps secrets write-only: nobody, Aaron included, can read one back. GitHub is where CI
+uses the keys, not their backup. Keep each key file and password offline too (an encrypted USB
+drive and the password manager); a lost updater key means every installed copy is reinstalled
+by hand.
+
+| Secret or variable (environment `release`) | From | Set with |
+| ------------------------------------------ | ---- | -------- |
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `npx tauri signer generate` | `set-secrets.sh updater` |
+| `APPLE_CERTIFICATE` and five more `APPLE_*` | Apple Developer Program | `set-secrets.sh apple certificate.p12` |
+| `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`; variables `AZURE_SIGNING_*` | Azure Artifact Signing | `set-secrets.sh azure` |
+
+Phone store keys (an Android upload keystore, an App Store Connect API key) will join the same
+environment at phase 3's store release.
+
 ## 1. The updater key (do this first)
 
 Installed copies only accept an update signed with this key. The public half goes into the app;
@@ -31,10 +63,10 @@ the private half signs each release in CI.
    line) into `plugins.updater.pubkey` in `crates/app/tauri.conf.json`, and commit it. The public
    key is not a secret. Until it is there, builds leave the updater out and Settings says so.
 
-3. Give CI the private key. In GitHub, open the repository's **Settings → Secrets and variables →
-   Actions** and add two repository secrets:
-   - `TAURI_SIGNING_PRIVATE_KEY`: the contents of `~/.tauri/glaze-vault.key`.
-   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password.
+3. Give CI the private key: `bash scripts/release/set-secrets.sh updater`. It puts the contents of
+   `~/.tauri/glaze-vault.key` into `TAURI_SIGNING_PRIVATE_KEY` and asks for the password, which
+   becomes `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, both in the `release` environment. It also prints
+   the public key for step 2.
 
 4. Keep a copy of the key file and its password somewhere safe and offline, such as an encrypted
    USB drive. **If the key or its password is lost, installed copies can never update again:** a
@@ -66,7 +98,9 @@ Security** and chooses **Open Anyway** (Control-click → Open no longer works s
 
 4. Make an app-specific password for notarization at [account.apple.com](https://account.apple.com)
    (**Sign-In and Security → App-Specific Passwords**).
-5. Add these repository secrets:
+5. Run `bash scripts/release/set-secrets.sh apple certificate.p12`. It base64-encodes the `.p12`
+   itself (so step 3's `openssl` line is only needed by hand) and asks for the rest. These are
+   the `release` environment's secrets it sets:
 
    | Secret                       | Value                                                          |
    | ---------------------------- | -------------------------------------------------------------- |
@@ -103,8 +137,9 @@ on a hardware token or a cloud HSM, which is awkward in CI.
 3. Create a **Public Trust** certificate profile.
 4. Create an app registration (service principal) with a client secret, and give it the
    **Artifact Signing Certificate Profile Signer** role on the signing account.
-5. Add repository secrets `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID`, and
-   repository **variables** (not secrets):
+5. Run `bash scripts/release/set-secrets.sh azure`. It sets the secrets `AZURE_CLIENT_ID`,
+   `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID`, and these **variables** (not secrets), all in the
+   `release` environment:
    - `AZURE_SIGNING_ENDPOINT`: the account's endpoint, such as
      `https://eus.codesigning.azure.net`.
    - `AZURE_SIGNING_ACCOUNT`: the signing account's name.
@@ -125,8 +160,10 @@ app and both installers with it (`bundle.windows.signCommand`,
    git push origin v0.2.0
    ```
 
-3. The **Release** workflow checks that the tag, `package.json` and `Cargo.toml` agree and that the
-   updater key is set up. It then builds on macOS (one universal app for Intel and Apple silicon),
+3. Approve the run: open it under **Actions** and choose **Review deployments → release →
+   Approve**. Until then the build jobs wait and cannot see any key. Before that, the workflow
+   has checked that the tag, `package.json` and `Cargo.toml` agree and that the updater's public
+   key is in the app; each build job then checks its private key is set. It then builds on macOS (one universal app for Intel and Apple silicon),
    Windows and Linux into a **draft** GitHub Release, with `latest.json` for the updater.
 4. Try the draft's installers. Nothing reaches installed copies yet: the updater reads the latest
    *published* release.

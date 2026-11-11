@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   api,
+  errorCode,
   errorText,
   type Device,
   type HostBackup,
@@ -70,9 +71,11 @@ export function Network({
   return (
     <>
       <p>
-        {status.hostHere
-          ? `This computer serves the vault on this network, on port ${status.hostAddress?.split(':')[1]}. It needs to stay on for other computers to sync.`
-          : `This vault syncs with the host at ${status.hostAddress}.`}
+        {status.hostHere && status.hostRetired
+          ? 'This computer no longer serves the vault: the host moves to another computer. To go on working here, leave this vault, then join the host where it is now with a code from an admin.'
+          : status.hostHere
+            ? `This computer serves the vault on this network, on port ${status.hostAddress?.split(':')[1]}. It needs to stay on for other computers to sync.`
+            : `This vault syncs with the host at ${status.hostAddress}.`}
       </p>
       <SyncNow onPulled={onChanged} />
       {!status.hostHere && <PhotosOnDemand />}
@@ -81,24 +84,53 @@ export function Network({
       {admin && <OfflineRule />}
       {admin && <HostBackups />}
       {status.hostHere ? (
-        admin && (
-          <StopHosting
-            onStopped={() => {
-              void load();
-              onChanged();
-            }}
-          />
-        )
+        <>
+          {admin && !status.hostRetired && (
+            <StopHosting
+              movedHere={status.hostMovedHere}
+              onStopped={() => {
+                void load();
+                onChanged();
+              }}
+            />
+          )}
+          <LeaveVault onLeft={onLeft} servedHere />
+        </>
       ) : (
-        <LeaveVault onLeft={onLeft} />
+        <>
+          {admin && status.canHost && (
+            <MoveHostHere
+              status={status}
+              onMoved={() => {
+                void load();
+                onChanged();
+              }}
+            />
+          )}
+          <LeaveVault onLeft={onLeft} />
+        </>
       )}
     </>
   );
 }
 
-function StartHosting({ status, onStarted }: { status: NetworkStatus; onStarted: () => void }) {
+/** The name and port a host serves with, for starting to serve and for moving the host here. */
+function useHostFields(status: NetworkStatus, id: string) {
   const [port, setPort] = useState(String(status.defaultPort));
   const [name, setName] = useState('');
+  const fields = (
+    <>
+      <label htmlFor={`${id}-name`}>Name other computers see</label>
+      <input id={`${id}-name`} value={name} placeholder="Glaze Vault host" onChange={(e) => setName(e.target.value)} />
+      <label htmlFor={`${id}-port`}>Port</label>
+      <input id={`${id}-port`} inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value)} />
+    </>
+  );
+  return { port: Number(port) || null, name, fields };
+}
+
+function StartHosting({ status, onStarted }: { status: NetworkStatus; onStarted: () => void }) {
+  const { port, name, fields } = useHostFields(status, 'host');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   if (!status.canHost)
@@ -107,7 +139,7 @@ function StartHosting({ status, onStarted }: { status: NetworkStatus; onStarted:
     setBusy(true);
     setError('');
     try {
-      await api.startHosting(Number(port) || null, name);
+      await api.startHosting(port, name);
       onStarted();
     } catch (e) {
       setError(errorText(e));
@@ -132,10 +164,7 @@ function StartHosting({ status, onStarted }: { status: NetworkStatus; onStarted:
           BitLocker or LUKS) so a stolen disk gives nothing away.
         </li>
       </ul>
-      <label htmlFor="host-name">Name other computers see</label>
-      <input id="host-name" value={name} placeholder="Glaze Vault host" onChange={(e) => setName(e.target.value)} />
-      <label htmlFor="host-port">Port</label>
-      <input id="host-port" inputMode="numeric" value={port} onChange={(e) => setPort(e.target.value)} />
+      {fields}
       <div className="row">
         <button type="button" disabled={busy} onClick={start}>
           {busy ? 'Starting…' : 'Serve on this network'}
@@ -748,16 +777,22 @@ function PhotosOnDemand() {
   );
 }
 
-function StopHosting({ onStopped }: { onStopped: () => void }) {
+/** Stops serving. Usually the vault goes back to this computer alone, and the host's store goes.
+ * When the host moves to another computer, or on a computer the host moved to (whose own copy has
+ * only its people's keys), the store is kept for `hostd export`, and this computer leaves and joins
+ * the host where it goes (docs/adr/0037-moving-the-host.md). */
+function StopHosting({ movedHere, onStopped }: { movedHere: boolean; onStopped: () => void }) {
   const [asking, setAsking] = useState(false);
   const [anyway, setAnyway] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const keep = moving || movedHere;
   const stop = async () => {
     setBusy(true);
     setError('');
     try {
-      await api.stopHosting(anyway);
+      await api.stopHosting(anyway, keep);
       onStopped();
     } catch (e) {
       setError(errorText(e));
@@ -777,10 +812,29 @@ function StopHosting({ onStopped }: { onStopped: () => void }) {
         </div>
       ) : (
         <>
-          <p>
-            The vault goes back to being on this computer alone. Other computers keep what they have but can no longer
-            sync, and anything saved on them that has not synced is not brought here.
-          </p>
+          {movedHere ? (
+            <p>
+              The host moved to this computer from its file, so its store here is the only whole copy of the vault: it
+              is kept. To serve from another computer, write it as a file here with <code>hostd export</code> (as an
+              administrator) and use Move the host here on that one.
+            </p>
+          ) : (
+            <label>
+              <input type="checkbox" checked={moving} onChange={(e) => setMoving(e.target.checked)} /> The host is
+              moving to another computer
+            </label>
+          )}
+          {keep ? (
+            <p>
+              The service stops and its store is kept on this computer. This computer then leaves the vault and joins
+              the new host with a code, like any other.
+            </p>
+          ) : (
+            <p>
+              The vault goes back to being on this computer alone. Other computers keep what they have but can no
+              longer sync, and anything saved on them that has not synced is not brought here.
+            </p>
+          )}
           {anyway && <p className="hint">The last sync did not work. Stopping anyway loses what this computer has not sent.</p>}
           <div className="row">
             <button type="button" disabled={busy} onClick={stop}>
@@ -797,9 +851,67 @@ function StopHosting({ onStopped }: { onStopped: () => void }) {
   );
 }
 
+/** Serves the vault from this computer instead of the old host, from the file the old host or an
+ * admin saved (docs/adr/0037-moving-the-host.md). The old host must have stopped. If it fails, this
+ * computer is as it was, and says why. */
+function MoveHostHere({ status, onMoved }: { status: NetworkStatus; onMoved: () => void }) {
+  const [asking, setAsking] = useState(false);
+  const { port, name, fields } = useHostFields(status, 'move-host');
+  const [busy, setBusy] = useState(false);
+  const [stale, setStale] = useState(false);
+  const [error, setError] = useState('');
+  const move = async (anyway: boolean) => {
+    setBusy(true);
+    setError('');
+    try {
+      if ((await api.moveHostHere(port, name, anyway)) !== null) onMoved();
+    } catch (e) {
+      setStale(errorCode(e) === 'host-backup-stale');
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section aria-label="Move the host here">
+      <h3>Move the host here</h3>
+      {!asking ? (
+        <div className="row">
+          <button type="button" onClick={() => setAsking(true)}>
+            Move the host here…
+          </button>
+        </div>
+      ) : (
+        <>
+          <p>
+            Serve the vault from this computer instead, from the host's file: one saved under Backups of the host, or
+            written on the old host computer with <code>hostd export</code>. It opens only with the organization's key.
+            Stop the old host first; other computers then find this one and sync as before.
+          </p>
+          {fields}
+          <div className="row">
+            <button type="button" disabled={busy} onClick={() => void move(false)}>
+              {busy ? 'Moving…' : 'Choose the file and serve here'}
+            </button>
+            {stale && (
+              <button type="button" className="danger" disabled={busy} onClick={() => void move(true)}>
+                Choose it again and use it anyway
+              </button>
+            )}
+            <button type="button" onClick={() => setAsking(false)}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {error && <p role="alert" className="error">{error}</p>}
+    </section>
+  );
+}
+
 /** Takes this computer out of the vault: its copy goes. Others keep theirs, and the host keeps
  * everything that reached it. */
-function LeaveVault({ onLeft }: { onLeft: () => void }) {
+function LeaveVault({ onLeft, servedHere = false }: { onLeft: () => void; servedHere?: boolean }) {
   const [asking, setAsking] = useState(false);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -835,6 +947,12 @@ function LeaveVault({ onLeft }: { onLeft: () => void }) {
             This computer's copy of the vault is removed. Everyone keeps what reached the host, and can join this
             computer again with a new code from an admin.
           </p>
+          {servedHere && (
+            <p className="hint">
+              This computer served the vault. It can leave only once it no longer does: stopped to move the host, or its
+              service removed with <code>hostd uninstall</code>.
+            </p>
+          )}
           {unsent > 0 && (
             <p className="error">
               {unsent === 1 ? 'One change' : `${unsent} changes`} saved here never reached the host, and would be lost.

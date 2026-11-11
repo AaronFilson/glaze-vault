@@ -47,13 +47,23 @@ struct HostFile {
 
 /// The host's key from `key_dir`, and the host file and database from `dir`, opened.
 fn open_files(key_dir: &Path, dir: &Path) -> Result<(KeyPair, HostFile, Connection)> {
-    let secret = Zeroizing::new(fs::read(key_dir.join(HOST_KEY))?);
+    let secret = super::host_key::read(key_dir)?;
     let host = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the host key is not valid".into()))?;
     let file: HostFile = serde_json::from_slice(&fs::read(dir.join(HOST_FILE))?)?;
     let database_key = crypto::open_key(&host, &file.database_key, &host_info(&file.vault_id))
         .ok_or_else(|| Error::Corrupt("the host's database key does not open".into()))?;
     let conn = store::open(&dir.join(DATABASE_FILE), &database_key)?;
     Ok((host, file, conn))
+}
+
+/// The database key of the store in `dir`, for a copy of it made under the same key
+/// (host_backup.rs).
+pub(super) fn database_key(dir: &Path) -> Result<crypto::Key> {
+    let secret = super::host_key::read(dir)?;
+    let host = KeyPair::from_secret(secret).ok_or_else(|| Error::Corrupt("the host key is not valid".into()))?;
+    let file: HostFile = serde_json::from_slice(&fs::read(dir.join(HOST_FILE))?)?;
+    crypto::open_key(&host, &file.database_key, &host_info(&file.vault_id))
+        .ok_or_else(|| Error::Corrupt("the host's database key does not open".into()))
 }
 
 fn host_info(vault_id: &Uuid) -> Vec<u8> {
@@ -76,6 +86,9 @@ pub struct HostStore {
     /// Over the network, the computer holding the directory, if any; directory changes from any
     /// other are refused. None until `guard_directory`: in one process there is nothing to clash.
     directory_holder: Option<Option<Uuid>>,
+    /// Attachments whose staged pieces did not hash right in the push being taken, let go of
+    /// once its savepoint is rolled back.
+    bad_pieces: std::cell::RefCell<Vec<Uuid>>,
 }
 
 /// A computer the host syncs with, from its certificate.
@@ -208,7 +221,7 @@ impl Vault {
 }
 
 /// Keeps a secret where only this user can read it.
-fn write_secret(path: &Path, secret: &[u8]) -> Result<()> {
+pub(super) fn write_secret(path: &Path, secret: &[u8]) -> Result<()> {
     crate::files::write_atomically(path, secret)?;
     #[cfg(unix)]
     {
@@ -310,6 +323,7 @@ impl HostStore {
             port: file.port,
             checkouts: Vec::new(),
             directory_holder: None,
+            bad_pieces: Default::default(),
         })
     }
 
@@ -681,6 +695,7 @@ impl HostStore {
             };
             let (group, after) = rest.split_at(run);
             rest = after;
+            self.bad_pieces.borrow_mut().clear();
             self.conn.execute_batch("SAVEPOINT items")?;
             let mut accepted = Vec::new();
             let mut refused = None;
@@ -704,6 +719,9 @@ impl HostStore {
                 }
                 Some((id, refusal)) => {
                     self.conn.execute_batch("ROLLBACK TO items; RELEASE items")?;
+                    for bad in self.bad_pieces.take() {
+                        items::unstage(&self.conn, &bad)?;
+                    }
                     for item in group {
                         // The rest wait with it if it is only to be sent again.
                         let why = if item.id() == id || refusal == Refusal::DirectoryNotHeld {
@@ -812,24 +830,25 @@ impl HostStore {
                     return self.again(conn, "attachments", &a.id, &a.signed.signature);
                 }
                 // Sent without its bytes, which came before it in pieces.
-                let whole;
-                let a = if a.ciphertext.is_empty() {
+                // Their hash is read a piece at a time, and they go into the BLOB the same way.
+                let in_pieces = a.ciphertext.is_empty();
+                let hash = if in_pieces {
                     let (_, from) = items::staged_length(conn, &a.id)?;
                     if from != Some(device.id.to_string()) {
                         return Ok(Err(Refusal::BytesMissing));
                     }
-                    let mut joined = a.clone();
-                    joined.ciphertext = items::staged(conn, &a.id)?;
-                    whole = joined;
-                    if store::attachment_hash(&whole.nonce, &whole.ciphertext) != whole.sha256 {
-                        items::unstage(conn, &a.id)?;
+                    let hash = items::staged_hash(conn, &a.id, &a.nonce)?;
+                    if hash != a.sha256 {
+                        // Let go of outside the savepoint, which the refusal rolls back, as the
+                        // replica does: kept, they would be skipped as had and never sent right.
+                        self.bad_pieces.borrow_mut().push(a.id);
                         return Ok(Err(Refusal::BytesMissing));
                     }
-                    &whole
+                    hash
                 } else {
-                    a
+                    store::attachment_hash(&a.nonce, &a.ciphertext)
                 };
-                let signed = match items::check_attachment(&trust, &self.vault, a) {
+                let signed = match items::check_attachment(&trust, &self.vault, a, &hash) {
                     Ok(signed) => signed,
                     Err(refusal) => return Ok(Err(refusal)),
                 };
@@ -857,6 +876,9 @@ impl HostStore {
                     return Ok(Err(Refusal::ParentUnknown));
                 }
                 items::store_attachment(conn, a)?;
+                if in_pieces {
+                    items::unstage_into(conn, &a.id)?;
+                }
                 items::unstage(conn, &a.id)?;
                 let seq = items::log(conn, "attachment", &a.id, &a.collection, a.kind, None)?;
                 self.numbered(conn, &a.id)?;
@@ -1061,11 +1083,9 @@ impl HostStore {
         if sent(held, kind, true).is_none() || offset > total as u64 {
             return Ok(None);
         }
-        let bytes: Vec<u8> = self.conn.query_row(
-            "SELECT substr(ciphertext, ?2, ?3) FROM attachments WHERE id = ?1",
-            params![id.to_string(), offset as i64 + 1, CHUNK_BYTES as i64],
-            |row| row.get(0),
-        )?;
+        let Some((_, bytes)) = items::ciphertext_piece(&self.conn, &id, offset)? else {
+            return Ok(None);
+        };
         Ok(Some(Chunk {
             id,
             offset,
@@ -1360,8 +1380,12 @@ impl HostStore {
         }
         fs::rename(staged(DATABASE_FILE), dir.join(DATABASE_FILE))?;
         fs::rename(staged(HOST_FILE), dir.join(HOST_FILE))?;
-        let host = HostStore::open(dir)?;
-        host.conn.execute(
+        HostStore::open(dir)?.new_generation()
+    }
+
+    /// Gives the store a new generation, so each computer sends again what it lacks.
+    pub(super) fn new_generation(&self) -> Result<()> {
+        self.conn.execute(
             "INSERT INTO meta (name, value) VALUES (?1, ?2) ON CONFLICT (name) DO UPDATE SET value = excluded.value",
             params![GENERATION, Uuid::new_v4().to_string()],
         )?;

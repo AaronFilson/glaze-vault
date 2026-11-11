@@ -16,7 +16,7 @@ getrandom = "0.4"
 hex = "0.4.3"
 hkdf = "0.13.0"
 hpke = { version = "0.14.1", default-features = false, features = ["alloc", "getrandom", "chacha", "x25519"] }
-rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl", "functions"] }
+rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl", "functions", "blob", "backup"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
 serde_json = "1.0.154"
@@ -25,6 +25,10 @@ thiserror = "2.0.21"
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 zeroize = "1.9.1"
+
+# DPAPI for the host's key on Windows (vault/host_key.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography"] }
 
 [features]
 # Argon2id at its cheapest, for the tests of crates that build on this one (crates/sync). Never in

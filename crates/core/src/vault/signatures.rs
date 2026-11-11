@@ -126,7 +126,7 @@ impl RevisionRow {
 }
 
 /// An attachment as it is stored, for what its signature covers.
-struct AttachmentRow {
+pub(super) struct AttachmentRow {
     id: Uuid,
     record: Uuid,
     kind: String,
@@ -137,6 +137,15 @@ struct AttachmentRow {
     author: Uuid,
     at: i64,
     sha256: Vec<u8>,
+}
+
+/// An attachment's row with its signature, nonce and the length of its ciphertext, for a photo's
+/// details; `length` is read without reading the ciphertext.
+pub(super) struct SignedAttachmentRow {
+    pub row: AttachmentRow,
+    pub signed: Option<SignedBy>,
+    pub nonce: Vec<u8>,
+    pub length: i64,
 }
 
 const ATTACHMENT_COLUMNS: &str =
@@ -159,7 +168,20 @@ impl AttachmentRow {
         })
     }
 
-    fn facts<'a>(&'a self, vault: &'a Uuid) -> AttachmentFacts<'a> {
+    pub fn collection(&self) -> Uuid {
+        self.collection
+    }
+
+    pub fn author(&self) -> Uuid {
+        self.author
+    }
+
+    /// Its sha256, empty for one kept before attachments were hashed.
+    pub fn sha256(&self) -> &[u8] {
+        &self.sha256
+    }
+
+    pub fn facts<'a>(&'a self, vault: &'a Uuid) -> AttachmentFacts<'a> {
         AttachmentFacts {
             vault,
             id: &self.id,
@@ -670,6 +692,29 @@ impl Vault {
             ],
         )?;
         Ok(())
+    }
+
+    /// An attachment's row, signature, nonce and stored length; none if there is no such one.
+    pub(super) fn signed_attachment_row(&self, id: &Uuid) -> Result<Option<SignedAttachmentRow>> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {ATTACHMENT_COLUMNS}, signature, signer_id, signed_as, nonce, length(ciphertext) \
+                     FROM attachments WHERE id = ?1"
+                ),
+                params![id.to_string()],
+                |row| {
+                    Ok(SignedAttachmentRow {
+                        row: AttachmentRow::read(row)?,
+                        signed: signed_by(row.get(10)?, row.get(11)?, row.get(12)?),
+                        nonce: row.get(13)?,
+                        length: row.get(14)?,
+                    })
+                },
+            )
+            .optional()?)
     }
 
     /// Signs again an attachment encrypted again, as sign_stored_revision does a revision.
