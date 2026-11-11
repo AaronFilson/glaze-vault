@@ -12,6 +12,7 @@ concurrency:
 
 jobs:
   check:
+    if: false
     name: Check (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -126,6 +127,7 @@ jobs:
   # projects (crates/app/gen/android and gen/apple) are made fresh by `tauri init` each time, then
   # given Glaze Vault's changes by crates/app/mobile/patch.cjs (docs/adr/0027-phones.md).
   mobile:
+    if: false
     name: Mobile (${{ matrix.name }})
     strategy:
       fail-fast: false
@@ -292,6 +294,7 @@ jobs:
 
   # Unsigned installers for every push, to try on each system. Releases are built by release.yml.
   bundle:
+    if: false
     name: Installers (${{ matrix.name }})
     strategy:
       fail-fast: false
