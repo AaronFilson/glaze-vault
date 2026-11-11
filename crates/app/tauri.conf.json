@@ -46,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBBNTgwMkRGODY1MURGNTMKUldSVDMxR0czd0pZQ3FhUFZDTXM4b1Vkc3QwSVMyQkN4OGVGYlFjcllUdTNqeGlyOURFSHV0bTIK",
       "endpoints": [
         "https://github.com/AaronFilson/glaze-vault/releases/latest/download/latest.json"
       ],
