@@ -40,19 +40,44 @@ synced() {
     fi
     sleep 2
   done
-  "$hostd" status || true
-  case "${RUNNER_OS:-}" in
-    Linux) $sudo journalctl -u glaze-vault-host --no-pager | tail -50 || true ;;
-    macOS) $sudo tail -50 "/Library/Logs/Glaze Vault/hostd.log" || true ;;
-    Windows) tail -50 "C:/ProgramData/Glaze Vault/host/hostd.log" || true ;;
-  esac
+  diagnose
   $sudo "$hostd" uninstall || true
   echo "::error::the replica did not sync with the service"
   return 1
 }
 
+# What the service said, and who can reach its store, for a failure's log.
+diagnose() {
+  echo "::group::the service's log and store"
+  "$hostd" status || true
+  case "${RUNNER_OS:-}" in
+    Linux)
+      $sudo journalctl -u glaze-vault-host --no-pager | tail -80 || true
+      $sudo ls -la /var/lib/glaze-vault-host /var/lib/private/glaze-vault-host 2>&1 || true
+      ;;
+    macOS)
+      $sudo tail -80 "/Library/Logs/Glaze Vault/hostd.log" || true
+      ls -lde@ / /Library "/Library/Application Support" "/Library/Application Support/Glaze Vault" 2>&1 || true
+      $sudo ls -laRe@ "/Library/Application Support/Glaze Vault" 2>&1 || true
+      dscl . -read /Users/_glazevault 2>&1 || true
+      ;;
+    Windows)
+      data="C:/ProgramData/Glaze Vault/host"
+      tail -80 "$data/hostd.log" || true
+      ls -laR "$data" 2>&1 || true
+      icacls "$(cygpath -w "$data")" 2>&1 || true
+      sc.exe qc GlazeVaultHost 2>&1 || true
+      sc.exe query GlazeVaultHost 2>&1 || true
+      sc.exe qfailure GlazeVaultHost 2>&1 || true
+      sc.exe qfailureflag GlazeVaultHost 2>&1 || true
+      ;;
+  esac
+  echo "::endgroup::"
+}
+
 fail() {
   echo "::error::$1"
+  diagnose
   $sudo "$hostd" uninstall || true
   exit 1
 }
@@ -95,7 +120,7 @@ synced
 hardened
 
 # A restore while the service runs: it restarts to restore, and says how that went (ADR 38).
-$sudo "$hostd" restore "$work/moving.gvhost"
+$sudo "$hostd" restore "$work/moving.gvhost" || fail "the restore did not go through"
 synced
 hardened
 

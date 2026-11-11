@@ -145,6 +145,7 @@ pub fn install(exe: &Path, data: &Path, port: u16, name: &str) -> Result<(), Str
     let id = make_user()?;
     // The store and the log are the user's alone; the folders above stay root's.
     super::give(data, 0, id, id).map_err(|e| format!("giving the store to {USER}: {e}"))?;
+    open_above(data)?;
     fs::create_dir_all(LOGS).map_err(|e| e.to_string())?;
     let log = Path::new(LOGS).join("hostd.log");
     if !log.exists() {
@@ -156,6 +157,16 @@ pub fn install(exe: &Path, data: &Path, port: u16, name: &str) -> Result<(), Str
     try_tool(FIREWALL, &["--add", exe]);
     try_tool(FIREWALL, &["--unblockapp", exe]);
     tool("launchctl", &["bootstrap", "system", PLIST])
+}
+
+/// The folder above the store, `Glaze Vault` in /Library/Application Support, made by root under
+/// whatever umask the installer ran with, opened for the service's user to pass through: root's
+/// still, and listing only the store, which is closed to all but that user.
+fn open_above(data: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(above) = data.parent() else { return Ok(()) };
+    fs::set_permissions(above, fs::Permissions::from_mode(0o755))
+        .map_err(|e| format!("opening {} to {USER}: {e}", above.display()))
 }
 
 pub fn uninstall(exe: &Path) -> Result<(), String> {
@@ -193,6 +204,7 @@ pub fn harden(dir: &Path, port: u16, name: &str) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let id = make_user()?;
     super::give(dir, 0, id, id).map_err(|e| format!("giving the store to {USER}: {e}"))?;
+    open_above(dir)?;
     let log = Path::new(LOGS).join("hostd.log");
     if log.exists() {
         super::give(&log, 0, id, id).map_err(|e| e.to_string())?;

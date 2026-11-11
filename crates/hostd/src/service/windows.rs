@@ -62,6 +62,9 @@ pub fn install(exe: &Path, data: &Path, port: u16, name: &str) -> Result<(), Str
         "sc.exe",
         &["failure", SERVICE, "reset=", "86400", "actions=", "restart/5000"],
     );
+    // Restarted also when it stops itself with an error, as it does to restore a backup: the
+    // manager otherwise restarts only a process that died.
+    try_tool("sc.exe", &["failureflag", SERVICE, "1"]);
     tool(
         "icacls",
         &[
@@ -140,11 +143,11 @@ fn serve_as_service(dir: PathBuf, args: impl Iterator<Item = String>) -> Result<
         _ => ServiceControlHandlerResult::NotImplemented,
     })
     .map_err(|e| e.to_string())?;
-    let status = |state, accept| ServiceStatus {
+    let status = |state, accept, exit_code| ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: state,
         controls_accepted: accept,
-        exit_code: ServiceExitCode::Win32(0),
+        exit_code,
         checkpoint: 0,
         wait_hint: Duration::from_secs(5),
         process_id: None,
@@ -153,12 +156,19 @@ fn serve_as_service(dir: PathBuf, args: impl Iterator<Item = String>) -> Result<
         .set_service_status(status(
             ServiceState::Running,
             ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
+            ServiceExitCode::Win32(0),
         ))
         .map_err(|e| e.to_string())?;
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let served = runtime.block_on(crate::serve::serve(options, async move {
         let _ = tokio::task::spawn_blocking(move || stopped.recv()).await;
     }));
-    let _ = handler.set_service_status(status(ServiceState::Stopped, ServiceControlAccept::empty()));
+    // Stopped with an error, the manager's failure actions start it again (a restore, or a store
+    // that did not open); stopped as asked, it stays stopped.
+    let exit = match &served {
+        Ok(()) => ServiceExitCode::Win32(0),
+        Err(_) => ServiceExitCode::ServiceSpecific(1),
+    };
+    let _ = handler.set_service_status(status(ServiceState::Stopped, ServiceControlAccept::empty(), exit));
     served
 }
