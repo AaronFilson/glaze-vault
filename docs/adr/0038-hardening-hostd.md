@@ -20,7 +20,8 @@ with `DynamicUser=yes` and `ProtectSystem=strict`. Only the NSIS setup stopped t
   lowest id from 300 to 499 free as both a user and a group id (by `dscl . -list`), no shell
   (`/usr/bin/false`), `/var/empty` as its home and no password. One made before is used again.
   The store is chowned to it and stays 0700 (files 0600); the log file is its, the folders above
-  stay root's. The plist runs hostd with `UserName`, `GroupName` and a 077 `Umask`. The port is
+  stay root's. The store is copied in as new files root writes, not cloned (`fs::copy` on macOS
+  keeps the source's owner), so the chown below finds root's files to give. The plist runs hostd with `UserName`, `GroupName` and a 077 `Umask`. The port is
   above 1024 and mDNS needs no root. `hostd uninstall` deletes the user and group; a store kept
   goes back to root, so no file is left to an id the system may give another. `hostd restore`,
   run as root, gives what it wrote to the folder's owner after. Every such chown, run as root
@@ -41,6 +42,10 @@ with `DynamicUser=yes` and `ProtectSystem=strict`. Only the NSIS setup stopped t
   the request whether or not that worked (a bad one is logged and the store serves as it was,
   rather than stopping every few seconds for it), and writes `restore-result`: `ok` or why not.
   `hostd restore` waits up to a minute for it and fails with what it says.
+  The service stops itself to restore with an error: on Windows it reports `SERVICE_STOPPED`
+  with a service-specific exit code and is installed with `sc failureflag 1`, so the failure
+  action restarts it (the manager otherwise restarts only a process that died); launchd's
+  `KeepAlive` and systemd's `Restart=` restart it elsewhere.
 - **Windows: DPAPI with the machine's key.** hostd moves `host.key` to `host.key.dpapi`
   (`CryptProtectData` with `CRYPTPROTECT_LOCAL_MACHINE` and a fixed entropy) at install and as
   it starts, so a host from before is migrated, and the plain file goes once the protected one

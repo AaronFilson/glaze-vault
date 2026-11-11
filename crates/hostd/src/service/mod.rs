@@ -202,7 +202,10 @@ pub fn status() -> Result<String, String> {
     })
 }
 
-/// Copies a folder's files into a new folder only its owner can read.
+/// Copies a folder's files into a new folder only its owner can read. Each copy is a new file
+/// this process writes, so it is this process's user's: `fs::copy` on macOS clones the file,
+/// owner and all, and a store copied by root would stay its first owner's, which `give` does
+/// not hand to the service's user (ADR 38).
 pub fn copy_private(from: &Path, to: &Path) -> std::io::Result<()> {
     fs::create_dir_all(to)?;
     restrict(to, true)?;
@@ -210,7 +213,10 @@ pub fn copy_private(from: &Path, to: &Path) -> std::io::Result<()> {
         let entry = entry?;
         if entry.file_type()?.is_file() {
             let target = to.join(entry.file_name());
-            fs::copy(entry.path(), &target)?;
+            let mut source = fs::File::open(entry.path())?;
+            let mut copy = fs::OpenOptions::new().write(true).create_new(true).open(&target)?;
+            std::io::copy(&mut source, &mut copy)?;
+            copy.sync_all()?;
             restrict(&target, false)?;
         }
     }
