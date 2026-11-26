@@ -1,0 +1,595 @@
+import { useState } from 'react';
+import { api, errorText, type Access, type RecipeHead } from '../api';
+import { isBody } from '../body';
+import {
+  barResults,
+  EMPTY_BAR,
+  FIT_RESULTS,
+  FIT_TESTS,
+  FLAWS,
+  hasReadings,
+  lotMaterials,
+  tidyFiring,
+  type BarReadings,
+  type Firing,
+  type FiringContent,
+  type FitTest,
+  type Photo
+} from '../firing';
+import { lotsForFiring, mixSummary, type Mix } from '../mix';
+import { PhotoError, smallerPhoto } from '../photos';
+import { ATMOSPHERES, isFormed, SURFACES, TRANSPARENCIES } from '../recipeFields';
+import { EMPTY_SLIP, hasSlipReadings, isSlip, type SlipReadings } from '../slip';
+import { canEdit } from '../team';
+import { useRevisionLines } from '../useRevisionLines';
+import { CheckoutBar } from './CheckoutBar';
+import { ConfirmNotice } from './Deleted';
+import type { FiringEditing } from './FiringLog';
+import { FiringPhotos } from './FiringPhotos';
+import { Fold } from './Fold';
+import { ForkChoice } from './ForkChoice';
+
+const BAR_FIELDS: { key: keyof BarReadings; label: string }[] = [
+  { key: 'mark', label: 'Length between marks, mm' },
+  { key: 'dry', label: 'Dry length, mm' },
+  { key: 'fired', label: 'Fired length, mm' },
+  { key: 'firedWeight', label: 'Fired weight, g' },
+  { key: 'soakedWeight', label: 'Weight after soaking, g' },
+  { key: 'suspendedWeight', label: 'Weight in water, g' }
+];
+
+/** A bar fired spanned between two supports, for warping. */
+const WARP_FIELDS: { key: keyof BarReadings; label: string }[] = [
+  { key: 'span', label: 'Span between supports, mm' },
+  { key: 'bow', label: 'Bow when dry, mm' },
+  { key: 'sag', label: 'Sag when fired, mm' }
+];
+
+const SLIP_FIELDS: { key: keyof SlipReadings; label: string; target?: 'gravity' | 'viscosity'; decimal?: boolean }[] = [
+  { key: 'gravity', label: 'Specific gravity', target: 'gravity', decimal: true },
+  { key: 'viscosity', label: 'Ford cup #4, s', target: 'viscosity', decimal: true },
+  { key: 'gel', label: 'Gel' }
+];
+
+export function FiringEditor({
+  editing,
+  changed,
+  mixes,
+  recipes,
+  access,
+  onEdit,
+  onSaved,
+  onErased,
+  phone,
+  registerSave
+}: {
+  editing: FiringEditing;
+  changed: boolean;
+  mixes: Mix[];
+  recipes: RecipeHead[];
+  access: Access | null;
+  onEdit: (editing: FiringEditing | null) => void;
+  onSaved: (saved: Firing) => void;
+  onErased: (recordId: string) => void;
+  phone: boolean;
+  registerSave: (save: () => Promise<boolean>) => void;
+}) {
+  const { current, draft } = editing;
+  const [saving, setSaving] = useState(false);
+  const [addingPhoto, setAddingPhoto] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState('');
+  const recipe = recipes.find((r) => r.recordId === draft.recipe) ?? null;
+  const collection = current?.collectionId ?? recipe?.collectionId ?? null;
+  const readOnly = !canEdit(access, collection, 'firing');
+  const set = (change: Partial<FiringContent>) => onEdit({ current, draft: { ...draft, ...change } });
+  const bar = draft.bar ?? EMPTY_BAR;
+  const slip = draft.slip ?? EMPTY_SLIP;
+  const results = barResults(draft.bar);
+  const fired = useRevisionLines('recipe', recipe, draft.recipeNumber);
+  // Lots go with the fired revision's materials, by their order; without their names (a role that
+  // reads no chemistry, or a recipe this person cannot open), they are numbered.
+  const lotNames = fired ? lotMaterials(fired) : [];
+  const lots = draft.lots ?? [];
+  const lotRows = Math.max(lotNames.length, lots.length);
+  // Mixes of the revision fired that kept lots, to take them from.
+  const lotMixes = mixes
+    .filter((m) => m.content.recipe === draft.recipe && m.content.recipeNumber === draft.recipeNumber && m.content.lots?.length)
+    .sort((a, b) => b.content.mixedOn.localeCompare(a.content.mixedOn));
+  const isGlaze = !isBody(recipe?.content.type);
+  const bodies = recipes.filter((r) => isFormed(r.content.type));
+  const fit: FitTest = draft.fit ?? { test: 'iwct' };
+  const setFit = (change: Partial<FitTest>) => set({ fit: { ...fit, ...change } });
+
+  const save = async (content = draft): Promise<Firing | null> => {
+    if (!content.recipe) {
+      setError('Choose the recipe that was fired.');
+      return null;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const tidy = tidyFiring(content);
+      const saved = current
+        ? await api.saveRecord<FiringContent>('firing', current.revisionId, tidy)
+        : await api.saveRecord<FiringContent>('firing', null, tidy, recipe?.collectionId ?? null);
+      onSaved(saved);
+      onEdit({ current: saved, draft: saved.content });
+      return saved;
+    } catch (e) {
+      setError(errorText(e));
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  };
+  registerSave(async () => !!(await save()));
+
+  // From the computer's own file dialog, or on a phone from the page's inputs, which reach the
+  // camera and the phone's photos (a picked file on Android is no path the core could open).
+  const addPhoto = async (choose: () => Promise<Uint8Array> = api.choosePhoto) => {
+    setAddingPhoto(true);
+    setError('');
+    try {
+      const chosen = await choose();
+      if (!chosen.length) return;
+      const photo = await smallerPhoto(chosen);
+      // A photo belongs to a saved firing, so a new one, or one with changes, is saved first.
+      const saved = current && !changed ? current : await save();
+      if (!saved) return;
+      const attachment = await api.addAttachment('firing', saved.recordId, photo.mediaType, photo.bytes);
+      const photos: Photo[] = [...saved.content.photos, { id: attachment.id, mediaType: photo.mediaType, caption: '' }];
+      const next = await api.saveRecord<FiringContent>('firing', saved.revisionId, tidyFiring({ ...saved.content, photos }));
+      onSaved(next);
+      onEdit({ current: next, draft: next.content });
+    } catch (e) {
+      setError(e instanceof PhotoError ? e.message : errorText(e));
+    } finally {
+      setAddingPhoto(false);
+    }
+  };
+
+  const remove = async () => {
+    setConfirming(false);
+    try {
+      const gone = await api.deleteRecord('firing', current!.revisionId);
+      await api.eraseRecord('firing', gone.recordId);
+      onErased(gone.recordId);
+      onEdit(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  const select = <Value extends string>(
+    id: string,
+    label: string,
+    options: { value: Value; label: string }[],
+    value: Value | undefined,
+    onChange: (value: Value | undefined) => void
+  ) => (
+    <div className="detail">
+      <label htmlFor={id}>{label}</label>
+      <select id={id} value={value ?? ''} onChange={(e) => onChange((e.target.value as Value) || undefined)}>
+        <option value="">—</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+  const text = (id: string, label: string, value: string | undefined, onChange: (value: string) => void, wide = false) => (
+    <div className={`detail${wide ? ' wide' : ''}`}>
+      <label htmlFor={id}>{label}</label>
+      <input id={id} value={value ?? ''} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+  const percent = (value?: number) => (value === undefined ? '—' : `${value.toFixed(1)}%`);
+
+  return (
+    <>
+      {current && (
+        <ForkChoice
+          kind="firing"
+          head={current}
+          name={current.content.recipeName}
+          readOnly={readOnly}
+          onResolved={(saved) => {
+            if (saved.deleted) {
+              onErased(saved.recordId);
+              onEdit(null);
+            } else {
+              onSaved(saved);
+              onEdit({ current: saved, draft: saved.content });
+            }
+          }}
+        />
+      )}
+      {current && <CheckoutBar kind="firing" record={current.recordId} readOnly={readOnly} />}
+      {readOnly && current && (
+        <p className="hint" role="status">
+          You can read this firing, but not change it.
+        </p>
+      )}
+      <fieldset className="plain" disabled={readOnly}>
+        <h1>{draft.recipeName || 'New firing'}</h1>
+        {current ? (
+          <p className="hint">
+            Revision {draft.recipeNumber} of the recipe
+            {recipe && draft.recipeNumber !== null && recipe.number > draft.recipeNumber
+              ? `; it is at revision ${recipe.number} now.`
+              : '.'}
+          </p>
+        ) : (
+          <div className="detail">
+            <label htmlFor="firing-recipe">Recipe</label>
+            <select
+              id="firing-recipe"
+              value={draft.recipe ?? ''}
+              onChange={(e) => {
+                const head = recipes.find((r) => r.recordId === e.target.value);
+                // Lots belong to a recipe's materials, and a body is not fired on a body.
+                const body = isBody(head?.content.type);
+                set({
+                  recipe: head?.recordId ?? null,
+                  recipeNumber: head?.number ?? null,
+                  recipeName: head?.content.name ?? '',
+                  lots: undefined,
+                  ...(body ? { body: undefined, fit: undefined } : {})
+                });
+              }}
+            >
+              <option value="">Choose a recipe</option>
+              {recipes
+                .filter((r) => canEdit(access, r.collectionId, 'firing'))
+                .map((r) => (
+                  <option key={r.recordId} value={r.recordId}>
+                    {r.content.name || 'Untitled'}
+                  </option>
+                ))}
+            </select>
+          </div>
+        )}
+
+        <h2 className="section-heading">Firing</h2>
+        <div className="details">
+          <div className="detail">
+            <label htmlFor="firing-date">Fired on</label>
+            <input id="firing-date" type="date" value={draft.firedOn} onChange={(e) => set({ firedOn: e.target.value })} />
+          </div>
+          {text('firing-cone', 'Cone', draft.cone, (cone) => set({ cone }))}
+          {select('firing-atmosphere', 'Atmosphere', ATMOSPHERES, draft.atmosphere, (atmosphere) => set({ atmosphere }))}
+          {text('firing-kiln', 'Kiln', draft.kiln, (kiln) => set({ kiln }))}
+          <div className="detail">
+            <label htmlFor="firing-peak">Peak temperature</label>
+            <div className="row tight">
+              <input id="firing-peak" inputMode="decimal" value={draft.peak ?? ''} onChange={(e) => set({ peak: e.target.value })} />
+              <select
+                aria-label="Temperature unit"
+                value={draft.peakUnit ?? 'C'}
+                onChange={(e) => set({ peakUnit: e.target.value as 'C' | 'F' })}
+              >
+                <option value="C">°C</option>
+                <option value="F">°F</option>
+              </select>
+            </div>
+          </div>
+          {text('firing-schedule', 'Schedule', draft.schedule, (schedule) => set({ schedule }), true)}
+        </div>
+
+        <h2 className="section-heading">Result</h2>
+        <div className="details">
+          {select('firing-surface', 'Surface', SURFACES, draft.surface, (surface) => set({ surface }))}
+          {select('firing-transparency', 'Transparency', TRANSPARENCIES, draft.transparency, (transparency) =>
+            set({ transparency })
+          )}
+          {text('firing-color', 'Color', draft.color, (color) => set({ color }), true)}
+        </div>
+        <fieldset className="flaws">
+          <legend>Flaws</legend>
+          {FLAWS.map((flaw) => (
+            <label key={flaw.value} className="check">
+              <input
+                type="checkbox"
+                checked={draft.flaws?.includes(flaw.value) ?? false}
+                onChange={(e) =>
+                  set({
+                    flaws: e.target.checked
+                      ? [...(draft.flaws ?? []), flaw.value]
+                      : (draft.flaws ?? []).filter((f) => f !== flaw.value)
+                  })
+                }
+              />
+              {flaw.label}
+            </label>
+          ))}
+        </fieldset>
+
+        <Fold open={hasReadings(draft.bar) || isBody(recipe?.content.type)}>
+          <summary>Test bar and drying disk</summary>
+          <p className="hint">
+            Mark a plastic bar, then measure it dry and fired. Weigh it fired, after soaking in water, and, for porosity
+            and density, hanging in water.
+          </p>
+          <div className="details">
+            {BAR_FIELDS.map(({ key, label }) => (
+              <div className="detail" key={key}>
+                <label htmlFor={`bar-${key}`}>{label}</label>
+                <input
+                  id={`bar-${key}`}
+                  inputMode="decimal"
+                  value={bar[key]}
+                  onChange={(e) => set({ bar: { ...bar, [key]: e.target.value } })}
+                />
+              </div>
+            ))}
+          </div>
+          <table className="facts" aria-label="Test bar results">
+            <tbody>
+              <tr>
+                <th scope="row">Drying shrinkage</th>
+                <td className="num">{percent(results.dryingShrinkage)}</td>
+              </tr>
+              <tr>
+                <th scope="row">Firing shrinkage</th>
+                <td className="num">{percent(results.firingShrinkage)}</td>
+              </tr>
+              <tr>
+                <th scope="row">Total shrinkage</th>
+                <td className="num">{percent(results.totalShrinkage)}</td>
+              </tr>
+              <tr>
+                <th scope="row">Absorption</th>
+                <td className="num">{percent(results.absorption)}</td>
+              </tr>
+              <tr>
+                <th scope="row">Porosity</th>
+                <td className="num">{percent(results.porosity)}</td>
+              </tr>
+              <tr>
+                <th scope="row">Bulk density</th>
+                <td className="num">{results.density === undefined ? '—' : `${results.density.toFixed(2)} g/cm³`}</td>
+              </tr>
+            </tbody>
+          </table>
+          <h3>Warping</h3>
+          <p className="hint">
+            Measure how far the dry bar is from straight, fire it across two supports, hump up, and measure how far it
+            sagged. The two together are how much it deformed.
+          </p>
+          <div className="details">
+            {WARP_FIELDS.map(({ key, label }) => (
+              <div className="detail" key={key}>
+                <label htmlFor={`bar-${key}`}>{label}</label>
+                <input
+                  id={`bar-${key}`}
+                  inputMode="decimal"
+                  value={bar[key] ?? ''}
+                  onChange={(e) => set({ bar: { ...bar, [key]: e.target.value } })}
+                />
+              </div>
+            ))}
+          </div>
+          <table className="facts" aria-label="Warping">
+            <tbody>
+              <tr>
+                <th scope="row">Deformation</th>
+                <td className="num">
+                  {results.deformation === undefined
+                    ? '—'
+                    : `${results.deformation.toFixed(1)} mm${bar.span?.trim() ? ` over ${bar.span.trim()} mm` : ''}`}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="details">
+            <div className="detail wide">
+              <label htmlFor="bar-disk">Drying disk cracks</label>
+              <input
+                id="bar-disk"
+                value={bar.disk ?? ''}
+                placeholder="A crack code, or the cracks in words"
+                onChange={(e) => set({ bar: { ...bar, disk: e.target.value } })}
+              />
+            </div>
+          </div>
+        </Fold>
+
+        {lotRows > 0 && (
+          <Fold open={lots.some((lot) => lot.trim()) || isBody(recipe?.content.type)}>
+            <summary>Material lots</summary>
+            <p className="hint">
+              The lot or bag of each material, clays most of all: a new bag can change a result.
+            </p>
+            {fired && lotMixes.length > 0 && (
+              <div className="detail wide">
+                <label htmlFor="lots-from">Take the lots from a mix</label>
+                <select
+                  id="lots-from"
+                  value=""
+                  onChange={(e) => {
+                    const from = lotMixes.find((m) => m.recordId === e.target.value);
+                    if (from) set({ lots: lotsForFiring(fired, from.content.lots ?? []) });
+                  }}
+                >
+                  <option value="">—</option>
+                  {lotMixes.map((m) => (
+                    <option key={m.recordId} value={m.recordId}>
+                      {mixSummary(m.content)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="details">
+              {Array.from({ length: lotRows }, (_, i) => (
+                <div className="detail" key={i}>
+                  <label htmlFor={`lot-${i}`}>
+                    {lotNames[i] === undefined
+                      ? `Material ${i + 1}`
+                      : lotNames.indexOf(lotNames[i]) !== lotNames.lastIndexOf(lotNames[i])
+                        ? `${lotNames[i]}, line ${i + 1}`
+                        : lotNames[i]}
+                  </label>
+                  <input
+                    id={`lot-${i}`}
+                    value={lots[i] ?? ''}
+                    onChange={(e) => {
+                      const next = Array.from({ length: lotRows }, (_, j) => lots[j] ?? '');
+                      next[i] = e.target.value;
+                      set({ lots: next });
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          </Fold>
+        )}
+
+        {(isGlaze || draft.body || draft.fit) && (
+          <Fold open={!!draft.body || !!draft.fit}>
+            <summary>Glaze fit</summary>
+            <p className="hint">
+              The body this was fired on, and how a fit test went. The body’s firings list it too.
+            </p>
+            <div className="details">
+              <div className="detail wide">
+                <label htmlFor="firing-body">Body</label>
+                <input
+                  id="firing-body"
+                  list="firing-bodies"
+                  placeholder="A body recipe, or a clay’s name"
+                  value={draft.body?.name ?? ''}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    const match = bodies.find((r) => (r.content.name || 'Untitled').toLowerCase() === name.trim().toLowerCase());
+                    set({ body: name ? { recipe: match?.recordId ?? null, name } : undefined });
+                  }}
+                />
+                <datalist id="firing-bodies">
+                  {bodies.map((r) => (
+                    <option key={r.recordId} value={r.content.name || 'Untitled'} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="detail wide">
+                <label htmlFor="fit-test">Fit test</label>
+                <select id="fit-test" value={fit.test} onChange={(e) => setFit({ test: e.target.value as FitTest['test'] })}>
+                  {FIT_TESTS.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="detail">
+                <label htmlFor="fit-result">Result</label>
+                <select
+                  id="fit-result"
+                  value={fit.result ?? ''}
+                  onChange={(e) => setFit({ result: (e.target.value || undefined) as FitTest['result'] })}
+                >
+                  <option value="">—</option>
+                  {FIT_RESULTS.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="detail wide">
+                <label htmlFor="fit-detail">How</label>
+                <input
+                  id="fit-detail"
+                  placeholder="At 325 °F, or 3 cycles"
+                  value={fit.detail ?? ''}
+                  onChange={(e) => setFit({ detail: e.target.value })}
+                />
+              </div>
+            </div>
+          </Fold>
+        )}
+
+        <Fold
+          open={
+            hasSlipReadings(draft.slip) ||
+            isSlip(recipe?.content.type) ||
+            !!recipe?.content.gravity ||
+            !!recipe?.content.viscosity
+          }
+        >
+          <summary>Slip or glaze as applied</summary>
+          <p className="hint">Its specific gravity and how long it takes through a Ford cup, measured before applying.</p>
+          <div className="details">
+            {SLIP_FIELDS.map(({ key, label, target, decimal }) => {
+              const aim = target && recipe?.content[target];
+              return (
+                <div className={`detail${key === 'gel' ? ' wide' : ''}`} key={key}>
+                  <label htmlFor={`slip-${key}`}>{label}</label>
+                  <input
+                    id={`slip-${key}`}
+                    inputMode={decimal ? 'decimal' : undefined}
+                    placeholder={key === 'gel' ? 'None, or slight after an hour' : undefined}
+                    value={slip[key]}
+                    aria-describedby={aim ? `slip-${key}-target` : undefined}
+                    onChange={(e) => set({ slip: { ...slip, [key]: e.target.value } })}
+                  />
+                  {aim && (
+                    <span id={`slip-${key}-target`} className="hint">
+                      The recipe aims for {aim}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Fold>
+
+        <label htmlFor="firing-notes">Notes</label>
+        <textarea id="firing-notes" rows={4} value={draft.notes} onChange={(e) => set({ notes: e.target.value })} />
+
+        <FiringPhotos
+          photos={draft.photos}
+          team={!!access?.team}
+          phone={phone}
+          busy={addingPhoto || saving}
+          onChange={(photos) => set({ photos })}
+          onAddPhoto={(choose) => void addPhoto(choose)}
+        />
+      </fieldset>
+
+      {confirming && (
+        <ConfirmNotice confirm="Delete" onConfirm={() => void remove()} onCancel={() => setConfirming(false)}>
+          <p>
+            <strong>Delete this firing of {draft.recipeName || 'Untitled'}?</strong> It and its photos are removed for
+            good. Backups made before now still have them.
+          </p>
+        </ConfirmNotice>
+      )}
+      <div className="row">
+        {!readOnly && (
+          <button type="button" className="primary" disabled={!changed || saving} onClick={() => void save()}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        )}
+        {current && !changed && (
+          <span className="hint">
+            Saved {new Date(current.savedAt).toLocaleString()} · revision {current.number}
+          </span>
+        )}
+        {current && !readOnly && (
+          <button type="button" className="link danger end" onClick={() => setConfirming(true)}>
+            Delete…
+          </button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}

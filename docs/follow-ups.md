@@ -8,10 +8,8 @@ Work decided on but not done yet, with the reason it waits.
   counsel before the first customer release.
 - **Signing** ([docs/releasing.md](releasing.md)): generate the updater key and put its public
   half in `tauri.conf.json` (needed before the first release, or installed copies cannot
-  update); an Apple Developer ID with notarization and Azure Artifact Signing for Windows, before
-  builds go to anyone else.
-- **iOS builds** need a newer Xcode than macOS 12 runs: a macOS CI runner or a newer Mac, by
-  phase 3.
+  update); an Apple Developer ID with notarization, Azure Artifact Signing for Windows, and App
+  Store / Google Play signing keys before builds go to anyone else.
 
 ## Next for one person ([ADR 6](adr/0006-one-person-first.md))
 
@@ -50,7 +48,10 @@ Work decided on but not done yet, with the reason it waits.
 
 The ranked list at the end of
 [clay body formulation](research/clay-body-formulation.md#12-what-this-means-for-glaze-vault)
-is built, and so are the mix log's export and its printed record.
+is built, along with the mix log's export and printed record. Clay-body chemistry, vitrification,
+body makeup, slip specific-gravity water calculations, side-by-side material comparison, and
+primary-TDS clay data sheets now live in `@glazecalc/core` (`0.2.1`) and `@glazecalc/catalog`
+(`0.2.0`), supporting zero-flux bodies, slips and triaxial blends end to end.
 
 ## Engineering
 

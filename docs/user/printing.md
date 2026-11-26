@@ -1,7 +1,8 @@
 # Printing
 
 Open a recipe and choose **Print…** at the top of the window. Choose what to print, then
-**Print**. Your computer's print dialog opens, where you can choose a printer, or save a PDF.
+**Print**. Your computer's print dialog opens, where you can choose a printer, or save a PDF. On a
+[phone or tablet](phones.md), **Print** makes a PDF and opens the share/save sheet.
 
 Every printout is marked **Confidential**, with when it was printed. If the recipe has changes you
 have not saved, the printout says so, and shows the changes.
@@ -10,7 +11,8 @@ have not saved, the printout says so, and shows the changes.
 
 The recipe's name, its revision and when it was saved, its details and tags, each material with
 its amount and its percentage (of the base, when some lines are additions), your notes, and the
-unity formula with the SiO₂ : Al₂O₃ ratio, thermal expansion and loss on ignition.
+unity formula (or, for a clay body or slip, its fired oxide weight %, makeup and Al₂O₃ = 1
+formula) with the SiO₂ : Al₂O₃ ratio, thermal expansion and loss on ignition.
 
 ## A batch sheet
 
@@ -27,7 +29,7 @@ and the additions go on top. For example, 100 parts base and 10 parts iron oxide
 
 The sheet lists, for each material:
 
-- its percentage and its weight;
+- its percentage and its weight (and its cost, when [material prices](chemistry-tools.md#costs) are set);
 - a **running total**: what the scale reads after adding it, when everything goes into one bucket;
 - a blank **Lot** column for the material's lot number;
 - a box to tick when it is weighed.
@@ -37,3 +39,6 @@ and to mix it wet, wear a fitted N95 or P100 respirator, and clean up wet. A tea
 names its materials by codes, so its note leaves the amount out.
 
 At the bottom are lines for who weighed the batch, the date, and who checked it.
+
+You can also print a shop-floor mix sheet from the [mix log](mix-log.md) and test weights or bar
+labels from [Blends](chemistry-tools.md#bar-labels).
