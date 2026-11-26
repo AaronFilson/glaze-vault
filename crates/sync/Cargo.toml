@@ -30,7 +30,7 @@ zeroize = "1.9.1"
 
 # mDNS by its own sockets on desktops and Android; iOS asks the system's Bonjour (src/net/discover.rs).
 [target.'cfg(not(target_os = "ios"))'.dependencies]
-mdns-sd = { version = "0.21.6", default-features = false }
+mdns-sd = { version = "0.22.0", default-features = false }
 
 [dev-dependencies]
 # Argon2id at its cheapest, so the tests make many vaults quickly. Never in a release build.
