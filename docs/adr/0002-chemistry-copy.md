@@ -47,8 +47,12 @@ Glazecalc split its chemistry and reference tables into two pure-TypeScript ESM 
 has been removed and replaced with git submodules at `lib/core` and `lib/catalog`, matching
 Glazecalc's `.gitmodules` so `lib/catalog`'s relative `../core` imports work directly:
 
-- `ui/chemistryHost.ts` builds Glaze Vault's frozen `Host` from `@glazecalc/catalog/host`, with
-  English message formatting from `@glazecalc/catalog/locale`.
+- `ui/chemistryHost.ts` builds Glaze Vault's frozen `Host` from `@glazecalc/catalog/host`
+  (including `BODIES`), with English message formatting from `@glazecalc/catalog/locale`.
+- Clay-body, slip, test-bar, vitrification, solids-density and sheet-comparison logic lives in
+  `@glazecalc/core/body`, `@glazecalc/core/recipe` and `@glazecalc/catalog`, with zero-flux bodies,
+  slips and refractory washes supported cleanly by `calculateBody` and primary-TDS clay `sheet`
+  data carried on the catalog's standard records.
 - Material name resolution matches `@glazecalc/catalog` strictly: stoichiometric formulas carry
   `(theoretical)` where commercial records share the base name, and generic words without a single
   product (such as bare `Kaolin` or `Nepheline Syenite`) are not guessed.

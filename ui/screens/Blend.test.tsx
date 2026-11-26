@@ -82,6 +82,21 @@ describe('a blend of bodies', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0][0].type).toBe('clay body');
   });
+
+  it('computes zero-flux corners in a triaxial clay-body blend', () => {
+    const corners = [
+      body('k', 'Kaolin', [['Kaolin (theoretical)', '100']]),
+      body('f', 'Feldspar', [['Potash Feldspar (theoretical)', '100']]),
+      body('q', 'Quartz', [['Silica', '100']])
+    ];
+    render(<Blend recipes={corners} library={STANDARD_LIBRARY} initial="k" canSave onSave={async () => {}} onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText('Triaxial of three'));
+    fireEvent.change(screen.getByLabelText('Steps along a side'), { target: { value: '2' } });
+    const oxides = screen.getByRole('table', { name: 'Oxides, fired weight %' });
+    const sio2 = within(oxides).getByText('SiO₂').parentElement!;
+    // All 6 triaxial points—including pure Kaolin (test 1) and pure Quartz (test 6)—have SiO2 wt%.
+    expect([...sio2.querySelectorAll('td')].every((td) => td.textContent !== '—')).toBe(true);
+  });
 });
 
 describe('bar labels', () => {
