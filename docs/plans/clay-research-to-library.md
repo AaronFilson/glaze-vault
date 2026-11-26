@@ -1,6 +1,6 @@
 # Plan 2: Porting Glaze Vault's Clay Research & Modules into `glazecalc-core` and `glazecalc-catalog`
 
-Accepted 2026-11-25.
+Accepted 2026-11-25. Built and merged to `main` 2026-11-26 (`c0e1d3b`, `@glazecalc/core` `0.2.1` + `@glazecalc/catalog` `0.2.0`). For current roadmap, see [Plan 3: Release Readiness, Sync Follow-Ups, and Remaining Tracks](next-steps-and-release.md).
 
 ## Decisions
 

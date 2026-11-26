@@ -1,6 +1,6 @@
 # Plan 1: Integrating `glazecalc-core` and `glazecalc-catalog` Submodules
 
-Accepted 2026-11-25.
+Accepted 2026-11-25. Built and merged to `main` 2026-11-26 (`6048aea`). For current roadmap, see [Plan 3: Release Readiness, Sync Follow-Ups, and Remaining Tracks](next-steps-and-release.md).
 
 ## Decisions
 

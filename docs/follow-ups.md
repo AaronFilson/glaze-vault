@@ -1,15 +1,16 @@
 # Follow-ups
 
-Work decided on but not done yet, with the reason it waits.
+Work decided on but not done yet, with the reason it waits. For the grouped roadmap and implementation plan across these items, see [Plan 3: Release Readiness, Sync Follow-Ups, and Remaining Tracks](plans/next-steps-and-release.md).
 
 ## Waiting on something
 
 - **Export classification** ([ADR 3](adr/0003-encryption-and-keys.md)): confirm with export
   counsel before the first customer release.
-- **Signing** ([docs/releasing.md](releasing.md)): generate the updater key and put its public
-  half in `tauri.conf.json` (needed before the first release, or installed copies cannot
-  update); an Apple Developer ID with notarization, Azure Artifact Signing for Windows, and App
-  Store / Google Play signing keys before builds go to anyone else.
+- **Signing** ([docs/releasing.md](releasing.md)): `plugins.updater.pubkey` is in
+  `crates/app/tauri.conf.json`; confirm the private updater key secret is set in the `release`
+  environment before tagging the first release, and set up an Apple Developer ID with
+  notarization, Azure Artifact Signing for Windows, and App Store / Google Play signing keys
+  before builds go to anyone else.
 
 ## Next for one person ([ADR 6](adr/0006-one-person-first.md))
 
