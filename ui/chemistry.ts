@@ -1,5 +1,6 @@
 // Glazecalc's chemistry core and standard catalog (docs/adr/0002-chemistry-copy.md).
-import type { MaterialInput, OxideGroup } from '@glazecalc/core';
+import type { DataSheet as CoreDataSheet, MaterialClass, MaterialInput, OxideGroup } from '@glazecalc/core';
+import { calculateBody, effectiveSheet, type BodyResult as CoreBodyResult } from '@glazecalc/core/body';
 import {
   calculateUMF,
   materialWeights,
@@ -10,7 +11,7 @@ import { MOLAR_MASS, OXIDE_GROUPS } from '@glazecalc/catalog/host';
 import { readRecords } from '@glazecalc/catalog/standard';
 import { FORMULA_MATERIALS, nameKey } from '@glazecalc/catalog/text';
 import { HOST, inWords, wordedWarnings, type WordedWarning } from './chemistryHost';
-import type { DataSheet, MaterialClass } from './materialData';
+import type { DataSheet } from './materialData';
 import type { RecipeDetails } from './recipeFields';
 import additivesNdjson from '../lib/catalog/data/additives.ndjson?raw';
 import materialsNdjson from '../lib/catalog/data/materials.ndjson?raw';
@@ -18,6 +19,11 @@ import materialsNdjson from '../lib/catalog/data/materials.ndjson?raw';
 export type { MaterialInput, OxideGroup };
 
 export interface UmfResult extends Omit<CoreUmfResult, 'warningCodes'> {
+  warnings: string[];
+  warningCodes: WordedWarning[];
+}
+
+export interface BodyAnalysisResult extends Omit<CoreBodyResult, 'warningCodes'> {
   warnings: string[];
   warningCodes: WordedWarning[];
 }
@@ -95,8 +101,13 @@ export const FORMULA_PARTS: string[] = [
   ...Object.keys(MOLAR_MASS).filter((part) => !(part in OXIDE_GROUPS))
 ];
 
-export type Analysis =
+export type GlazeAnalysis =
   | { result: UmfResult; problem?: undefined; noOxides: string[] }
+  | { problem: string; result?: undefined }
+  | null;
+
+export type Analysis =
+  | { result: UmfResult | BodyAnalysisResult; problem?: undefined; noOxides: string[] }
   | { problem: string; result?: undefined }
   | null;
 
@@ -111,7 +122,10 @@ export const STANDARD_ADDITIVES: StandardMaterial[] = readRecords<StandardMateri
 
 const materialsByName = new Map(STANDARD_MATERIALS.map((m) => [normalize(m.name), m]));
 const formulaByName = new Map(
-  FORMULA_MATERIALS.map((m) => [normalize(m.name), { name: m.name, formula: m.formula } as MaterialInput])
+  FORMULA_MATERIALS.map((m) => [
+    normalize(m.name),
+    { name: m.name, ownedBy: 'Standard', formula: m.formula } as MaterialInput & { ownedBy: string }
+  ])
 );
 const additivesByName = new Map<string, StandardMaterial>();
 for (const additive of STANDARD_ADDITIVES) {
@@ -133,7 +147,11 @@ for (const material of FORMULA_MATERIALS) {
       byAlias.set(
         key,
         materialsByName.get(normalize(material.name)) ??
-          additivesByName.get(normalize(material.name)) ?? { name: material.name, formula: material.formula }
+          additivesByName.get(normalize(material.name)) ?? {
+            name: material.name,
+            ownedBy: 'Standard',
+            formula: material.formula
+          }
       );
     }
   }
@@ -234,13 +252,22 @@ const isNoOxides = (value: unknown): value is { noOxides: string } =>
   typeof value === 'object' && value !== null && typeof (value as { noOxides?: unknown }).noOxides === 'string';
 
 /**
+ * The standard record a name resolves to (including no-chemistry additives and formula materials),
+ * or null when the name is not a standard material's.
+ */
+export function standardRecord(name: string): StandardMaterial | MaterialInput | null {
+  const key = normalize(name);
+  if (!key) return null;
+  return materialsByName.get(key) ?? formulaByName.get(key) ?? additivesByName.get(key) ?? byAlias.get(key) ?? null;
+}
+
+/**
  * The standard material a name finds, by its own name or another it is known by, such as Flint
  * for Silica. Null when the name is not a standard material's.
  */
 export function standardNamed(name: string): string | null {
-  const found = STANDARD_LIBRARY.resolve(name);
-  if (typeof found === 'string' || isProblem(found)) return null;
-  return isNoOxides(found) ? found.noOxides : String(found.name);
+  const found = standardRecord(name);
+  return found ? String(found.name) : null;
 }
 
 /** Whether a recipe line's material is one the library has: the person's, or a standard one. */
@@ -310,7 +337,17 @@ export function fitPool(library: MaterialLibrary): string[] {
     .map(({ name }) => name);
 }
 
-export function analyse(lines: RecipeLine[], library: MaterialLibrary = STANDARD_LIBRARY): Analysis {
+export function analyse(lines: RecipeLine[], library?: MaterialLibrary): GlazeAnalysis;
+export function analyse(
+  lines: RecipeLine[],
+  library: MaterialLibrary | undefined,
+  options: { body?: boolean }
+): Analysis;
+export function analyse(
+  lines: RecipeLine[],
+  library: MaterialLibrary = STANDARD_LIBRARY,
+  options?: { body?: boolean }
+): Analysis {
   const used = lines.filter((line) => line.material.trim() && line.amount.trim());
   if (!used.length) return null;
   const noOxides: string[] = [];
@@ -326,6 +363,10 @@ export function analyse(lines: RecipeLine[], library: MaterialLibrary = STANDARD
   }
   if (!counted.length) return null;
   try {
+    if (options?.body) {
+      const { warningCodes, ...figures } = inWords(calculateBody)(HOST, counted);
+      return { result: { ...figures, ...wordedWarnings(warningCodes, { once: true }) }, noOxides };
+    }
     const { warningCodes, ...figures } = inWords(calculateUMF)(HOST, counted);
     return { result: { ...figures, ...wordedWarnings(warningCodes, { once: true }) }, noOxides };
   } catch (e) {
@@ -386,10 +427,37 @@ function formulaCategoryOf(name: string): MaterialCategory {
   return categoryOf(match);
 }
 
+function typedSheetOf(raw: CoreDataSheet | undefined): DataSheet | undefined {
+  const resolved = effectiveSheet(raw);
+  if (!resolved) return undefined;
+  const keys = [
+    'cone',
+    'dryingShrinkage',
+    'firingShrinkage',
+    'totalShrinkage',
+    'absorption',
+    'waterOfPlasticity',
+    'finer1um',
+    'finer2um',
+    'mesh',
+    'dryStrength',
+    'density'
+  ] as const;
+  const entries = keys.flatMap((key) => {
+    const val = resolved[key];
+    return val !== undefined && val !== null && String(val).trim() ? [[key, String(val).trim()] as const] : [];
+  });
+  return entries.length ? (Object.fromEntries(entries) as DataSheet) : undefined;
+}
+
 /** A standard material's analysis as a data sheet gives it, and its kind, to start a person's own from. */
-export function standardAnalysis(
-  name: string
-): { oxides: OxideLine[]; loi: string; category: MaterialCategory } | null {
+export function standardAnalysis(name: string): {
+  oxides: OxideLine[];
+  loi: string;
+  category: MaterialCategory;
+  class?: MaterialClass;
+  sheet?: DataSheet;
+} | null {
   const found = STANDARD_LIBRARY.resolve(name);
   if (typeof found === 'string' || isNoOxides(found) || isProblem(found)) return null;
   const percents = Object.entries(inWords(molesPerGram)(HOST, found)).map(
@@ -398,13 +466,18 @@ export function standardAnalysis(
   const fired = percents.reduce((sum, [, percent]) => sum + percent, 0);
   const round = (n: number) => String(Number(n.toFixed(2)));
   const category = 'category' in found ? categoryOf(found as StandardMaterial) : formulaCategoryOf(String(found.name));
+  const std = found as StandardMaterial;
+  const materialClass = (std.traits as { materialClass?: MaterialClass } | undefined)?.materialClass;
+  const sheet = typedSheetOf(std.sheet);
   return {
     oxides: percents
       .filter(([, percent]) => percent >= 0.005)
       .sort((a, b) => OXIDES.indexOf(a[0]) - OXIDES.indexOf(b[0]))
       .map(([oxide, percent]) => ({ oxide, percent: round(percent) })),
     loi: round(Math.max(0, 100 - fired)),
-    category
+    category,
+    ...(materialClass ? { class: materialClass } : {}),
+    ...(sheet ? { sheet } : {})
   };
 }
 

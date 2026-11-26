@@ -1,5 +1,6 @@
 // Slips and glazes as they are mixed (docs/research/clay-bodies.md): a recipe's targets for
 // specific gravity and viscosity, what a firing's test measured, and the water a gravity takes.
+import { DEFAULT_SOLIDS_SG, waterPer100 as coreWaterPer100 } from '@glazecalc/core/recipe';
 import { numberOf } from './chemistry';
 import type { RecipeType } from './recipeFields';
 
@@ -23,15 +24,14 @@ export interface SlipReadings {
 export const EMPTY_SLIP: SlipReadings = { gravity: '', viscosity: '', gel: '' };
 
 /** The density of the dry materials when nothing better is known, g/cm³. */
-export const SOLIDS_DENSITY = 2.6;
+export const SOLIDS_DENSITY = DEFAULT_SOLIDS_SG;
 
 /** Grams of water per 100 g of dry materials for a specific gravity, from
  * SG = (D + W) / (D / density + W). Null for a gravity no slip has: at or below water's, or at or
  * above the solids'. */
 export function waterPer100(gravity: string, density = SOLIDS_DENSITY): number | null {
   const sg = numberOf(gravity);
-  if (sg === null || sg <= 1 || sg >= density) return null;
-  return (100 * (1 - sg / density)) / (sg - 1);
+  return sg === null ? null : coreWaterPer100(sg, density);
 }
 
 export function hasSlipReadings(slip: SlipReadings | undefined): boolean {

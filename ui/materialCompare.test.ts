@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MaterialContent } from './chemistry';
+import { STANDARD_MATERIALS, type MaterialContent } from './chemistry';
 import { compareAnalyses, compareSheets, sheetCones, weightPercents } from './materialCompare';
 
 const material = (name: string, extra: Partial<MaterialContent> = {}): MaterialContent => ({
@@ -87,5 +87,14 @@ describe('materials compared by their analyses', () => {
   it('leave a material with no analysis empty', () => {
     expect(weightPercents(material('Stain'))).toBeNull();
     expect(compareAnalyses([material('Stain'), candidate])[0].values).toEqual([null, 32]);
+  });
+
+  it('compares primary-TDS sheets and analyses of standard catalog clays', () => {
+    const grolleg = STANDARD_MATERIALS.find((m) => m.name === 'Grolleg China Clay')!;
+    const epk = STANDARD_MATERIALS.find((m) => m.name === 'EPK Kaolin')!;
+    const rows = compareSheets([grolleg, epk]);
+    expect(rows.some((r) => r.field === 'absorption')).toBe(true);
+    expect(sheetCones([grolleg, epk]).cones[0]).toBe('9');
+    expect(compareAnalyses([grolleg, epk]).some((r) => r.oxide === 'Al2O3')).toBe(true);
   });
 });

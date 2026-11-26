@@ -2,25 +2,26 @@
 // forming, targets and water), and finding and sorting
 // recipes by them. Every field may be missing: recipes saved before they existed have none, and
 // nobody has to fill them in.
+import type { BodyClass } from '@glazecalc/core/body';
+import {
+  BODY_CLASSES as CATALOG_BODY_CLASSES,
+  FORMING_METHODS,
+  RECIPE_TYPES as CATALOG_RECIPE_TYPES,
+  WATER_BASES as CATALOG_WATER_BASES,
+  optionLabel,
+  optionNamed as catalogOptionNamed,
+  type NamedOption
+} from '@glazecalc/catalog';
 import type { RecipeHead } from './api';
 import type { RecipeContent } from './chemistry';
 
-export type RecipeType = 'glaze' | 'clay body' | 'slip' | 'engobe' | 'casting slip' | 'terra sigillata';
+export type { BodyClass };
+export type RecipeType = (typeof CATALOG_RECIPE_TYPES)[number]['value'];
+export type Forming = (typeof FORMING_METHODS)[number]['value'];
+export type WaterBasis = (typeof CATALOG_WATER_BASES)[number]['value'];
 export type Atmosphere = 'oxidation' | 'neutral' | 'reduction' | 'salt or soda' | 'wood' | 'raku';
 export type Surface = 'glossy' | 'semi-gloss' | 'satin' | 'matte' | 'dry';
 export type Transparency = 'transparent' | 'translucent' | 'semi-opaque' | 'opaque';
-/** What kind of body (docs/research/clay-body-formulation.md, section 4). */
-export type BodyClass =
-  | 'terra cotta'
-  | 'white earthenware'
-  | 'stoneware'
-  | 'porcelain'
-  | 'flameware'
-  | 'sculpture or raku'
-  | 'paper clay';
-export type Forming = 'throwing' | 'handbuilding' | 'casting' | 'pressing' | 'jiggering' | 'extruding' | 'sculpture';
-/** What a water figure is a share of: 100 g of the dry materials, or the wet clay. */
-export type WaterBasis = 'dry' | 'wet';
 
 /** The details, as RecipeContent holds them. */
 export interface RecipeDetails {
@@ -50,14 +51,7 @@ export interface RecipeDetails {
 
 const option = <Value extends string>(value: Value, label: string, ...also: string[]) => ({ value, label, also });
 
-export const RECIPE_TYPES = [
-  option<RecipeType>('glaze', 'Glaze'),
-  option<RecipeType>('clay body', 'Clay body', 'body', 'clay', 'porcelain', 'stoneware', 'earthenware'),
-  option<RecipeType>('slip', 'Slip'),
-  option<RecipeType>('engobe', 'Engobe'),
-  option<RecipeType>('casting slip', 'Casting slip', 'slipcasting', 'slip casting'),
-  option<RecipeType>('terra sigillata', 'Terra sigillata', 'terra sig')
-];
+export const RECIPE_TYPES = CATALOG_RECIPE_TYPES.map(({ value, label, also }) => ({ value, label, also: [...also] }));
 
 export const ATMOSPHERES = [
   option<Atmosphere>('oxidation', 'Oxidation', 'ox', 'electric'),
@@ -83,30 +77,14 @@ export const TRANSPARENCIES = [
   option<Transparency>('opaque', 'Opaque')
 ];
 
-export const BODY_CLASSES = [
-  option<BodyClass>('terra cotta', 'Terra cotta or red earthenware', 'terracotta', 'red earthenware', 'earthenware'),
-  option<BodyClass>('white earthenware', 'White earthenware', 'whiteware', 'talc body'),
-  option<BodyClass>('stoneware', 'Stoneware'),
-  option<BodyClass>('porcelain', 'Porcelain'),
-  option<BodyClass>('flameware', 'Flameware', 'ovenware'),
-  option<BodyClass>('sculpture or raku', 'Sculpture or raku', 'sculpture', 'raku'),
-  option<BodyClass>('paper clay', 'Paper clay', 'paperclay')
-];
+export const BODY_CLASSES = CATALOG_BODY_CLASSES.map(({ value, label, also }) => ({ value, label, also: [...also] }));
 
-export const FORMINGS = [
-  option<Forming>('throwing', 'Throwing', 'thrown', 'wheel'),
-  option<Forming>('handbuilding', 'Handbuilding', 'hand building', 'handbuilt'),
-  option<Forming>('casting', 'Slip casting', 'casting', 'cast'),
-  option<Forming>('pressing', 'Pressing', 'press molding', 'press moulding'),
-  option<Forming>('jiggering', 'Jiggering or jollying', 'jigger', 'jolly'),
-  option<Forming>('extruding', 'Extruding', 'extrusion'),
-  option<Forming>('sculpture', 'Sculpture', 'sculpting')
-];
+export const FORMINGS = FORMING_METHODS.map(({ value, label, also }) => ({ value, label, also: [...also] }));
 
-export const WATER_BASES: { value: WaterBasis; label: string }[] = [
-  { value: 'dry', label: 'g per 100 g dry' },
-  { value: 'wet', label: '% of the wet clay' }
-];
+export const WATER_BASES: { value: WaterBasis; label: string }[] = CATALOG_WATER_BASES.map(({ value, label }) => ({
+  value,
+  label
+}));
 
 /** Recipes that are bodies to form, which have a class, a forming method and targets. */
 const FORMED: RecipeType[] = ['clay body', 'casting slip'];
@@ -116,17 +94,12 @@ export function isFormed(type: RecipeType | undefined): boolean {
 }
 
 /** The option a piece of text names, ignoring case and spacing, as other programs write them. */
-export function optionNamed<Value extends string>(
-  options: { value: Value; label: string; also: string[] }[],
-  text: string
-): Value | undefined {
-  const wanted = text.trim().toLowerCase().replace(/\s+/g, ' ');
-  if (!wanted) return undefined;
-  return options.find((o) => [o.value, o.label.toLowerCase(), ...o.also].includes(wanted))?.value;
+export function optionNamed<Value extends string>(options: ReadonlyArray<NamedOption<Value>>, text: string): Value | undefined {
+  return catalogOptionNamed(options, text);
 }
 
 export function labelOf<Value extends string>(options: readonly { value: Value; label: string }[], value?: Value): string {
-  return options.find((o) => o.value === value)?.label ?? '';
+  return optionLabel(options, value);
 }
 
 /** Tags from what a person types: separated by commas, each once, in the order given. */
@@ -260,10 +233,13 @@ export const RECIPE_ORDERS: { value: RecipeOrder; label: string }[] = [
 /** A cone as a number to sort by: 022 to 01 are below 1 (cone 04 is lower than cone 1), and a
  * range sorts by its lowest. Recipes without a cone go last. */
 export function coneNumber(cone?: string): number {
-  const first = /^\s*\^?\s*(0?)(\d+)/.exec(cone ?? '');
+  const trimmed = (cone ?? '').trimStart();
+  const bare = trimmed.startsWith('^') ? trimmed.slice(1).trimStart() : trimmed;
+  const first = /^\d+/.exec(bare);
   if (!first) return Infinity;
-  const value = Number(first[2]);
-  return first[1] === '0' ? -value : value;
+  const token = first[0];
+  const value = Number(token);
+  return token.length > 1 && token.startsWith('0') ? -value : value;
 }
 
 export function sortRecipes(recipes: RecipeHead[], order: RecipeOrder): RecipeHead[] {

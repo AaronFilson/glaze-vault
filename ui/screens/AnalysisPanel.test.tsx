@@ -48,4 +48,20 @@ describe('the analysis panel', () => {
     expect(screen.queryByText(/tend to craze glazes/)).toBeNull();
     expect(screen.getByText(/My flint has no class, so it counts as not plastic/)).toBeTruthy();
   });
+
+  it('renders a zero-flux slip cleanly without an empty unity-formula disclosure', () => {
+    const slip = analyse(
+      [
+        { material: 'Kaolin (theoretical)', amount: '50' },
+        { material: 'Silica', amount: '50' }
+      ],
+      undefined,
+      { body: true }
+    );
+    render(<AnalysisPanel analysis={slip} body />);
+    expect(screen.getByRole('heading', { name: 'Chemistry' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Formula with Al₂O₃ = 1' }).textContent).toContain('1.000');
+    expect(screen.getByText('All fluxes').nextElementSibling?.textContent).toBe('0.0 mol%');
+    expect(screen.queryByText('Unity formula', { selector: 'summary' })).toBeNull();
+  });
 });

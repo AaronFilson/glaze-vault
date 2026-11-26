@@ -1,6 +1,6 @@
 // Two recipes, or two revisions of one, side by side.
 import { baseOf, usableLines } from './batch';
-import { normalize, OXIDES, type RecipeLine, type UmfResult } from './chemistry';
+import { normalize, OXIDES, type RecipeLine } from './chemistry';
 
 /** A material in either recipe, as a percent of each one's base; null where it is not used. */
 export interface LineChange {
@@ -50,8 +50,11 @@ export interface OxideChange {
 }
 
 /** The unity formulas' oxides, in the usual order, leaving out ones neither has. */
-export function compareUmf(a: UmfResult | undefined, b: UmfResult | undefined): OxideChange[] {
-  return OXIDES.map((oxide) => ({ oxide, a: a?.umf[oxide] ?? 0, b: b?.umf[oxide] ?? 0 })).filter(
+export function compareUmf(
+  a: { umf: Record<string, number> | null } | undefined,
+  b: { umf: Record<string, number> | null } | undefined
+): OxideChange[] {
+  return OXIDES.map((oxide) => ({ oxide, a: a?.umf?.[oxide] ?? 0, b: b?.umf?.[oxide] ?? 0 })).filter(
     (change) => change.a > 0 || change.b > 0
   );
 }

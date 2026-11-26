@@ -17,6 +17,7 @@ import {
   onEvent
 } from '../api';
 import { BATCH_UNITS, type BatchSheet, type BatchUnit } from '../batch';
+import { isBody } from '../body';
 import {
   amountOf,
   analyse,
@@ -340,7 +341,10 @@ export function Recipes({
   const shownRecipe = recipe.viewing?.content ?? recipe.draft;
   const prices =
     priceListFor(priceLists, (recipe.viewing ?? recipe.current)?.collectionId ?? newCollection)?.content ?? null;
-  const analysis = useMemo(() => analyse(shownRecipe.lines, library), [shownRecipe.lines, library]);
+  const analysis = useMemo(
+    () => analyse(shownRecipe.lines, library, { body: isBody(shownRecipe.type) }),
+    [shownRecipe.lines, shownRecipe.type, library]
+  );
 
   /** Locks by itself, keeping unsaved changes as a draft. */
   const lockBySelf = async (reason: 'idle' | 'away') => {
@@ -1404,7 +1408,7 @@ export function Recipes({
                 onChoose={setLimitChoice}
                 umf={analysis?.result?.umf ?? null}
               />
-              {analysis?.result && (
+              {analysis?.result?.umf && (
                 <button type="button" className="fit-button" onClick={() => setView('fit')}>
                   Fit to a formula…
                 </button>
