@@ -15,7 +15,7 @@ jobs:
     name: Check the version and updater public key
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: The tag, package.json, Cargo.toml and the updater public key agree
@@ -66,7 +66,7 @@ jobs:
           [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::The release environment has no TAURI_SIGNING_PRIVATE_KEY secret (docs/releasing.md)"; exit 1; }
           [ -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ] || { echo "::error::The release environment has no TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret (docs/releasing.md)"; exit 1; }
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: true
 
