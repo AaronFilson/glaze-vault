@@ -100,6 +100,14 @@ In **Settings**, under **Export**:
 - **Export materials as CSV…** saves your own materials as a spreadsheet: one row for each oxide,
   then the loss on ignition, with each material's kind, notes, revision and date on its first
   row.
+- **Export firing log as CSV…** saves every firing you can export, oldest first, with its cone,
+  atmosphere, results, test-bar readings, lots, glaze fit and photo captions (see
+  [The firing log](firing-log.md#exporting-the-log)).
+- **Export mix log as CSV…** saves every batch mixed that you can export, with its lots and slip
+  ageing steps (see [The mix log](mix-log.md)).
+
+In a [shared vault](sharing.md), exports include only the collections your role allows you to
+export from; if some collections are left out, Settings says so.
 
 Text in a recipe or material that a spreadsheet would treat as a formula (starting with `=`, `+`, `-` or `@`)
 gets an apostrophe in front, so opening an export cannot run anything.

@@ -3,9 +3,10 @@
 // added in steps with the readings as it ages. The core keeps mixes under the batch key, so a
 // batch operator logs them and reads no more of the recipe than its batch sheet shows.
 import type { Revision } from './api';
+import { daysBetween, slipMixTotals } from '@glazecalc/core/body';
 import type { BatchSheet, BatchUnit } from './batch';
 import { usableLines } from './batch';
-import { numberOf, type RecipeContent, type RecipeLine } from './chemistry';
+import { type RecipeContent, type RecipeLine } from './chemistry';
 import { isoDate } from './firing';
 
 /** One step as a slip is mixed or aged: what was added, then what it measured. All as typed. */
@@ -116,9 +117,7 @@ export function mixMatches(content: MixContent, name: string, search: string): b
 
 /** Days from mixing to a step, or null when either day is not a date. */
 export function daysAged(mixedOn: string, on: string): number | null {
-  const [from, to] = [Date.parse(mixedOn), Date.parse(on)];
-  if (Number.isNaN(from) || Number.isNaN(to)) return null;
-  return Math.round((to - from) / 86_400_000);
+  return daysBetween(mixedOn, on);
 }
 
 /** The deflocculant and water added in all, in the batch's unit, each with its share of the dry
@@ -128,18 +127,7 @@ export function mixTotals(content: MixContent): {
   deflocculant: { amount: number; percent: number | null } | null;
   water: { amount: number; percent: number | null } | null;
 } {
-  const size = numberOf(content.size ?? '');
-  const total = (values: string[]) => {
-    const numbers = values.map(numberOf).filter((n): n is number => n !== null && n >= 0);
-    if (!numbers.length) return null;
-    const amount = numbers.reduce((a, b) => a + b, 0);
-    return { amount, percent: size && size > 0 ? (amount / size) * 100 : null };
-  };
-  const steps = content.steps ?? [];
-  return {
-    deflocculant: total(steps.map((s) => s.deflocculant)),
-    water: total([content.water ?? '', ...steps.map((s) => s.water)])
-  };
+  return slipMixTotals(content.water, content.steps ?? [], content.size);
 }
 
 /** A mix's lots in the order a firing keeps them (lotMaterials: the lines that name a material),

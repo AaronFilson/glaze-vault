@@ -1,7 +1,8 @@
 // Glaze Vault's host for @glazecalc/core (lib/core/host.ts): the catalog's reference tables and
-// record readers, extended so a person's own MaterialContent class informs its traits.
-import type { Host, Traits } from '@glazecalc/core';
+// record readers, extended so a person's own MaterialContent class and data-sheet SG inform its traits.
+import type { Host, MaterialClass, Traits } from '@glazecalc/core';
 import {
+  BODIES,
   CONES,
   DENSITIES,
   EXPANSION,
@@ -14,20 +15,39 @@ import {
   type TraitsRecord
 } from '@glazecalc/catalog/host';
 import { inWords, worded, wordedWarnings, type WordedWarning } from '@glazecalc/catalog/locale';
-import type { MaterialClass } from './materialData';
 
 export interface VaultTraitsRecord extends TraitsRecord {
   readonly materialClass?: MaterialClass;
+  readonly unclassified?: boolean;
+  readonly sheetSg?: number;
 }
 
 function traitsOf(record: VaultTraitsRecord | null | undefined): Traits {
   const base = catalogTraitsOf(record);
   const cls = record?.materialClass;
-  if (!cls) return base;
-  if (cls === 'kaolin') return { ...base, kaolin: true, kaolinOrBallClay: true };
-  if (cls === 'ball clay') return { ...base, kaolinOrBallClay: true };
-  if (cls === 'wollastonite') return { ...base, wollastonite: true };
-  return base;
+  const sg = record?.sheetSg;
+  const density =
+    typeof sg === 'number' && Number.isFinite(sg) && sg > 1
+      ? { mineral: null, sg }
+      : cls
+        ? undefined
+        : base.density;
+  if (!cls && !record?.unclassified && density === base.density) return base;
+  return {
+    ...base,
+    ...(density !== base.density ? { density } : {}),
+    ...(record?.unclassified ? { unclassified: true } : {}),
+    ...(cls
+      ? {
+          materialClass: cls,
+          calcined: cls === 'grog',
+          plasticizer: cls === 'plasticizer',
+          ...(cls === 'kaolin' ? { kaolin: true, kaolinOrBallClay: true } : {}),
+          ...(cls === 'ball clay' ? { kaolinOrBallClay: true } : {}),
+          ...(cls === 'wollastonite' ? { wollastonite: true } : {})
+        }
+      : {})
+  };
 }
 
 export const HOST: Host = Object.freeze({
@@ -39,6 +59,7 @@ export const HOST: Host = Object.freeze({
   stull: STULL,
   densities: DENSITIES,
   expansion: EXPANSION,
+  bodies: BODIES,
   policy: POLICY
 });
 

@@ -68,8 +68,8 @@ For a glaze, **Glaze fit** keeps the body it was fired on and how a fit test wen
 
 - **Body:** one of your clay bodies, chosen from the list, or the name of a bought clay.
 - **Fit test:** 300 °F to ice water (IWCT), boiling to ice water (BWIW), the pressure cooker or
-  autoclave, or another test; its **Result**, passed, crazed or shivered; and **How**, such as
-  `at 325 °F` or `3 cycles`.
+  autoclave, glaze-body bend test (GBBT), or another test; its **Result**, passed, crazed or
+  shivered; and **How**, such as `at 325 °F` or `3 cycles`.
 
 A glaze fired on one of your bodies is listed with the body's firings too, so its fit can be
 found from either recipe.
@@ -86,9 +86,10 @@ all.
 
 ## Photos
 
-Choose **Add photo…** and pick a photo: JPEG, PNG or WebP, and HEIC (iPhone photos) on a Mac. A new
-firing is saved first. Photos are made smaller to at most 2,400 pixels across before they are kept,
-which is plenty to see crazing and keeps the vault small. Give each a caption, and **Save**.
+Choose **Add photo…** on a computer (or **Take photo** / **Choose photo…** on a phone or tablet)
+and pick a photo: JPEG, PNG or WebP, and HEIC (iPhone photos) on a Mac or iPhone. A new firing is
+saved first. Photos are made smaller to at most 2,400 pixels across before they are kept, which is
+plenty to see crazing and keeps the vault small. Give each a caption, and **Save**.
 
 **Remove** takes a photo off the firing; earlier revisions still have it until the firing is
 deleted.
@@ -106,5 +107,7 @@ material, and the body and fit test. Photos are listed by caption. The file is n
 
 ## Who sees it
 
-In a [shared vault](sharing.md), a firing is in its recipe's collection: whoever may change the
-recipe logs its firings, and whoever may read it reads them. Batch operators do not see them.
+In a [shared vault](sharing.md), a firing is in its recipe's collection: anyone whose role may
+change firings there (such as a **Tester**, **Formulator** or **Admin**, or a custom role with
+**Firings** ticked) logs its firings, and anyone who may read the collection reads them. Batch
+operators do not see them.

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
-  type DraftPart,
   api,
   errorText,
+  onEvent,
   type Access,
   type Draft,
+  type DraftPart,
   type Kind,
   type LastBackup,
   type MaterialHead,
@@ -13,57 +14,62 @@ import {
   type Settings as VaultSettings,
   type UpdateInfo,
   type VaultChanged,
-  type VaultStatus,
-  onEvent
+  type VaultStatus
 } from '../api';
-import { BATCH_UNITS, type BatchSheet, type BatchUnit } from '../batch';
-import {
-  amountOf,
-  analyse,
-  materialLibrary,
-  sameName,
-  standardNamed,
-  type MaterialContent,
-  type RecipeContent
-} from '../chemistry';
+import type { BatchSheet } from '../batch';
+import { isBody } from '../body';
+import { analyse, materialLibrary, sameName, type MaterialContent, type RecipeContent } from '../chemistry';
 import { localDate } from '../export';
-import { restorePart, useEditor, type Editor } from '../useEditor';
-import { BACKGROUND_GRACE_SECONDS, useBackgroundLock, useIdleLock } from '../useIdleLock';
-import { usePhoneBackups } from '../usePhoneBackups';
-import { offered, PHONE_TABS } from '../phone';
-import { useFieldAboveKeyboard } from '../useFieldAboveKeyboard';
-import { BatchSheetForm, BatchSheets } from './BatchSheets';
-import { Blend } from './Blend';
-import { Fit } from './Fit';
-import { LimitSets, LimitsPanel, limitSets, savedLimitChoice } from './Limits';
-import type { LimitsContent } from '../limits';
-import type { PricesContent } from '../prices';
-import { CostLine, PriceLists } from './Prices';
-import { priceListFor } from '../prices';
-import { Compare, type Side } from './Compare';
-import { FiringLog, type FiringEditing } from './FiringLog';
-import { firingOf, newFiring, sameFiring, type Firing, type FiringContent } from '../firing';
-import { MixLog, type MixEditing } from './MixLog';
-import { useOpened } from '../useOpened';
-import { mixOf, newMix, sameMix, type Mix, type MixContent } from '../mix';
-import { ConfirmNotice } from './Deleted';
-import { Import } from './Import';
+import { sameFiring, type Firing, type FiringContent } from '../firing';
 import type { ImportPlan } from '../importFormats';
+import type { LimitsContent } from '../limits';
+import { newMix, sameMix, type Mix, type MixContent } from '../mix';
+import { offered } from '../phone';
+import { priceListFor, type PricesContent } from '../prices';
+import { printOut } from '../printing';
+import { byCollection, canEdit, defaultCollection, editableCollections, may, onlyWeighs } from '../team';
+import { DRAFT_DELAY_MS, followed, useDraftSync } from '../useDraftSync';
+import { restorePart, useEditor, type Editor } from '../useEditor';
+import { useFieldAboveKeyboard } from '../useFieldAboveKeyboard';
+import { BACKGROUND_GRACE_SECONDS, useBackgroundLock, useIdleLock } from '../useIdleLock';
+import { useOpened } from '../useOpened';
+import { usePhoneBackups } from '../usePhoneBackups';
+import { BatchSheets } from './BatchSheets';
+import { Blend } from './Blend';
+import { Compare, type Side } from './Compare';
+import { ConfirmNotice } from './Deleted';
+import { FiringLog, type FiringEditing } from './FiringLog';
+import { Fit } from './Fit';
+import { Import } from './Import';
+import { LimitSets, LimitsPanel, limitSets, savedLimitChoice } from './Limits';
 import { EMPTY_MATERIAL, Materials, sameMaterial } from './Materials';
+import { MixLog, type MixEditing } from './MixLog';
+import { OfflineNotice } from './OfflineNotice';
+import { CostLine, PriceLists } from './Prices';
 import { PrintView, type PrintJob } from './PrintView';
 import { EMPTY_RECIPE, RecipeEditor, sameRecipe } from './RecipeEditor';
+import {
+  MaterialMoveSection,
+  RecipeBatchSheetSection,
+  RecipeLogsAndToolsRow,
+  RecipeMoveSection
+} from './RecipeExtras';
 import { RecoverySheet } from './RecoverySheet';
+import {
+  deleteOrEraseText,
+  KeptNotice,
+  PhoneNav,
+  PrintOptions,
+  RecipesHeader,
+  type ShellView,
+  UnsavedDialog
+} from './RecipesShell';
 import { Settings } from './Settings';
-import { SyncIndicator } from './SyncIndicator';
-import { OfflineNotice } from './OfflineNotice';
-import { CollectionPicker, MoveTo } from './Team';
-import { byCollection, canEdit, defaultCollection, editableCollections, may, onlyWeighs } from '../team';
-import { printOut } from '../printing';
+import { CollectionPicker } from './Team';
+
+export { DRAFT_DELAY_MS };
 
 const DAY = 24 * 60 * 60 * 1000;
-/** How long after the last keystroke unsaved edits are kept as a draft. */
-export const DRAFT_DELAY_MS = 1000;
-
 type Scope = 'recipe' | 'material' | 'all';
 
 /** One kind's lists and editor, for what deleting, restoring and erasing do the same for both. */
@@ -79,18 +85,6 @@ export type LockReason = 'manual' | 'idle' | 'idle-with-draft' | 'away' | 'away-
 
 /** The open vault: the recipe list and editor, materials, settings, printing, and the notices
  * above them. */
-/** An open firing or mix moved to the newest revision a sync brought, unless it has unsaved
- * edits, as `useEditor`'s `follow` does for recipes and materials. */
-function followed<Content, Open extends { current: Revision<Content> | null; draft: Content }>(
-  open: Open | null,
-  heads: Revision<Content>[]
-): Open | null {
-  if (!open?.current || JSON.stringify(open.draft) !== JSON.stringify(open.current.content)) return open;
-  const head = heads.find((h) => h.recordId === open.current?.recordId);
-  if (!head || head.revisionId === open.current.revisionId) return open;
-  return { ...open, current: head, draft: head.content };
-}
-
 export function Recipes({
   status,
   update,
@@ -119,33 +113,26 @@ export function Recipes({
   // window.confirm(), so the question is asked in the page.
   const [pending, setPending] = useState<{ scope: Scope; action: () => void } | null>(null);
   const [confirming, setConfirming] = useState<{ action: 'delete' | 'erase'; kind: Kind } | null>(null);
-  const [view, setView] = useState<
-    'recipes' | 'materials' | 'settings' | 'compare' | 'import' | 'batches' | 'firings' | 'mixes' | 'blend' | 'fit'
-  >('recipes');
+  const [view, setView] = useState<ShellView>('recipes');
   // A phone shows a bottom bar, and leaves running a vault it joined to a computer (ADR 31).
   const phone = status.platform !== 'desktop';
   const [replica, setReplica] = useState(false);
-  const [more, setMore] = useState(false);
   useEffect(() => {
     if (phone) api.networkStatus().then((network) => setReplica(!!network?.replica), () => {});
   }, [phone]);
   const shows = offered(status.platform, replica);
   useFieldAboveKeyboard(phone);
-  // The firing log (ADR 14): every firing, the one being edited, and the recipe it is showing.
+
   const [firings, setFirings] = useState<Firing[]>([]);
   const [firing, setFiring] = useState<FiringEditing | null>(null);
   const [firingsOf, setFiringsOf] = useState<string | null>(null);
   const [mixes, setMixes] = useState<Mix[]>([]);
   const [mix, setMix] = useState<MixEditing | null>(null);
   const [mixesOf, setMixesOf] = useState<string | null>(null);
-  // The recipe a line blend starts from.
   const [blendFrom, setBlendFrom] = useState<string | null>(null);
-  // People's own limit formulas, and the set the unity formula is compared with (ADR 15).
   const [ownLimits, setOwnLimits] = useState<Revision<LimitsContent>[]>([]);
   const [limitChoice, setLimitChoice] = useState(savedLimitChoice);
-  // The price lists the person can open, newest first: a recipe is costed by its collection's.
   const [priceLists, setPriceLists] = useState<Revision<PricesContent>[]>([]);
-  // Batch sheets (ADR 12): the one open, and whether the open recipe's is being made.
   const [sheets, setSheets] = useState<BatchSheet[]>([]);
   const [sheet, setSheet] = useState<BatchSheet | null>(null);
   const [makingSheet, setMakingSheet] = useState(false);
@@ -156,8 +143,6 @@ export function Recipes({
   const [kept, setKept] = useState({ recipe: false, material: false, firing: false, mix: false });
   const [newWords, setNewWords] = useState<string[] | null>(null);
   const [organizationWords, setOrganizationWords] = useState<string[] | null>(null);
-  // Who is signed in and what they can open; in a team's vault, names for other people's
-  // private collections (admins only), and where new records go (ADR 12).
   const [access, setAccess] = useState<Access | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
   const [newCollection, setNewCollection] = useState<string | null>(null);
@@ -167,16 +152,36 @@ export function Recipes({
   const [printing, setPrinting] = useState(false);
   const [printJob, setPrintJob] = useState<PrintJob>({ kind: 'recipe' });
   const [printRequest, setPrintRequest] = useState(0);
-  // Whether the vault holds a draft, so one is only cleared when there is one.
-  const draftKept = useRef(false);
-  // Draft writes, one after another: the core runs commands side by side, and a draft kept after
-  // it was cleared would come back.
-  const draftWrites = useRef<Promise<unknown>>(Promise.resolve());
-  const writeDraft = <T,>(write: () => Promise<T>): Promise<T> => {
-    const done = draftWrites.current.then(write);
-    draftWrites.current = done.catch(() => {});
-    return done;
+
+  const firingChanged = !!firing && (!firing.current || !sameFiring(firing.current.content, firing.draft));
+  const firingPart: DraftPart<FiringContent> | undefined =
+    firing && firingChanged
+      ? { recordId: firing.current?.recordId ?? null, revisionId: firing.current?.revisionId ?? null, content: firing.draft }
+      : undefined;
+  const editFiring = (next: FiringEditing | null) => {
+    if (!next || next.current !== firing?.current) setKept((k) => ({ ...k, firing: false }));
+    setFiring(next);
   };
+  const firingPartRef = useRef(firingPart);
+  firingPartRef.current = firingPart;
+
+  const mixChanged = !!mix && (!mix.current || !sameMix(mix.current.content, mix.draft));
+  const mixPart: DraftPart<MixContent> | undefined =
+    mix && mixChanged
+      ? { recordId: mix.current?.recordId ?? null, revisionId: mix.current?.revisionId ?? null, content: mix.draft }
+      : undefined;
+  const editMix = (next: MixEditing | null) => {
+    if (!next || next.current !== mix?.current) setKept((k) => ({ ...k, mix: false }));
+    setMix(next);
+  };
+  const mixPartRef = useRef(mixPart);
+  mixPartRef.current = mixPart;
+
+  const unsaved: Draft | null =
+    recipe.part || material.part || firingPart || mixPart
+      ? { recipe: recipe.part, material: material.part, firing: firingPart, mix: mixPart }
+      : null;
+  const { writeDraft, markDraftLoaded } = useDraftSync(loaded, unsaved);
 
   const loadAccess = async () => {
     const now = await api.access();
@@ -219,42 +224,39 @@ export function Recipes({
       .catch((e) => setError(errorText(e)));
   };
 
-  // A vault that syncs with a host syncs by itself while open (docs/adr/0023-client-mode.md); the
-  // lists are read again when a sync brings something.
   useEffect(() => onEvent<VaultChanged>('vault-changed', (changed) => changed.pulled && reloadAccess()), []);
 
   useEffect(() => {
     (async () => {
       const [now, heads, ownMaterials, gone, goneMaterials, settings, last, draft, batchSheets, allFirings, limits, priceLists, allMixes] =
         await Promise.all([
-        loadAccess(),
-        api.recipes(),
-        api.materials(),
-        api.deletedRecords<RecipeContent>('recipe'),
-        api.deletedRecords<MaterialContent>('material'),
-        api.settings(),
-        api.lastBackup(),
-        api.draft(),
-        api.batchSheets(),
-        api.firings(),
-        api.limitSets(),
-        api.priceLists(),
-        api.mixes()
-      ]);
+          loadAccess(),
+          api.recipes(),
+          api.materials(),
+          api.deletedRecords<RecipeContent>('recipe'),
+          api.deletedRecords<MaterialContent>('material'),
+          api.settings(),
+          api.lastBackup(),
+          api.draft(),
+          api.batchSheets(),
+          api.firings(),
+          api.limitSets(),
+          api.priceLists(),
+          api.mixes()
+        ]);
       setOwnLimits(limits);
       setMixes(allMixes);
       setPriceLists(priceLists);
       setRecipes(heads);
       setSheets(batchSheets);
       setFirings(allFirings);
-      // Someone who only weighs batches starts on the batch sheets.
       if (onlyWeighs(now)) setView('batches');
       setMaterials(ownMaterials);
       setDeletedRecipes(gone);
       setDeletedMaterials(goneMaterials);
       setSettings(settings);
       setLastBackup(last);
-      draftKept.current = !!draft;
+      markDraftLoaded(!!draft);
       const keptRecipe = draft?.recipe && restorePart(draft.recipe, heads, sameRecipe);
       const keptMaterial = draft?.material && restorePart(draft.material, ownMaterials, sameMaterial);
       const keptFiring = draft?.firing && restorePart(draft.firing, allFirings, sameFiring);
@@ -269,67 +271,12 @@ export function Recipes({
       setKept({ recipe: !!keptRecipe, material: !!keptMaterial, firing: !!keptFiring, mix: !!keptMix });
       setLoaded(true);
     })().catch((e) => setError(errorText(e)));
-    // Once, on opening.
   }, []);
 
-  // A firing being logged or changed, as a draft. A new one counts from when it is opened.
-  const firingChanged = !!firing && (!firing.current || !sameFiring(firing.current.content, firing.draft));
-  const firingPart: DraftPart<FiringContent> | undefined =
-    firing && firingChanged
-      ? { recordId: firing.current?.recordId ?? null, revisionId: firing.current?.revisionId ?? null, content: firing.draft }
-      : undefined;
-  // Opening another firing, or saving this one, ends what was kept from last time.
-  const editFiring = (next: FiringEditing | null) => {
-    if (!next || next.current !== firing?.current) setKept((k) => ({ ...k, firing: false }));
-    setFiring(next);
-  };
-  // For locking, which may run after the recipe's and material's changes are saved or discarded.
-  const firingPartRef = useRef(firingPart);
-  firingPartRef.current = firingPart;
-
-  // A mix being logged or changed, kept the same way.
-  const mixChanged = !!mix && (!mix.current || !sameMix(mix.current.content, mix.draft));
-  const mixPart: DraftPart<MixContent> | undefined =
-    mix && mixChanged
-      ? { recordId: mix.current?.recordId ?? null, revisionId: mix.current?.revisionId ?? null, content: mix.draft }
-      : undefined;
-  const editMix = (next: MixEditing | null) => {
-    if (!next || next.current !== mix?.current) setKept((k) => ({ ...k, mix: false }));
-    setMix(next);
-  };
-  const mixPartRef = useRef(mixPart);
-  mixPartRef.current = mixPart;
-
-  // Keeps unsaved edits as an encrypted draft a moment after the last change, and forgets the
-  // draft as soon as nothing is unsaved.
-  const unsaved: Draft | null =
-    recipe.part || material.part || firingPart || mixPart
-      ? { recipe: recipe.part, material: material.part, firing: firingPart, mix: mixPart }
-      : null;
-  const unsavedJson = JSON.stringify(unsaved);
-  useEffect(() => {
-    if (!loaded) return;
-    if (!unsaved) {
-      if (draftKept.current) {
-        draftKept.current = false;
-        writeDraft(api.clearDraft).catch(() => {});
-      }
-      return;
-    }
-    const timer = setTimeout(() => {
-      draftKept.current = true;
-      writeDraft(() => api.saveDraft(unsaved)).catch(() => {});
-    }, DRAFT_DELAY_MS);
-    return () => clearTimeout(timer);
-    // unsavedJson stands for unsaved, which is a new object every render.
-  }, [loaded, unsavedJson]);
-
-  // Print once the page shows the chosen layout.
   useEffect(() => {
     if (printRequest) printOut().catch((e) => setError(errorText(e)));
   }, [printRequest]);
 
-  // The audit log notes each record opened (ADR 19); the core notes each once a sign-in.
   useOpened('recipe', recipe.current?.recordId);
   useOpened('material', material.current?.recordId);
   useOpened('batch', sheet?.recordId);
@@ -340,9 +287,11 @@ export function Recipes({
   const shownRecipe = recipe.viewing?.content ?? recipe.draft;
   const prices =
     priceListFor(priceLists, (recipe.viewing ?? recipe.current)?.collectionId ?? newCollection)?.content ?? null;
-  const analysis = useMemo(() => analyse(shownRecipe.lines, library), [shownRecipe.lines, library]);
+  const analysis = useMemo(
+    () => analyse(shownRecipe.lines, library, { body: isBody(shownRecipe.type) }),
+    [shownRecipe.lines, shownRecipe.type, library]
+  );
 
-  /** Locks by itself, keeping unsaved changes as a draft. */
   const lockBySelf = async (reason: 'idle' | 'away') => {
     try {
       if (unsaved) {
@@ -358,15 +307,12 @@ export function Recipes({
     }
   };
   useIdleLock(settings?.autoLock && !newWords ? settings.autoLockMinutes : null, () => lockBySelf('idle'));
-  // A phone also locks once the app has been in the background for a while (ADR 27).
   useBackgroundLock(status.platform !== 'desktop' && !newWords ? BACKGROUND_GRACE_SECONDS : null, () =>
     lockBySelf('away')
   );
 
   const unsavedIn = (scope: Scope) =>
     (scope !== 'material' && recipe.changed) || (scope !== 'recipe' && material.changed);
-
-  /** Runs `action` now, or once the person has saved or discarded the changes it would lose. */
   const leave = (scope: Scope, action: () => void) =>
     unsavedIn(scope) ? setPending({ scope, action }) : action();
 
@@ -385,6 +331,10 @@ export function Recipes({
       setMaterialError('');
       setKept((k) => ({ ...k, material: false }));
     });
+
+  const team = !!access?.team;
+  const newIn = (kind: Kind) =>
+    !team || canEdit(access, newCollection, kind) ? newCollection : defaultCollection(access, kind);
 
   const saveRecipe = async (): Promise<boolean> => {
     setSaving(true);
@@ -405,6 +355,31 @@ export function Recipes({
     } finally {
       setSaving(false);
     }
+  };
+
+  const renameMaterial = async (oldName: string, name: string) => {
+    const rename = (content: RecipeContent): RecipeContent => ({
+      ...content,
+      lines: content.lines.map((line) => (sameName(line.material, oldName) ? { ...line, material: name } : line))
+    });
+    const all = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, oldName)));
+    const users = all.filter((r) => canEdit(access, r.collectionId));
+    const readOnly = all.filter((r) => !users.includes(r)).map((r) => r.content.name || 'Untitled');
+    const failed: string[] = [];
+    for (const head of users) {
+      try {
+        const saved = await api.saveRecipe(head.revisionId, rename(head.content));
+        setRecipes((list) => [saved, ...list.filter((r) => r.recordId !== saved.recordId)]);
+        recipe.rebase(saved, rename);
+      } catch {
+        failed.push(head.content.name || 'Untitled');
+      }
+    }
+    const problems = [
+      failed.length && `The new name could not be put in ${failed.join(', ')}. Change it there by hand.`,
+      readOnly.length && `You may not change ${readOnly.join(', ')}, so they still use ${oldName}.`
+    ].filter(Boolean);
+    if (problems.length) setMaterialError(problems.join(' '));
   };
 
   const saveMaterial = async (): Promise<boolean> => {
@@ -440,35 +415,6 @@ export function Recipes({
     }
   };
 
-  /** Puts a material's new name in every recipe that uses its old one, each as a new revision. */
-  const renameMaterial = async (oldName: string, name: string) => {
-    const rename = (content: RecipeContent): RecipeContent => ({
-      ...content,
-      lines: content.lines.map((line) => (sameName(line.material, oldName) ? { ...line, material: name } : line))
-    });
-    const all = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, oldName)));
-    // In a team's vault, recipes this person may only read keep the old name.
-    const users = all.filter((r) => canEdit(access, r.collectionId));
-    const readOnly = all.filter((r) => !users.includes(r)).map((r) => r.content.name || 'Untitled');
-    const failed: string[] = [];
-    for (const head of users) {
-      try {
-        const saved = await api.saveRecipe(head.revisionId, rename(head.content));
-        setRecipes((list) => [saved, ...list.filter((r) => r.recordId !== saved.recordId)]);
-        recipe.rebase(saved, rename);
-      } catch {
-        failed.push(head.content.name || 'Untitled');
-      }
-    }
-    const problems = [
-      failed.length && `The new name could not be put in ${failed.join(', ')}. Change it there by hand.`,
-      readOnly.length && `You may not change ${readOnly.join(', ')}, so they still use ${oldName}.`
-    ].filter(Boolean);
-    if (problems.length) setMaterialError(problems.join(' '));
-  };
-
-  // A firing or mix being edited is kept for next time rather than asked about: its editor may
-  // not be on the screen to save it from.
   const lock = () =>
     leave('all', async () => {
       const [firing, mix] = [firingPartRef.current, mixPartRef.current];
@@ -505,7 +451,6 @@ export function Recipes({
     }
   } satisfies { recipe: Records<RecipeContent>; material: Records<MaterialContent> };
 
-  /** Shows a deleted record, to restore or erase. */
   const openDeleted = <Content,>(r: Records<Content>, gone: Revision<Content>) =>
     leave(r.kind, () => {
       r.editor.look(gone);
@@ -513,7 +458,6 @@ export function Recipes({
       setKept((k) => ({ ...k, [r.kind]: false }));
     });
 
-  /** Deletes the open record, unsaved edits and all. */
   const deleteRecord = async <Content,>(r: Records<Content>) => {
     const newest = r.editor.current!;
     try {
@@ -544,7 +488,6 @@ export function Recipes({
     }
   };
 
-  /** Ends a fork of the open record by keeping one of its newest revisions (ADR 17). */
   const keepVersion = <Content,>(r: Records<Content>, keep: string) =>
     leave(r.kind, async () => {
       const head = r.editor.current;
@@ -589,13 +532,11 @@ export function Recipes({
     void (kind === 'recipe' ? act(records.recipe) : act(records.material));
   };
 
-  /** Puts an earlier revision in the editor, once the edits it would replace are saved or discarded. */
   const takeRevision = <Content,>(scope: 'recipe' | 'material', editor: Editor<Content>) => {
     const content = editor.viewing!.content;
     leave(scope, () => editor.edit(content));
   };
 
-  // A phone's own vault backs itself up; a whole backup answers the reminder as one saved does.
   const phoneBackups = usePhoneBackups(status.platform !== 'desktop', (made) => {
     if (made.photos) setLastBackup({ at: made.at, fileName: made.fileName });
   });
@@ -618,7 +559,6 @@ export function Recipes({
         await api.installUpdate();
       } catch (e) {
         setInstalling(false);
-        // The vault is locked just before installing, so a failed install can leave it locked.
         const now = await api.status().catch(() => null);
         if (now && !now.unlocked) onLocked('manual');
         else setError(errorText(e));
@@ -653,18 +593,12 @@ export function Recipes({
     );
   }
 
-  const team = !!access?.team;
   const mayCreate = !team || editableCollections(access).length > 0;
   const picker = team && access && (
     <CollectionPicker access={access} names={names} value={newCollection} onChange={setNewCollection} />
   );
-  /** Where a new record of a kind goes: the collection chosen, if this person may make that kind
-   * there, else the first where they may. */
-  const newIn = (kind: Kind) =>
-    !team || canEdit(access, newCollection, kind) ? newCollection : defaultCollection(access, kind);
   const reminderDays = settings?.backupReminderDays ?? 0;
   const backupDue =
-    // In a team's vault only admins back up.
     (!team || !!access?.me.admin) &&
     !reminderHidden &&
     reminderDays > 0 &&
@@ -676,8 +610,7 @@ export function Recipes({
         pending.scope !== 'recipe' && material.changed && (material.draft.name || 'This material')
       ].filter((name): name is string => !!name)
     : [];
-  // What Compare starts with: the unsaved changes and what they started from, an earlier revision
-  // and the newest, or this recipe and another.
+
   const compareFrom = (number?: number): [Side, Side] | null => {
     const current = recipe.current;
     const other = recipes.find((r) => r.recordId !== current?.recordId);
@@ -692,320 +625,24 @@ export function Recipes({
     if (current && other) return [{ recordId: current.recordId, number: null }, { recordId: other.recordId, number: null }];
     return null;
   };
-  // What this person may do with the recipe shown, in its collection (ADR 4).
   const shownIn = recipe.current ? recipe.current.collectionId : newCollection;
   const chemistry = may(access, shownIn, 'chemistry');
   const canCompare = chemistry && !!compareFrom();
 
-  const confirmText = () => {
-    if (!confirming) return null;
-    const editor = confirming.kind === 'recipe' ? recipe : material;
-    const name = (editor.current ?? editor.viewing)?.content.name || 'Untitled';
-    if (confirming.action === 'erase') {
-      return (
-        <p>
-          <strong>Erase {name} permanently?</strong> All its revisions are removed from this vault and cannot be
-          brought back. Backups made before now still have it.
-        </p>
-      );
-    }
-    const users =
-      confirming.kind === 'material'
-        ? recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, name))).length
-        : 0;
-    const standard = confirming.kind === 'material' && standardNamed(name);
-    return (
-      <p>
-        <strong>Delete {name}?</strong> It moves to Deleted, below the list, where you can restore it or erase it for
-        good.
-        {editor.changed && ' Your unsaved changes to it are lost.'}
-        {users > 0 &&
-          ` ${users === 1 ? '1 recipe uses' : `${users} recipes use`} it, and will ${
-            standard ? `use the standard ${standard} instead` : 'not find it'
-          } until it is restored.`}
-      </p>
-    );
-  };
-  /** Below a saved recipe someone may change, in a team's vault: its batch sheet. */
-  const batchSheetPart = () => {
-    const current = recipe.current;
-    if (!team || !current || recipe.viewing || !canEdit(access, current.collectionId, 'batch')) return null;
-    const made = sheets.find((s) => s.content.recipe === current.recordId) ?? null;
-    if (makingSheet) {
-      return (
-        <BatchSheetForm
-          key={current.revisionId}
-          recipe={current}
-          sheet={made}
-          sheets={sheets}
-          recipes={recipes}
-          onSaved={(saved) => {
-            setSheets((list) => [saved, ...list.filter((s) => s.recordId !== saved.recordId)]);
-            setMakingSheet(false);
-          }}
-          onCancel={() => setMakingSheet(false)}
-        />
-      );
-    }
-    const status = !made
-      ? ''
-      : made.content.recipeNumber === current.number
-        ? 'Its batch sheet is up to date.'
-        : `Its batch sheet was made from revision ${made.content.recipeNumber}. Update it to weigh this one.`;
-    return (
-      <div className="row">
-        <button type="button" disabled={recipe.changed} onClick={() => setMakingSheet(true)}>
-          Batch sheet…
-        </button>
-        {status && <span className="hint">{status}</span>}
-      </div>
-    );
-  };
-
-  /** Below a saved recipe someone may change, in a team's vault: moving it to another collection,
-   * with its firings and batch sheets. */
-  const movePart = () => {
-    const current = recipe.current;
-    if (!team || !access || !current || recipe.viewing) return null;
-    const ownFirings = firings.filter((f) => f.content.recipe === current.recordId);
-    const ownSheets = sheets.filter((s) => s.content.recipe === current.recordId);
-    const ownMixes = mixes.filter((m) => mixOf(m.content, current.recordId));
-    const kinds: Kind[] = [
-      'recipe',
-      ...(ownFirings.length ? (['firing'] as const) : []),
-      ...(ownSheets.length ? (['batch'] as const) : []),
-      ...(ownMixes.length ? (['mix'] as const) : [])
-    ];
-    if (!kinds.every((kind) => canEdit(access, current.collectionId, kind))) return null;
-    const along = [
-      ownFirings.length ? (ownFirings.length === 1 ? 'its firing' : `its ${ownFirings.length} firings`) : '',
-      ownSheets.length ? 'its batch sheet' : '',
-      ownMixes.length ? (ownMixes.length === 1 ? 'its mix' : `its ${ownMixes.length} mixes`) : ''
-    ].filter(Boolean);
-    return (
-      <MoveTo
-        key={`${current.recordId} ${current.collectionId}`}
-        access={access}
-        names={names}
-        from={current.collectionId!}
-        kinds={kinds}
-        name={current.content.name}
-        along={along}
-        onMove={async (to) => {
-          await api.moveRecords(
-            [
-              ['recipe', current.recordId],
-              ...ownFirings.map((f): [Kind, string] => ['firing', f.recordId]),
-              ...ownSheets.map((s): [Kind, string] => ['batch', s.recordId]),
-              ...ownMixes.map((m): [Kind, string] => ['mix', m.recordId])
-            ],
-            to
-          );
-          const moved = <Item extends { recordId: string; collectionId?: string }>(list: Item[], ids: string[]) =>
-            list.map((item) => (ids.includes(item.recordId) ? { ...item, collectionId: to } : item));
-          setRecipes((list) => moved(list, [current.recordId]));
-          setFirings((list) => moved(list, ownFirings.map((f) => f.recordId)));
-          setSheets((list) => moved(list, ownSheets.map((s) => s.recordId)));
-          setMixes((list) => moved(list, ownMixes.map((m) => m.recordId)));
-          recipe.rebase({ ...current, collectionId: to }, (draft) => draft);
-        }}
-      />
-    );
-  };
-
-  /** Below a saved material someone may change, in a team's vault: moving it to another
-   * collection. Recipes find it by name, so those elsewhere lose it for people who cannot open
-   * where it goes. */
-  const materialMovePart = () => {
-    const current = material.current;
-    if (!team || !access || !current || material.viewing) return null;
-    if (!canEdit(access, current.collectionId, 'material')) return null;
-    const users = recipes.filter((r) => r.content.lines.some((line) => sameName(line.material, current.content.name)));
-    return (
-      <MoveTo
-        key={`${current.recordId} ${current.collectionId}`}
-        access={access}
-        names={names}
-        from={current.collectionId!}
-        kinds={['material']}
-        name={current.content.name}
-        along={[]}
-        note={(to, there) => {
-          const elsewhere = users.filter((r) => r.collectionId !== to).length;
-          if (!elsewhere) return '';
-          const one = elsewhere === 1;
-          return `${one ? '1 recipe' : `${elsewhere} recipes`} outside ${there} ${one ? 'uses' : 'use'} it. People who cannot open ${there} will see ${one ? 'it' : 'them'} worked out without it, or with the standard material of that name.`;
-        }}
-        onMove={async (to) => {
-          await api.moveRecords([['material', current.recordId]], to);
-          setMaterials((list) =>
-            list.map((item) => (item.recordId === current.recordId ? { ...item, collectionId: to } : item))
-          );
-          material.rebase({ ...current, collectionId: to }, (draft) => draft);
-        }}
-      />
-    );
-  };
-
-  /** Below a saved recipe: its firings, and logging another. */
-  const firingsPart = () => {
-    const current = recipe.current;
-    if (!current || recipe.viewing) return null;
-    // A body's firings include the glazes fired on it, as the log lists them.
-    const count = firings.filter((f) => firingOf(f.content, current.recordId)).length;
-    const mixCount = mixes.filter((m) => mixOf(m.content, current.recordId)).length;
-    const show = (editing: FiringEditing | null) => {
-      setFiringsOf(current.recordId);
-      if (editing) editFiring(editing);
-      setView('firings');
-    };
-    const showMixes = (editing: MixEditing | null) => {
-      setMixesOf(current.recordId);
-      if (editing) editMix(editing);
-      setView('mixes');
-    };
-    return (
-      <div className="row">
-        {mixCount > 0 && (
-          <button type="button" onClick={() => showMixes(null)}>
-            Mixes ({mixCount})
-          </button>
-        )}
-        {count > 0 && (
-          <button type="button" onClick={() => show(null)}>
-            Firings ({count})
-          </button>
-        )}
-        {recipes.length > 1 && may(access, current.collectionId, 'chemistry') && (
-          <button
-            type="button"
-            onClick={() =>
-              leave('recipe', () => {
-                setBlendFrom(current.recordId);
-                setView('blend');
-              })
-            }
-          >
-            Blend…
-          </button>
-        )}
-        {canEdit(access, current.collectionId, 'firing') && (
-          <button
-            type="button"
-            onClick={() =>
-              show({
-                current: null,
-                draft: newFiring(
-                  { recordId: current.recordId, number: current.number, name: current.content.name },
-                  new Date()
-                )
-              })
-            }
-          >
-            Log a firing…
-          </button>
-        )}
-        {canEdit(access, current.collectionId, 'mix') && (
-          <button
-            type="button"
-            onClick={() => showMixes({ current: null, draft: newMix({ recipe: current }, new Date()) })}
-          >
-            Log a mix…
-          </button>
-        )}
-      </div>
-    );
-  };
-
-  const viewButton = (name: 'materials' | 'settings' | 'batches' | 'firings' | 'mixes', label: string) => (
-    <button type="button" aria-pressed={view === name} onClick={() => setView(view === name ? 'recipes' : name)}>
-      {label}
-    </button>
-  );
-
-  const tab = (name: (typeof PHONE_TABS)[number], label: string) => (
-    <button
-      type="button"
-      aria-current={view === name && !more ? 'page' : undefined}
-      onClick={() => {
-        setMore(false);
-        setView(name);
-      }}
-    >
-      {label}
-    </button>
-  );
-
   return (
     <div className={phone ? 'shell phone' : 'shell'}>
-      <header className="bar no-print">
-        <span className="brand">Glaze Vault</span>
-        <div className="bar-actions">
-          {/* A phone saves what it would print as a PDF (ADR 33). */}
-          {view === 'recipes' && may(access, shownIn, 'print') && (
-            <button type="button" aria-expanded={printing} onClick={() => setPrinting(!printing)}>
-              Print…
-            </button>
-          )}
-          <span className="views">
-            {viewButton('mixes', 'Mix log')}
-            {viewButton('firings', 'Firing log')}
-            {team && viewButton('batches', 'Batch sheets')}
-            {viewButton('materials', 'Materials')}
-            {viewButton('settings', 'Settings')}
-          </span>
-          <SyncIndicator />
-          {team && access && <span className="hint signed-in">{access.me.name}</span>}
-          <button type="button" className="views" onClick={lock}>
-            Lock
-          </button>
-        </div>
-      </header>
+      <RecipesHeader
+        view={view}
+        onView={setView}
+        canPrint={may(access, shownIn, 'print')}
+        printing={printing}
+        onTogglePrint={() => setPrinting(!printing)}
+        team={team}
+        signedInName={team && access ? access.me.name : null}
+        onLock={lock}
+      />
 
-      {phone && (
-        <nav className="phone-nav no-print" aria-label="Views">
-          {tab('recipes', 'Recipes')}
-          {tab('mixes', 'Mix log')}
-          {tab('firings', 'Firing log')}
-          <button type="button" aria-expanded={more} onClick={() => setMore(!more)}>
-            More
-          </button>
-          {more && (
-            <div className="phone-more" role="menu">
-              {(
-                [
-                  ['materials', 'Materials'],
-                  ...(team ? [['batches', 'Batch sheets']] : []),
-                  ['settings', 'Settings']
-                ] as ['materials' | 'batches' | 'settings', string][]
-              ).map(([name, label]) => (
-                <button
-                  key={name}
-                  type="button"
-                  role="menuitem"
-                  aria-current={view === name ? 'page' : undefined}
-                  onClick={() => {
-                    setMore(false);
-                    setView(name);
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMore(false);
-                  lock();
-                }}
-              >
-                Lock
-              </button>
-            </div>
-          )}
-        </nav>
-      )}
+      {phone && <PhoneNav view={view} onView={setView} team={team} onLock={lock} />}
 
       <div className="notices no-print">
         <OfflineNotice />
@@ -1015,33 +652,12 @@ export function Recipes({
             onConfirm={confirm}
             onCancel={() => setConfirming(null)}
           >
-            {confirmText()}
+            {confirming.kind === 'recipe'
+              ? deleteOrEraseText(confirming.action, 'recipe', recipe, recipes)
+              : deleteOrEraseText(confirming.action, 'material', material, recipes)}
           </ConfirmNotice>
         )}
-        {pending && (
-          <div className="notice warning" role="alertdialog" aria-labelledby="unsaved-title">
-            <p id="unsaved-title">
-              {pendingNames.map((name, i) => (
-                <span key={name}>
-                  {i > 0 && ' and '}
-                  <strong>{name}</strong>
-                </span>
-              ))}{' '}
-              {pendingNames.length > 1 ? 'have' : 'has'} changes that are not saved.
-            </p>
-            <div className="row">
-              <button type="button" className="primary" autoFocus onClick={() => resolvePending('save')}>
-                Save
-              </button>
-              <button type="button" onClick={() => resolvePending('discard')}>
-                Discard changes
-              </button>
-              <button type="button" onClick={() => resolvePending('stay')}>
-                Keep editing
-              </button>
-            </div>
-          </div>
-        )}
+        {pending && <UnsavedDialog names={pendingNames} onResolve={(choice) => void resolvePending(choice)} />}
         {kept.recipe && recipe.changed && (
           <KeptNotice
             name={recipe.draft.name}
@@ -1159,7 +775,6 @@ export function Recipes({
                 await api.bringBack(name);
                 onLocked('switched');
               } catch (e) {
-                // The vault locks first, so a failed switch can leave it locked.
                 const now = await api.status().catch(() => null);
                 if (now && !now.unlocked) onLocked('manual');
                 else setSwitchError(errorText(e));
@@ -1211,7 +826,6 @@ export function Recipes({
             ];
             setRecipes((list) => merge(list, newRecipes));
             setMaterials((list) => merge(list, newMaterials));
-            // A record open in an editor that got a new revision moves on to it, keeping any edits.
             newRecipes.forEach((saved) => recipe.rebase(saved, (draft) => draft));
             newMaterials.forEach((saved) => material.rebase(saved, (draft) => draft));
           }}
@@ -1338,7 +952,21 @@ export function Recipes({
           renameInRecipes={renameInRecipes}
           onRenameInRecipes={setRenameInRecipes}
           readOnly={!canEdit(access, material.current ? material.current.collectionId : newIn('material'), 'material')}
-          moveTo={materialMovePart()}
+          moveTo={
+            <MaterialMoveSection
+              team={team}
+              access={access}
+              names={names}
+              material={material}
+              recipes={recipes}
+              onMoved={(current, to) => {
+                setMaterials((list) =>
+                  list.map((item) => (item.recordId === current.recordId ? { ...item, collectionId: to } : item))
+                );
+                material.rebase({ ...current, collectionId: to }, (draft) => draft);
+              }}
+            />
+          }
           canCreate={!team || editableCollections(access, 'material').length > 0}
           newIn={
             (team && access && (
@@ -1404,7 +1032,7 @@ export function Recipes({
                 onChoose={setLimitChoice}
                 umf={analysis?.result?.umf ?? null}
               />
-              {analysis?.result && (
+              {analysis?.result?.umf && (
                 <button type="button" className="fit-button" onClick={() => setView('fit')}>
                   Fit to a formula…
                 </button>
@@ -1413,9 +1041,63 @@ export function Recipes({
           }
           batchSheet={
             <>
-              {firingsPart()}
-              {chemistry && batchSheetPart()}
-              {movePart()}
+              <RecipeLogsAndToolsRow
+                recipe={recipe}
+                recipesCount={recipes.length}
+                access={access}
+                firings={firings}
+                mixes={mixes}
+                onShowFirings={(recordId, editing) => {
+                  setFiringsOf(recordId);
+                  if (editing || !firingChanged) editFiring(editing);
+                  setView('firings');
+                }}
+                onShowMixes={(recordId, editing) => {
+                  setMixesOf(recordId);
+                  if (editing || !mixChanged) editMix(editing);
+                  setView('mixes');
+                }}
+                onBlend={(recordId) =>
+                  leave('recipe', () => {
+                    setBlendFrom(recordId);
+                    setView('blend');
+                  })
+                }
+              />
+              {chemistry && (
+                <RecipeBatchSheetSection
+                  team={team}
+                  access={access}
+                  recipe={recipe}
+                  recipes={recipes}
+                  sheets={sheets}
+                  making={makingSheet}
+                  onMaking={setMakingSheet}
+                  onSaved={(saved) => {
+                    setSheets((list) => [saved, ...list.filter((s) => s.recordId !== saved.recordId)]);
+                    setMakingSheet(false);
+                  }}
+                />
+              )}
+              <RecipeMoveSection
+                team={team}
+                access={access}
+                names={names}
+                recipe={recipe}
+                firings={firings}
+                sheets={sheets}
+                mixes={mixes}
+                onMoved={(to, ids) => {
+                  const current = recipe.current!;
+                  const moved = <Item extends { recordId: string; collectionId?: string }>(list: Item[], movedIds: string[]) =>
+                    list.map((item) => (movedIds.includes(item.recordId) ? { ...item, collectionId: to } : item));
+                  setRecipes((list) => moved(list, [current.recordId]));
+                  setFirings((list) => moved(list, ids.firings));
+                  setSheets((list) => moved(list, ids.sheets));
+                  setMixes((list) => moved(list, ids.mixes));
+                  recipe.rebase({ ...current, collectionId: to }, (draft) => draft);
+                }}
+              />
             </>
           }
         />
@@ -1435,101 +1117,5 @@ export function Recipes({
         />
       )}
     </div>
-  );
-}
-
-function KeptNotice({
-  name,
-  plain = false,
-  onShow,
-  onDiscard
-}: {
-  name: string;
-  /** The name is a phrase, not a record's name to show in bold. */
-  plain?: boolean;
-  onShow?: () => void;
-  onDiscard: () => void;
-}) {
-  return (
-    <div className="notice" role="status">
-      <p>
-        These are your unsaved changes to {plain ? name : <strong>{name || 'Untitled'}</strong>} from last time. Save
-        them, or discard them.
-      </p>
-      <div className="row">
-        {onShow && (
-          <button type="button" className="primary" onClick={onShow}>
-            Show them
-          </button>
-        )}
-        <button type="button" onClick={onDiscard}>
-          Discard changes
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function PrintOptions({
-  job,
-  onPrint,
-  onCancel
-}: {
-  job: PrintJob;
-  onPrint: (job: PrintJob) => void;
-  onCancel: () => void;
-}) {
-  const [kind, setKind] = useState<PrintJob['kind']>(job.kind);
-  const [size, setSize] = useState(job.kind === 'batch' ? String(job.size) : '1000');
-  const [unit, setUnit] = useState<BatchUnit>(job.kind === 'batch' ? job.unit : 'g');
-  const amount = amountOf(size);
-  const ready = kind === 'recipe' || (Number.isFinite(amount) && amount > 0);
-
-  const submit = (event: React.FormEvent) => {
-    event.preventDefault();
-    if (ready) onPrint(kind === 'recipe' ? { kind } : { kind, size: amount, unit });
-  };
-
-  return (
-    <form className="notice" onSubmit={submit}>
-      <fieldset className="print-options">
-        <legend>Print</legend>
-        <label className="check">
-          <input type="radio" name="print-kind" checked={kind === 'recipe'} onChange={() => setKind('recipe')} />
-          The recipe, with its unity formula
-        </label>
-        <label className="check">
-          <input type="radio" name="print-kind" checked={kind === 'batch'} onChange={() => setKind('batch')} />
-          A batch sheet for weighing out
-        </label>
-        {kind === 'batch' && (
-          <div className="row batch-size">
-            <label htmlFor="batch-size">Batch size</label>
-            <input
-              id="batch-size"
-              inputMode="decimal"
-              value={size}
-              onChange={(e) => setSize(e.target.value)}
-              aria-invalid={!ready}
-            />
-            <select aria-label="Unit" value={unit} onChange={(e) => setUnit(e.target.value as BatchUnit)}>
-              {BATCH_UNITS.map((u) => (
-                <option key={u.unit} value={u.unit}>
-                  {u.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-      </fieldset>
-      <div className="row">
-        <button type="submit" className="primary" disabled={!ready}>
-          Print
-        </button>
-        <button type="button" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </form>
   );
 }

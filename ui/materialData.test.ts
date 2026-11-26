@@ -26,9 +26,11 @@ describe('material data', () => {
     expect(densityOf('grolleg', mine)).toBe(2.58);
     expect(densityOf('Wollastonite NYAD', mine)).toBe(2.9);
     expect(densityOf('Flint', mine)).toBe(2.65);
-    expect(densityOf('Zircon', mine)).toBe(4.6);
-    expect(densityOf('Zirconium oxide', mine)).toBe(5.7);
+    expect(densityOf('Zircon', mine)).toBe(4.65);
+    expect(densityOf('Zirconium oxide', mine)).toBe(5.75);
     expect(densityOf('Wollastonite (NYAD 400)', [])).toBe(2.9);
+    expect(densityOf('Kyanite', [])).toBe(3.61);
+    expect(densityOf('Pyrophyllite', [])).toBe(2.85);
     expect(densityOf('EPK', mine)).toBe(2.6);
   });
 
@@ -39,7 +41,7 @@ describe('material data', () => {
     ];
     const { density, worked } = recipeDensity(lines, []);
     expect(worked).toBe(true);
-    expect(density).toBeCloseTo(100 / (50 / 2.6 + 50 / 4.6), 9);
+    expect(density).toBeCloseTo(100 / (50 / 2.6 + 50 / 4.65), 9);
     // Heavier solids take more water at the same gravity.
     expect(waterPer100('1.8', density)!).toBeGreaterThan(waterPer100('1.8')!);
     expect(recipeDensity([{ material: 'EPK', amount: '' }], [])).toEqual({ density: 2.6, worked: false });

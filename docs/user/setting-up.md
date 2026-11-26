@@ -1,7 +1,9 @@
 # Setting up your vault
 
 The first time Glaze Vault opens, it asks you to set up your vault. It takes a minute, and you
-need a printer or a pen.
+need a printer or a pen. (If you already have a backup or are joining a team's vault, choose
+**Restore from a backup** or **Join a vault on this network** instead; see
+[Backups](backups.md#restoring-a-backup) and [Joining](joining.md).)
 
 ## 1. Choose a password
 
@@ -18,7 +20,8 @@ Next, Glaze Vault shows 24 words: your **recovery key**. If you forget your pass
 are the only way back into your vault. Nobody else can recover it for you, including the people
 who make Glaze Vault.
 
-- Choose **Print recovery sheet**, or write the words down in order, with their numbers.
+- Choose **Print recovery sheet** (or **Save recovery sheet as PDF…** on a phone or tablet to
+  print it), or write the words down in order, with their numbers.
 - Keep the sheet somewhere safe and away from the computer, such as a locked drawer or a safe.
 - Do not keep it as a photo or a file on the same computer.
 
@@ -38,7 +41,9 @@ Each time Glaze Vault starts, type your password and choose **Unlock**. Choose *
 of the window to close the vault without quitting: your recipes are hidden until the password is
 typed again. Quitting the app locks it too.
 
-> Glaze Vault does not yet lock itself after a while with nobody using it. Lock it, or quit it,
-> before you leave the computer.
+Glaze Vault also locks itself after 15 minutes with nobody using it (and on a phone or tablet,
+shortly after you leave the app), keeping any unsaved edits encrypted for when you come back. You
+can change the time in [Settings](settings.md#locking-by-itself), though locking before you walk
+away from a shared computer is still a good habit.
 
 If you forget your password, see [Using your recovery key](recovery-key.md#using-your-recovery-key).

@@ -28,8 +28,9 @@ Under the name are details you can fill in or leave empty, in any recipe:
 - For a glaze or slip, the **Specific gravity** it is mixed to and its **Ford cup #4** seconds. With
   a gravity, the editor says about how much water that takes per 100 g of dry materials. It
   works out the dry materials' density from each material's: its data sheet's density if
-  [your material](materials.md#data-sheets) gives one, else its class's, else a typical one for
-  standard materials such as zircon (4.6 g/cm³), and 2.6 g/cm³ for the rest.
+  [your material](materials.md#data-sheets) or a standard clay's data sheet gives one, else its
+  class's, else a typical one for standard materials such as zircon (4.65 g/cm³), and 2.6 g/cm³
+  for the rest.
   [Firings](firing-log.md) show these beside what was measured. The water is also given as a share
   of the wet slip.
 - For a clay body or casting slip:
@@ -66,17 +67,17 @@ name, or by cone, from the coolest; recipes with no cone come last.
 
 ### Materials
 
-The list has Glazecalc's standard library: 167 materials from manufacturers' data sheets (for
-example Custer Spar, G-200 EU Feldspar, EPK Kaolin, Alberta Slip and many frits), and theoretical materials such
-as *Potash Feldspar*, *Kaolin* and *Whiting*, worked out from their chemical formulas. A
-material's other names work too: typing *ABSLIP* finds Alberta Slip.
+The list has Glazecalc's standard catalog: 184 materials from manufacturers' data sheets and
+stoichiometric minerals (for example *Custer Spar*, *G-200 EU Feldspar*, *EPK Kaolin*, *Alberta
+Slip* and many frits), plus 41 colorants, opacifiers and suspenders (such as *Chromium Oxide*,
+*Rutile* and *Bentonite*). A material's other known names work too: typing *ABSLIP* finds
+*Alberta Slip*. Add colorants and suspenders as lines like any other material, and tick **Added**
+if they go on top of the base.
 
-It also has Glazecalc's colorants, opacifiers and suspenders, such as *Chromium Oxide*, *Rutile*
-and *Bentonite*. Add them as lines like any other material, and tick **Added** if they go on top
-of the base.
-
-If a theoretical material and a commercial one share a name, the name you type means the
-theoretical one; choose the commercial one by its own name.
+Where a theoretical mineral and commercial materials share a generic name, the theoretical one is
+marked **(theoretical)**—such as *Potash Feldspar (theoretical)* and *Kaolin (theoretical)*—and
+bare generic words such as *Kaolin* or *Nepheline Syenite* ask you to pick the specific material
+you mean rather than guessing.
 
 To use your supplier's analysis, or a material the list does not have, add
 [your own material](materials.md). Yours are marked *Your material* in the list, and one with the
@@ -121,7 +122,9 @@ chemistry as body formulators read it, on screen and printed:
 - **Added silica**: silica, flint or quartz added on its own, as a percentage of the dry
   materials. A porcelain with less than about 20% tends to craze glazes, and the panel says so.
 
-The unity formula is still there, folded under **Unity formula**.
+A body, slip or wash with no fluxes at all (such as pure kaolin and silica) still works out its
+fired oxide weight %, **Formula with Al₂O₃ = 1**, ratios and loss on ignition. When fluxes are
+present, the glaze unity formula is still there too, folded under **Unity formula**.
 
 ## Saving and revisions
 
@@ -152,13 +155,12 @@ formula; you can print it too. It cannot be changed.
 An earlier revision is worked out with [your materials](materials.md) as they are now, so if you
 have changed a material since, its unity formula may differ from what it was.
 
-> Coming later: comparing two recipes or two revisions, and deleting a recipe.
-
 ## Comparing recipes
 
 **Compare…**, beside Save, puts two recipes side by side: each material as a percent of its
-batch, their unity formulas, the SiO₂ : Al₂O₃ ratio, expansion and loss on ignition, with the
-change from the first to the second, and their notes if they differ.
+batch, their unity formulas (or, when both are clay bodies or slips, their fired oxide weight % and
+Al₂O₃ = 1 formulas), the SiO₂ : Al₂O₃ ratio, expansion and loss on ignition, with the change from
+the first to the second, plus any differences in their details and notes.
 
 It starts with what you are most likely to want:
 

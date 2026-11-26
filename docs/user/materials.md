@@ -23,7 +23,8 @@ Your materials are encrypted in your vault like your recipes, and are in your ba
 6. Choose **Save**.
 
 To start from a standard material, type its name under **Start from a standard material** and
-choose **Copy its analysis**. Its analysis and kind are copied in, and its name too if yours has
+choose **Copy its analysis**. Its analysis and kind are copied in—along with its **Class** and
+primary **Data sheet** figures for standard clays that have them—and its name too if yours has
 none yet. Then change what your data sheet says differently.
 
 Names are matched ignoring capitals, spaces, punctuation and accents, so *Spar, lot 7* and
@@ -46,12 +47,14 @@ Switching **Given as** back keeps both: the one it is set to is the one used.
 ## Data sheets
 
 For clays most of all, a supplier's data sheet says more than the analysis. Give a material a
-**Class**, such as ball clay, kaolin, feldspar or grog, and fill in any of the **Data sheet**
-values below it; all are optional:
+**Class** (such as ball clay, kaolin, fire clay, stoneware or red clay, bentonite or plasticizer,
+calcined clay or chamotte, kyanite, pyrophyllite or refractory, feldspar, or grog), and fill in
+any of the **Data sheet** values below it; all are optional:
 
-- **Fired at cone**, and the **Drying shrinkage**, **Firing shrinkage** and **Absorption** at it.
-- **Water of plasticity**, **Finer than 1 µm**, **Particle size** in the sheet's words (such as
-  *0.5% on 325 mesh*) and **Dry strength** with its unit.
+- **Fired at cone**, and the **Drying shrinkage**, **Firing shrinkage**, **Total shrinkage** and
+  **Absorption** at it.
+- **Water of plasticity**, **Finer than 2 µm**, **Finer than 1 µm**, **Particle size** in the
+  sheet's words (such as *0.5% on 325 mesh*) and **Dry strength** with its unit.
 - **Density of the solids**, in g/cm³, which works out the water a slip takes at a
   [specific gravity](recipes.md#details). With none, the class's typical density is used.
 

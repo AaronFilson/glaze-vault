@@ -40,6 +40,30 @@ describe('a clay body’s chemistry', () => {
     const body = bodyChemistry(analyse([...PORCELAIN, { material: 'Red Iron Oxide', amount: '2' }])!.result!);
     expect(body.ironTitania).toBeGreaterThan(1.5);
   });
+
+  it('works out zero-flux slips, kaolins and refractory washes cleanly while glazes reject no-flux', () => {
+    const slip = [
+      { material: 'Kaolin (theoretical)', amount: '50' },
+      { material: 'Silica', amount: '50' },
+      { material: 'Darvan 7', amount: '0.4' }
+    ];
+    expect(analyse(slip)!.problem).toMatch(/flux/i);
+
+    const analysed = analyse(slip, undefined, { body: true })!;
+    expect(analysed.problem).toBeUndefined();
+    expect(analysed.result!.umf).toBeNull();
+    expect('noOxides' in analysed && analysed.noOxides).toEqual(['Darvan 7']);
+
+    const body = bodyChemistry(analysed.result!);
+    expect(body.fluxMol).toBe(0);
+    expect(body.knaoMol).toBe(0);
+    expect(Object.fromEntries(body.alumina!).Al2O3).toBeCloseTo(1, 9);
+    expect(Object.fromEntries(body.alumina!).SiO2).toBeGreaterThan(3.5);
+
+    const kyanite = analyse([{ material: 'Kyanite', amount: '100' }], undefined, { body: true })!;
+    expect(kyanite.result!.umf).toBeNull();
+    expect(kyanite.result!.siAlRatio).toBeCloseTo(1.19, 2);
+  });
 });
 
 describe('what a body is made of', () => {

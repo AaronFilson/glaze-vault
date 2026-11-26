@@ -18,7 +18,7 @@ import {
   triaxialSteps,
   type BlendStep
 } from '../blend';
-import { amountOf, analyse, oxideLabel, OXIDES, type MaterialLibrary, type RecipeContent } from '../chemistry';
+import { amountOf, analyse, oxideLabel, OXIDES, type Analysis, type MaterialLibrary, type RecipeContent } from '../chemistry';
 
 type Mode = 'line' | 'triaxial';
 /** What goes on paper: the weights of each test, or a label for each test bar. */
@@ -75,12 +75,15 @@ export function Blend({
     if (mode === 'line') return blendSteps(a.content.lines, b.content.lines, Number(steps));
     return c ? triaxialSteps(a.content.lines, b.content.lines, c.content.lines, Number(divisions)) : [];
   }, [a, b, c, mode, steps, divisions]);
-  const analyses = useMemo(() => blend.map((step) => analyse(step.lines, library)), [blend, library]);
-  const materials = blend[0]?.lines.map((line) => line.material) ?? [];
-  const additions = blend[0]?.lines.some((line) => line.addition) ?? false;
-  const oxides = OXIDES.filter((oxide) => analyses.some((x) => (x?.result?.umf[oxide] ?? 0) > 0));
   // Bodies blended with bodies are read as bodies, and a step saved from them is one too.
   const bodies = ready && picked.every((r) => isBody(r?.content.type));
+  const analyses = useMemo(
+    () => blend.map((step) => analyse(step.lines, library, { body: bodies })),
+    [blend, bodies, library]
+  );
+  const materials = blend[0]?.lines.map((line) => line.material) ?? [];
+  const additions = blend[0]?.lines.some((line) => line.addition) ?? false;
+  const oxides = OXIDES.filter((oxide) => analyses.some((x) => (x?.result?.umf?.[oxide] ?? 0) > 0));
   const type = bodies && new Set(picked.map((r) => r?.content.type)).size === 1 ? a?.content.type : undefined;
   const size = amountOf(testSize);
   const names = blend.map((step) => blendName(recipeNames, step.shares));
@@ -241,7 +244,7 @@ export function Blend({
                         <th scope="row">{oxideLabel(oxide)}</th>
                         {analyses.map((x, i) => (
                           <td key={i} className="num">
-                            {x?.result ? (x.result.umf[oxide] ?? 0).toFixed(3) : '—'}
+                            {x?.result?.umf ? (x.result.umf[oxide] ?? 0).toFixed(3) : '—'}
                           </td>
                         ))}
                       </tr>
@@ -401,7 +404,7 @@ function BodyBlendTables({
   library
 }: {
   steps: BlendStep[];
-  analyses: ReturnType<typeof analyse>[];
+  analyses: Analysis[];
   library: MaterialLibrary;
 }) {
   const chemistry = analyses.map((x) => (x?.result ? bodyChemistry(x.result) : null));
