@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": [
-      "ES2022",
+      "ES2023",
       "DOM",
       "DOM.Iterable"
     ],
@@ -14,13 +14,42 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "types": [
       "vite/client"
     ],
     "paths": {
-      "@glazecalc/chemistry": [
-        "./vendor/glazecalc/lib/chemistry/index.d.ts"
+      "@glazecalc/core": [
+        "./lib/core/index.ts"
+      ],
+      "@glazecalc/core/chemistry": [
+        "./lib/core/chemistry/index.ts"
+      ],
+      "@glazecalc/core/recipe": [
+        "./lib/core/recipe/index.ts"
+      ],
+      "@glazecalc/core/recipe/basics": [
+        "./lib/core/recipe/basics/index.ts"
+      ],
+      "@glazecalc/core/cones": [
+        "./lib/core/cones/index.ts"
+      ],
+      "@glazecalc/catalog": [
+        "./lib/catalog/index.ts"
+      ],
+      "@glazecalc/catalog/host": [
+        "./lib/catalog/host/index.ts"
+      ],
+      "@glazecalc/catalog/locale": [
+        "./lib/catalog/locale/index.ts"
+      ],
+      "@glazecalc/catalog/text": [
+        "./lib/catalog/text/index.ts"
+      ],
+      "@glazecalc/catalog/standard": [
+        "./lib/catalog/standard/index.ts"
       ]
     }
   },

@@ -1,7 +1,7 @@
 // A clay body's chemistry (docs/research/clay-bodies.md): bodies are read by their oxide
 // percentages and a formula with alumina as one, not by a glaze's unity formula, which puts the
 // few fluxes a body has at one and makes everything else look huge.
-import { OXIDE_GROUPS, type UmfResult } from '@glazecalc/chemistry';
+import { OXIDE_GROUPS } from '@glazecalc/catalog/host';
 import { usableLines } from './batch';
 import {
   normalize,
@@ -10,7 +10,8 @@ import {
   STANDARD_MATERIALS,
   standardNamed,
   type MaterialContent,
-  type RecipeLine
+  type RecipeLine,
+  type UmfResult
 } from './chemistry';
 import { isClay } from './materialData';
 import type { RecipeDetails, RecipeType } from './recipeFields';
@@ -77,10 +78,15 @@ export function bodyPart(name: string, own: MaterialContent[]): BodyPart | null 
   const mine = own.find((m) => normalize(m.name) === normalize(name));
   if (mine?.class) return isClay(mine.class) ? 'plastic' : mine.class === 'silica' ? 'silica' : 'other';
   const standard = standardNamed(name);
-  const found = standard && [...STANDARD_MATERIALS, ...STANDARD_ADDITIVES].find((m) => m.name === standard);
+  const found =
+    standard &&
+    [...STANDARD_MATERIALS, ...STANDARD_ADDITIVES].find(
+      (m) => m.name === standard || (m.aliases ?? []).some((alias) => normalize(alias) === normalize(standard))
+    );
   if (!found) return mine ? null : 'other';
   const lower = found.name.toLowerCase();
-  if (found.category === 'clay') return /calcined|molochite/.test(lower) ? 'other' : 'plastic';
+  const calcined = Boolean((found.traits as { calcined?: boolean } | undefined)?.calcined) || /calcined|molochite/.test(lower);
+  if (found.category === 'clay') return calcined ? 'other' : 'plastic';
   if (PLASTICIZERS.test(lower)) return 'plastic';
   return found.category === 'silica' ? 'silica' : 'other';
 }

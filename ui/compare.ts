@@ -1,7 +1,6 @@
 // Two recipes, or two revisions of one, side by side.
-import type { UmfResult } from '@glazecalc/chemistry';
 import { baseOf, usableLines } from './batch';
-import { normalize, OXIDES, type RecipeLine } from './chemistry';
+import { normalize, OXIDES, type RecipeLine, type UmfResult } from './chemistry';
 
 /** A material in either recipe, as a percent of each one's base; null where it is not used. */
 export interface LineChange {

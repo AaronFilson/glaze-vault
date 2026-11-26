@@ -52,7 +52,7 @@ describe('change', () => {
 describe('compareUmf', () => {
   it('lists the oxides of either unity formula in the usual order', () => {
     const a = analyse([{ material: 'Whiting', amount: '20' }, { material: 'Silica', amount: '80' }])!.result;
-    const b = analyse([{ material: 'Wollastonite', amount: '100' }])!.result;
+    const b = analyse([{ material: 'Wollastonite (theoretical)', amount: '100' }])!.result;
     const oxides = compareUmf(a, b).map((change) => change.oxide);
     expect(oxides).toContain('CaO');
     expect(oxides).toContain('SiO2');

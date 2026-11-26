@@ -39,3 +39,18 @@ more than it saves.
 - The copy drifts from Glazecalc until it is copied again or replaced with the submodule.
 - Chemistry runs in the UI, as it does in Glazecalc. The core stores what the UI worked out, and
   checks access to it, but does not recalculate it.
+
+## As built (2026-11-25)
+
+Glazecalc split its chemistry and reference tables into two pure-TypeScript ESM repositories,
+`glazecalc-core` (`@glazecalc/core`) and `glazecalc-catalog` (`@glazecalc/catalog`). `vendor/glazecalc`
+has been removed and replaced with git submodules at `lib/core` and `lib/catalog`, matching
+Glazecalc's `.gitmodules` so `lib/catalog`'s relative `../core` imports work directly:
+
+- `ui/chemistryHost.ts` builds Glaze Vault's frozen `Host` from `@glazecalc/catalog/host`, with
+  English message formatting from `@glazecalc/catalog/locale`.
+- Material name resolution matches `@glazecalc/catalog` strictly: stoichiometric formulas carry
+  `(theoretical)` where commercial records share the base name, and generic words without a single
+  product (such as bare `Kaolin` or `Nepheline Syenite`) are not guessed.
+- `scripts/check-submodules.mjs` checks that both submodules are initialised at their pinned
+  commits before dev, build, typecheck and test scripts, and CI runs `npm run test:submodules`.

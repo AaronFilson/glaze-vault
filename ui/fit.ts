@@ -2,16 +2,11 @@
 // any others to try, whose unity formula comes as near a target as they allow, changing the
 // recipe as little as that does. The target is a unity formula typed in, the recipe's own to
 // start from, or the recipe's moved into a limit set. Glazecalc's fitAmounts does the fitting.
-import {
-  fitAmounts,
-  OXIDE_GROUPS,
-  oxideMoles,
-  type FitLine,
-  type MaterialInput,
-  type SelectLine,
-  type Selection
-} from '@glazecalc/chemistry';
-import { amountOf, analyse, materialInput, numberOf, sameName, type MaterialLibrary, type RecipeLine } from './chemistry';
+import type { FitLine, MaterialInput, SelectLine } from '@glazecalc/core';
+import { fitAmounts, oxideMoles, type Selection } from '@glazecalc/core/chemistry';
+import { OXIDE_GROUPS } from '@glazecalc/catalog/host';
+import { amountOf, analyse, isProblem, materialInput, numberOf, sameName, type MaterialLibrary, type RecipeLine } from './chemistry';
+import { HOST, inWords } from './chemistryHost';
 import { checkLimits, molesOf, type LimitsContent } from './limits';
 
 /** An oxide of the target, in moles of a unity formula, as typed. */
@@ -183,7 +178,7 @@ function prepare(choices: FitChoice[], target: TargetLine[], library: MaterialLi
     const start = choice.amount.trim() ? amountOf(choice.amount) : 0;
     if (!Number.isFinite(start) || start < 0) return { problem: `The amount of ${choice.material.trim()} is not a number.` };
     const input = materialInput(library, choice.material);
-    if (input && 'problem' in input) return { problem: input.problem };
+    if (isProblem(input)) return { problem: input.problem };
     // A material that adds nothing once fired, such as CMC gum, stays as it is.
     if (!input) {
       if (start > 0) used.push(choice);
@@ -192,7 +187,7 @@ function prepare(choices: FitChoice[], target: TargetLine[], library: MaterialLi
       fitted.push({ choice, input, start });
     }
   }
-  const own = oxideMoles(fitted.map((f) => ({ material: f.input, amount: f.start })));
+  const own = oxideMoles(HOST, fitted.map((f) => ({ material: f.input, amount: f.start })));
   const ownFluxes = Object.keys(own).filter(isFlux).reduce((sum, oxide) => sum + own[oxide], 0);
   // With no fluxes to start from, a batch the size the recipe had.
   const scale = ownFluxes > 0 ? ownFluxes : 0.003 * Math.max(100, fitted.reduce((sum, f) => sum + f.start, 0));
@@ -233,7 +228,7 @@ export function fitRecipe(choices: FitChoice[], target: TargetLine[], library: M
   if (!prepared.fitted.some((f) => f.choice.change)) return { problem: 'Let the fit change at least one material.' };
   let amounts: number[];
   try {
-    amounts = fitAmounts(prepared.fitted.map(fitLine), prepared.absolute).amounts;
+    amounts = inWords(fitAmounts)(HOST, prepared.fitted.map(fitLine), prepared.absolute).amounts;
   } catch (e) {
     return { problem: (e as Error).message };
   }

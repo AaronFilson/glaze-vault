@@ -1,7 +1,7 @@
 // Materials side by side by their data sheets, as a substitute for a clay is chosen
 // (docs/research/clay-body-formulation.md, section 7): what it does first (shrinkage, absorption,
 // plasticity, particle size), then what it is made of.
-import { MOLAR_MASS } from '@glazecalc/chemistry';
+import { MOLAR_MASS } from '@glazecalc/catalog/host';
 import { change } from './compare';
 import { amountOf, numberOf, OXIDES, type MaterialContent } from './chemistry';
 import { MATERIAL_CLASSES, SHEET_FIELDS, type DataSheet } from './materialData';

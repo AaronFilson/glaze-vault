@@ -1,0 +1,8 @@
+[submodule "lib/core"]
+	path = lib/core
+	url = https://github.com/AaronFilson/glazecalc-core
+	branch = main
+[submodule "lib/catalog"]
+	path = lib/catalog
+	url = https://github.com/AaronFilson/glazecalc-catalog
+	branch = main

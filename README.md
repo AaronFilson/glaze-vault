@@ -18,15 +18,16 @@ glaze chemistry. No account, no cloud, nothing for users to install but the app.
 | App       | [Tauri 2](https://tauri.app): one native binary on the system's webview             |
 | Core      | Rust: SQLCipher (rusqlite), Argon2id, XChaCha20-Poly1305, HPKE (RFC 9180), BIP 39   |
 | UI        | React 19, TypeScript, Vite                                                         |
-| Chemistry | Glazecalc's `lib/chemistry`, copied into `vendor/glazecalc` for now ([ADR 2](docs/adr/0002-chemistry-copy.md)) |
-| Tests     | Rust unit tests, Vitest, end-to-end tests that drive the development app            |
+| Chemistry | `@glazecalc/core` (`lib/core`) and `@glazecalc/catalog` (`lib/catalog`) git submodules ([ADR 2](docs/adr/0002-chemistry-copy.md)) |
+| Tests     | Rust unit tests, Vitest, Node submodule tests, end-to-end tests that drive the development app |
 
 ## Layout
 
     crates/core/        the trusted core: keys, encryption, storage (no Tauri in it)
     crates/app/         the Tauri app: commands over the core, config, icons, permissions
-    ui/                 the React UI; ui/chemistry.ts wraps Glazecalc's chemistry
-    vendor/glazecalc/   Glazecalc's chemistry and standard materials, copied (see SOURCE.md)
+    ui/                 the React UI; ui/chemistryHost.ts and ui/chemistry.ts wrap Glazecalc's chemistry
+    lib/core/           @glazecalc/core git submodule: stateless, nameless glaze chemistry
+    lib/catalog/        @glazecalc/catalog git submodule: tables, English wording and standard materials
     docs/adr/           architecture decision records
     docs/user/          the user guide
     docs/follow-ups.md  work decided on but not done yet
@@ -46,6 +47,7 @@ You need:
 Then:
 
     nvm use
+    git submodule update --init
     npm install
     npm run dev          # builds the core and opens the app, with live reload of the UI
 
@@ -80,8 +82,9 @@ the recovery key ([ADR 11](docs/adr/0011-end-to-end-tests.md)). Scenarios are in
     npm run dev          the app in development, with the Vite dev server on port 1420
     npm run build        installers for this system, in target/release/bundle
     npm test             UI and chemistry tests (Vitest)
+    npm run test:submodules  @glazecalc/core and @glazecalc/catalog tests with coverage
     npm run e2e          end-to-end tests: the development app, driven (add -- --keep to keep its files)
-    npm run typecheck    TypeScript for the UI, the Vite config and the end-to-end tests
+    npm run typecheck    TypeScript for the UI, submodules, Vite config and end-to-end tests
     npm run test:core    the Rust tests (cargo test --workspace)
     npm run test:all     all of the above
 
@@ -104,4 +107,6 @@ updater key, Apple and Windows signing, and the release steps.
 
 ## License
 
-[MIT](LICENSE). Glazecalc's chemistry and data in `vendor/glazecalc` are MIT too, by the same author.
+[MIT](LICENSE). `@glazecalc/core` (`lib/core`) and `@glazecalc/catalog` (`lib/catalog`) are MIT too,
+by the same author; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for third-party notices in
+the catalog.

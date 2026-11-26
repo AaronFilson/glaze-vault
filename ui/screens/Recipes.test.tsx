@@ -150,7 +150,7 @@ it('imports what was chosen from a file, skipping names already in use unless to
   const contents = [
     'filetype = GlazeChem Glazes',
     'name = Shino',
-    'component = Nepheline Syenite',
+    'component = Nepheline Syenite (typical)',
     'amount = 60',
     'name = Tenmoku',
     'component = Custer Spar',

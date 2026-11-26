@@ -14,19 +14,19 @@ import {
   type MaterialContent
 } from './chemistry';
 
-// The values Glazecalc's own chemistry tests check by hand (server/test/chemistry_tests.ts).
+// The values Glazecalc's own chemistry tests check by hand (lib/core/test/chemistry.test.js).
 const LEACH_4321 = [
-  { material: 'Potash Feldspar', amount: '40' },
+  { material: 'Potash Feldspar (theoretical)', amount: '40' },
   { material: 'Silica', amount: '30' },
   { material: 'Whiting', amount: '20' },
-  { material: 'Kaolin', amount: '10' }
+  { material: 'Kaolin (theoretical)', amount: '10' }
 ];
 
 // Glazecalc's tests allow 0.0001 either side.
 const near = (actual: number, expected: number, within = 0.0001) => expect(Math.abs(actual - expected)).toBeLessThanOrEqual(within);
 
 describe('chemistry', () => {
-  it('works out Leach 4321 through the copied library', () => {
+  it('works out Leach 4321 through the shared core and catalog', () => {
     const analysis = analyse(LEACH_4321);
     const umf = analysis!.result!.umf;
     near(umf.K2O, 0.2645);
@@ -37,11 +37,14 @@ describe('chemistry', () => {
   });
 
   it('loads the standard library and finds materials by alias', () => {
-    expect(STANDARD_MATERIALS.length).toBe(167);
+    expect(STANDARD_MATERIALS.length).toBe(182);
     expect(MATERIAL_NAMES).toContain('Alberta Slip');
-    expect(MATERIAL_NAMES).toContain('Potash Feldspar');
+    expect(MATERIAL_NAMES).toContain('Potash Feldspar (theoretical)');
     const byAlias = analyse([{ material: 'ABSLIP', amount: '100' }]);
     expect(byAlias!.result!.umf.SiO2).toBeGreaterThan(0);
+    // Generic recipe words without a single product are refused strictly rather than guessed.
+    expect(analyse([{ material: 'Kaolin', amount: '100' }])!.problem).toBe('Unknown material Kaolin');
+    expect(analyse([{ material: 'Nepheline Syenite', amount: '100' }])!.problem).toBe('Unknown material Nepheline Syenite');
   });
 
   it('skips empty lines and reports unknown materials', () => {
@@ -68,12 +71,14 @@ const own = (name: string, oxides: [string, string][], loi = '', category: Mater
 
 describe('your own materials', () => {
   it('replace a standard material of the same name', () => {
-    const potash = own('Potash Feldspar', [['Na2O', '16.9'], ['Al2O3', '18.1'], ['SiO2', '65']]);
+    const potash = own('Potash Feldspar (theoretical)', [['Na2O', '16.9'], ['Al2O3', '18.1'], ['SiO2', '65']]);
     const library = materialLibrary([potash]);
     const umf = analyse(LEACH_4321, library)!.result!.umf;
     expect(umf.K2O).toBeUndefined();
     expect(umf.Na2O).toBeGreaterThan(0);
-    expect(library.names.filter((n) => n.name === 'Potash Feldspar')).toEqual([{ name: 'Potash Feldspar', yours: true }]);
+    expect(library.names.filter((n) => n.name === 'Potash Feldspar (theoretical)')).toEqual([
+      { name: 'Potash Feldspar (theoretical)', yours: true }
+    ]);
     // Without it, the standard one is used again.
     expect(analyse(LEACH_4321)!.result!.umf.K2O).toBeGreaterThan(0);
   });
@@ -149,11 +154,15 @@ describe('standard additives', () => {
     expect(analysis!.result!.umf.Cr2O3).toBeGreaterThan(0);
   });
 
-  it('do not replace a theoretical material of the same name', () => {
-    // Glazecalc's additives include a "Tin oxide" with 99% SnO2; the formula one is pure.
-    const tin = analyse([{ material: 'Whiting', amount: '50' }, { material: 'Tin oxide', amount: '50' }]);
-    expect(tin!.result!.loi).toBeCloseTo(22, 0);
-    expect(MATERIAL_NAMES.filter((name) => name.toLowerCase() === 'tin oxide')).toHaveLength(1);
+  it('keep theoretical and commercial tin oxide distinct', () => {
+    // Glazecalc's additives include a commercial "Tin oxide" with 99.5% SnO2 (0.5% LOI), while
+    // "Tin Oxide (theoretical)" is pure SnO2 (0% LOI).
+    const pure = analyse([{ material: 'Whiting', amount: '50' }, { material: 'Tin Oxide (theoretical)', amount: '50' }]);
+    const commercial = analyse([{ material: 'Whiting', amount: '50' }, { material: 'Tin oxide', amount: '50' }]);
+    expect(pure!.result!.loi).toBeCloseTo(21.99, 2);
+    expect(commercial!.result!.loi).toBeCloseTo(22.24, 2);
+    expect(MATERIAL_NAMES).toContain('Tin Oxide (theoretical)');
+    expect(MATERIAL_NAMES).toContain('Tin oxide');
   });
 
   it('every standard material and additive with oxides works', () => {

@@ -1,11 +1,12 @@
 // Choosing materials for a fit (fit.ts, chooseLines), in a worker where there is one, so the page
 // stays responsive, and on the page's thread where there is not, as in tests.
-import { selectMaterials, type Selection } from '@glazecalc/chemistry';
+import { selectMaterials, type Selection } from '@glazecalc/core/chemistry';
+import { HOST, inWords } from './chemistryHost';
 import type { ChooseJob } from './fit';
 
 export function select(job: ChooseJob): Promise<Selection> {
   const { lines, target, options } = job;
-  const here = () => selectMaterials(lines, target, options);
+  const here = () => inWords(selectMaterials)(HOST, lines, target, options);
   if (typeof Worker === 'undefined') return new Promise((resolve) => resolve(here()));
   return new Promise((resolve, reject) => {
     let worker: Worker;
