@@ -10,8 +10,27 @@ export function SyncIndicator() {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
-    api.syncStatus().then(setStatus, () => {});
-    return onEvent<SyncStatus>('sync-status', setStatus);
+    let stopped = false;
+    let heard = false;
+    const unlisten = onEvent<SyncStatus>(
+      'sync-status',
+      (next) => {
+        heard = true;
+        setStatus(next);
+      },
+      () => {
+        api.syncStatus().then(
+          (initial) => {
+            if (!stopped && !heard) setStatus(initial);
+          },
+          () => {}
+        );
+      }
+    );
+    return () => {
+      stopped = true;
+      unlisten();
+    };
   }, []);
   if (!status?.replica) return null;
 

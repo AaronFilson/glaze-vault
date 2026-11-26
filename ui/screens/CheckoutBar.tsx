@@ -12,13 +12,40 @@ export function CheckoutBar({ kind, record, readOnly }: { kind: Kind; record: st
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
+    let stopped = false;
+    let heard = false;
     const load = (status: SyncStatus | null) => {
+      if (stopped) return;
       setReplica(!!status?.replica);
-      if (status?.replica) api.checkouts().then(setCheckouts, () => {});
+      if (status?.replica) {
+        api.checkouts().then(
+          (next) => {
+            if (!stopped) setCheckouts(next);
+          },
+          () => {}
+        );
+      }
     };
-    api.syncStatus().then(load, () => {});
-    // Each sync asks the host again.
-    return onEvent<SyncStatus>('sync-status', load);
+    // Each sync asks the host again; listen first so a sync finishing on mount is not missed.
+    const unlisten = onEvent<SyncStatus>(
+      'sync-status',
+      (status) => {
+        heard = true;
+        load(status);
+      },
+      () => {
+        api.syncStatus().then(
+          (initial) => {
+            if (!stopped && !heard) load(initial);
+          },
+          () => {}
+        );
+      }
+    );
+    return () => {
+      stopped = true;
+      unlisten();
+    };
   }, []);
   if (!replica || readOnly) return null;
 

@@ -11,9 +11,23 @@ export function OfflineNotice() {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
-    const load = () => api.offlineStatus().then(setStatus, () => {});
-    void load();
-    return onEvent('sync-status', () => void load());
+    let stopped = false;
+    const load = () =>
+      api.offlineStatus().then(
+        (next) => {
+          if (!stopped) setStatus(next);
+        },
+        () => {}
+      );
+    const unlisten = onEvent(
+      'sync-status',
+      () => void load(),
+      () => void load()
+    );
+    return () => {
+      stopped = true;
+      unlisten();
+    };
   }, []);
   if (!status?.applies || !(status.nag || status.readOnly)) return null;
 

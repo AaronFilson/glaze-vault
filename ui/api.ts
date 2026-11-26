@@ -584,9 +584,14 @@ export const api = {
   installUpdate: () => invoke<void>('install_update')
 };
 
-/** Hears an event from the core until the returned function is called. Pages run without one in
- * tests, where nothing is heard. */
-export function onEvent<T>(name: 'sync-status' | 'vault-changed' | 'vault-removed', handler: (payload: T) => void): () => void {
+/** Hears an event from the core until the returned function is called. `ready`, when given, runs
+ * once the listener is registered (or when there is no event system, as in unit tests), so an
+ * initial read cannot miss an event that fired before listening began. */
+export function onEvent<T>(
+  name: 'sync-status' | 'vault-changed' | 'vault-removed',
+  handler: (payload: T) => void,
+  ready?: () => void
+): () => void {
   let stop: (() => unknown) | null = null;
   let stopped = false;
   // The page may be going, with the app's event system: then nothing is left to stop.
@@ -598,8 +603,17 @@ export function onEvent<T>(name: 'sync-status' | 'vault-changed' | 'vault-remove
     }
   };
   listen<T>(name, (event) => handler(event.payload)).then(
-    (unlisten) => (stopped ? quietly(unlisten) : (stop = unlisten)),
-    () => {}
+    (unlisten) => {
+      if (stopped) {
+        quietly(unlisten);
+        return;
+      }
+      stop = unlisten;
+      ready?.();
+    },
+    () => {
+      if (!stopped) ready?.();
+    }
   );
   return () => {
     stopped = true;
