@@ -36,6 +36,9 @@
       "@glazecalc/core/cones": [
         "./lib/core/cones/index.ts"
       ],
+      "@glazecalc/core/body": [
+        "./lib/core/body/index.ts"
+      ],
       "@glazecalc/catalog": [
         "./lib/catalog/index.ts"
       ],

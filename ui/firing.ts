@@ -1,10 +1,25 @@
 // The firing log (docs/adr/0014-firing-log-and-photos.md): each firing of a recipe, how it was
 // fired, what came out, a fired bar's measurements and photos. What a firing shows is worked out
 // here from what was measured; only the measurements are kept.
+import {
+  barResults as coreBarResults,
+  insideTargets as coreInsideTargets,
+  vitrification as coreVitrification,
+  type BarResults,
+  type FitResult,
+  type FitTestKind,
+  type Targets,
+  type VitrificationPoint
+} from '@glazecalc/core/body';
+import { FIT_RESULTS, FIT_TESTS } from '@glazecalc/catalog';
 import type { Revision } from './api';
-import { amountOf, numberOf, type RecipeLine } from './chemistry';
-import { coneNumber, type Atmosphere, type RecipeDetails, type Surface, type Transparency } from './recipeFields';
+import { numberOf, type RecipeLine } from './chemistry';
+import { HOST } from './chemistryHost';
+import type { Atmosphere, RecipeDetails, Surface, Transparency } from './recipeFields';
 import { hasSlipReadings, type SlipReadings } from './slip';
+
+export { FIT_RESULTS, FIT_TESTS };
+export type { BarResults, FitResult, FitTestKind, Targets, VitrificationPoint };
 
 export const FLAWS = [
   { value: 'crazed', label: 'Crazed' },
@@ -42,23 +57,6 @@ export interface BarReadings {
   /** The drying disk's crack code, or its cracks in words. */
   disk?: string;
 }
-
-/** Tests of how a glaze fits the body it was fired on (docs/research/clay-body-formulation.md). */
-export const FIT_TESTS = [
-  { value: 'iwct', label: '300 °F to ice water (IWCT)' },
-  { value: 'bwiw', label: 'Boiling to ice water (BWIW)' },
-  { value: 'pressure', label: 'Pressure cooker or autoclave' },
-  { value: 'other', label: 'Another test' }
-] as const;
-
-export const FIT_RESULTS = [
-  { value: 'passed', label: 'Passed' },
-  { value: 'crazed', label: 'Crazed' },
-  { value: 'shivered', label: 'Shivered' }
-] as const;
-
-export type FitTestKind = (typeof FIT_TESTS)[number]['value'];
-export type FitResult = (typeof FIT_RESULTS)[number]['value'];
 
 export interface FitTest {
   test: FitTestKind;
@@ -127,44 +125,8 @@ export function isoDate(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-/** What a fired bar's readings show, each only when what it needs was measured. */
-export interface BarResults {
-  /** From the marks to dry, % of the marks. */
-  dryingShrinkage?: number;
-  /** From dry to fired, % of dry. */
-  firingShrinkage?: number;
-  /** From the marks to fired, % of the marks. */
-  totalShrinkage?: number;
-  /** Water taken up by the fired bar, % of its fired weight. */
-  absorption?: number;
-  /** Open pores, % of the bar's volume; needs the suspended weight. */
-  porosity?: number;
-  /** Bulk density, g/cm³; needs the suspended weight. */
-  density?: number;
-  /** Dry bow plus fired sag, mm; needs the sag. */
-  deformation?: number;
-}
-
 export function barResults(bar: BarReadings | undefined): BarResults {
-  if (!bar) return {};
-  const value = (text: string) => {
-    const n = amountOf(text);
-    return Number.isFinite(n) && n > 0 ? n : undefined;
-  };
-  const [mark, dry, fired] = [value(bar.mark), value(bar.dry), value(bar.fired)];
-  const [weight, soaked, suspended] = [value(bar.firedWeight), value(bar.soakedWeight), value(bar.suspendedWeight)];
-  const results: BarResults = {};
-  if (mark && dry) results.dryingShrinkage = ((mark - dry) / mark) * 100;
-  if (dry && fired) results.firingShrinkage = ((dry - fired) / dry) * 100;
-  if (mark && fired) results.totalShrinkage = ((mark - fired) / mark) * 100;
-  if (weight && soaked && soaked >= weight) results.absorption = ((soaked - weight) / weight) * 100;
-  if (weight && soaked && suspended && soaked > suspended && soaked >= weight) {
-    results.porosity = ((soaked - weight) / (soaked - suspended)) * 100;
-    results.density = weight / (soaked - suspended);
-  }
-  const [bow, sag] = [numberOf(bar.bow ?? ''), numberOf(bar.sag ?? '')];
-  if (sag !== null && sag >= 0) results.deformation = sag + (bow !== null && bow >= 0 ? bow : 0);
-  return results;
+  return coreBarResults(bar);
 }
 
 /** Whether a firing has any bar readings beyond the default mark length. */
@@ -183,7 +145,7 @@ export function lotMaterials(lines: RecipeLine[]): string[] {
 export function fitSummary(fit: FitTest | undefined): string {
   if (!fit) return '';
   const test = FIT_TESTS.find((t) => t.value === fit.test);
-  const short = test?.value === 'iwct' ? 'IWCT' : test?.value === 'bwiw' ? 'BWIW' : (test?.label ?? '');
+  const short = test?.short ?? test?.label ?? '';
   const result = FIT_RESULTS.find((r) => r.value === fit.result)?.label.toLowerCase();
   return [short, [result, fit.detail?.trim()].filter(Boolean).join(', ')].filter(Boolean).join(': ');
 }
@@ -295,12 +257,6 @@ function tidyFit(fit: FitTest): FitTest {
   return tidy;
 }
 
-/** A body's targets, as numbers: absorption and total shrinkage, each with an open end or none. */
-export interface Targets {
-  absorption?: { min?: number; max?: number };
-  shrinkage?: { min?: number; max?: number };
-}
-
 /** The targets a recipe's details set, or null when it sets none. */
 export function targetsOf(details: RecipeDetails): Targets | null {
   const range = (min?: string, max?: string) => {
@@ -318,49 +274,17 @@ export function targetsOf(details: RecipeDetails): Targets | null {
   return absorption || shrinkage ? targets : null;
 }
 
-const within = (value: number, range: { min?: number; max?: number }) =>
-  (range.min === undefined || value >= range.min) && (range.max === undefined || value <= range.max);
-
 /** Whether a cone's averages are inside every target set, or null when one of them was not
  * measured there. */
 export function insideTargets(point: VitrificationPoint, targets: Targets): boolean | null {
-  let inside = true;
-  for (const key of ['absorption', 'shrinkage'] as const) {
-    const range = targets[key];
-    if (!range) continue;
-    const value = point[key];
-    if (value === undefined) return null;
-    inside &&= within(value, range);
-  }
-  return inside;
-}
-
-/** One cone on a vitrification chart: the average of the firings at that cone that measured each. */
-export interface VitrificationPoint {
-  cone: string;
-  /** How many firings at this cone had either result. */
-  firings: number;
-  absorption?: number;
-  shrinkage?: number;
+  return coreInsideTargets(point, targets);
 }
 
 /** Absorption and total shrinkage against cone, across a recipe's firings, lowest cone first.
  * Firings without a cone, or without either result, are left out. */
 export function vitrification(firings: Firing[]): VitrificationPoint[] {
-  const byCone = new Map<string, { cone: string; absorption: number[]; shrinkage: number[]; firings: number }>();
-  for (const firing of firings) {
-    const cone = firing.content.cone?.trim();
-    const results = barResults(firing.content.bar);
-    if (!cone || (results.absorption === undefined && results.totalShrinkage === undefined)) continue;
-    const key = cone.toLowerCase().replace(/^\^/, '');
-    const point = byCone.get(key) ?? { cone: key, absorption: [], shrinkage: [], firings: 0 };
-    point.firings += 1;
-    if (results.absorption !== undefined) point.absorption.push(results.absorption);
-    if (results.totalShrinkage !== undefined) point.shrinkage.push(results.totalShrinkage);
-    byCone.set(key, point);
-  }
-  const mean = (values: number[]) => (values.length ? values.reduce((a, b) => a + b, 0) / values.length : undefined);
-  return [...byCone.values()]
-    .sort((a, b) => coneNumber(a.cone) - coneNumber(b.cone) || a.cone.localeCompare(b.cone))
-    .map((p) => ({ cone: p.cone, firings: p.firings, absorption: mean(p.absorption), shrinkage: mean(p.shrinkage) }));
+  return coreVitrification(
+    HOST,
+    firings.map((firing) => ({ cone: firing.content.cone, bar: firing.content.bar }))
+  );
 }

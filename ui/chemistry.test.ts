@@ -37,9 +37,15 @@ describe('chemistry', () => {
   });
 
   it('loads the standard library and finds materials by alias', () => {
-    expect(STANDARD_MATERIALS.length).toBe(182);
+    expect(STANDARD_MATERIALS.length).toBe(184);
     expect(MATERIAL_NAMES).toContain('Alberta Slip');
     expect(MATERIAL_NAMES).toContain('Potash Feldspar (theoretical)');
+    expect(MATERIAL_NAMES).toContain('Kyanite');
+    expect(MATERIAL_NAMES).toContain('Pyrophyllite');
+    expect(MATERIAL_NAMES).toContain('Darvan 7');
+    expect(MATERIAL_NAMES).toContain('Darvan 811');
+    expect(MATERIAL_NAMES).toContain('Sodium Silicate');
+    expect(MATERIAL_NAMES).toContain('Lignosulfonate (Additive A)');
     const byAlias = analyse([{ material: 'ABSLIP', amount: '100' }]);
     expect(byAlias!.result!.umf.SiO2).toBeGreaterThan(0);
     // Generic recipe words without a single product are refused strictly rather than guessed.
@@ -218,6 +224,14 @@ describe('standardAnalysis', () => {
   it('has nothing for an unknown material or one with no oxides', () => {
     expect(standardAnalysis('Unobtainium')).toBeNull();
     expect(standardAnalysis('CMC gum')).toBeNull();
+    expect(standardAnalysis('Darvan 7')).toBeNull();
+  });
+
+  it('includes class and primary-TDS sheet fields when copying a standard clay', () => {
+    const grolleg = standardAnalysis('Grolleg')!;
+    expect(grolleg.class).toBe('kaolin');
+    expect(grolleg.sheet?.cone).toBe('9');
+    expect(grolleg.sheet?.absorption).toBeTruthy();
   });
 });
 

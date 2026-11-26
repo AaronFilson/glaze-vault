@@ -25,7 +25,7 @@ export function AnalysisPanel({
   const { result } = analysis;
   return (
     <>
-      {body ? <BodyTables analysis={analysis} /> : <UnityTables analysis={analysis} />}
+      {body ? <BodyTables analysis={analysis} /> : result.umf && <UnityTables umf={result.umf} />}
       <dl className="facts">
         {result.siAlRatio !== null && (
           <>
@@ -75,10 +75,10 @@ export function AnalysisPanel({
           ))}
         </ul>
       )}
-      {body && (
+      {body && result.umf && (
         <details className="no-print">
           <summary>Unity formula</summary>
-          <UnityTables analysis={analysis} />
+          <UnityTables umf={result.umf} />
         </details>
       )}
     </>
@@ -87,8 +87,8 @@ export function AnalysisPanel({
 
 type Calculated = Extract<Analysis, { result: object }>;
 
-function UnityTables({ analysis }: { analysis: Calculated }) {
-  const groups = oxidesByGroup(analysis.result);
+function UnityTables({ umf }: { umf: Record<string, number> }) {
+  const groups = oxidesByGroup({ umf });
   return (
     <>
       <h2>Unity formula</h2>

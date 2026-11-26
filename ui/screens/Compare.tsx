@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorText, type RecipeHead } from '../api';
+import { isBody } from '../body';
 import { analyse, oxideLabel, type MaterialLibrary, type RecipeContent } from '../chemistry';
 import { change, compareLines, compareUmf } from '../compare';
 import { describeDetails } from '../recipeFields';
@@ -68,8 +69,8 @@ export function Compare({
 
   const [a, b] = sides.map(contentOf);
   const lines = a && b ? compareLines(a.lines, b.lines) : [];
-  const analysisA = useMemo(() => a && analyse(a.lines, library), [a, library]);
-  const analysisB = useMemo(() => b && analyse(b.lines, library), [b, library]);
+  const analysisA = useMemo(() => a && analyse(a.lines, library, { body: isBody(a.type) }), [a, library]);
+  const analysisB = useMemo(() => b && analyse(b.lines, library, { body: isBody(b.type) }), [b, library]);
   const resultA = analysisA?.result;
   const resultB = analysisB?.result;
   const oxides = compareUmf(resultA, resultB);
@@ -151,9 +152,9 @@ export function Compare({
               {oxides.map(({ oxide, a: x, b: y }) => (
                 <tr key={oxide}>
                   <th scope="row">{oxideLabel(oxide)}</th>
-                  <td className="num">{resultA ? x.toFixed(3) : '—'}</td>
-                  <td className="num">{resultB ? y.toFixed(3) : '—'}</td>
-                  <td className="num change">{resultA && resultB ? change(x, y, 3) : ''}</td>
+                  <td className="num">{resultA?.umf ? x.toFixed(3) : '—'}</td>
+                  <td className="num">{resultB?.umf ? y.toFixed(3) : '—'}</td>
+                  <td className="num change">{resultA?.umf && resultB?.umf ? change(x, y, 3) : ''}</td>
                 </tr>
               ))}
               <Fact label="SiO₂ : Al₂O₃" a={resultA?.siAlRatio} b={resultB?.siAlRatio} places={2} />
