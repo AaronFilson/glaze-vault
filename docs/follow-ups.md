@@ -4,13 +4,6 @@ Work decided on but not done yet, with the reason it waits.
 
 ## Waiting on something
 
-- **Replace the chemistry copy with a git submodule** ([ADR 2](adr/0002-chemistry-copy.md)).
-  Waits for Glazecalc's chemistry to settle. Then: `git rm -r vendor/glazecalc`,
-  `git submodule add https://github.com/AaronFilson/glazecalc.git vendor/glazecalc`, check out a
-  tag, make CI check submodules out and run Glazecalc's chemistry tests, and remove
-  `vendor/glazecalc/SOURCE.md`. Glazecalc's own `package.json` has no `"type"`, so the
-  `vendor/glazecalc/package.json` added here (`"type": "commonjs"`) goes away with no change
-  needed. Later still: an npm package, after user acceptance testing.
 - **Export classification** ([ADR 3](adr/0003-encryption-and-keys.md)): confirm with export
   counsel before the first customer release.
 - **Signing** ([docs/releasing.md](releasing.md)): generate the updater key and put its public

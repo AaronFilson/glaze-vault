@@ -52,13 +52,43 @@ describe('checking a record out', () => {
 
 describe('the sync indicator', () => {
   it('says when the host is out of reach, and what waits', async () => {
-    mockIPC((command) =>
-      command === 'sync_status' ? sync({ error: 'The connection failed: refused', waiting: 3, refused: 1 }) : undefined
-    );
+    const commands: string[] = [];
+    mockIPC((command) => {
+      commands.push(command);
+      return command === 'sync_status'
+        ? sync({ error: 'The connection failed: refused', waiting: 3, refused: 1 })
+        : undefined;
+    });
     render(<SyncIndicator />);
     fireEvent.click(await screen.findByRole('button', { name: /Not synced/ }));
     expect(screen.getByText(/host is out of reach: The connection failed/)).toBeTruthy();
     expect(screen.getByText(/3 changes wait to reach the host/)).toBeTruthy();
     expect(screen.getByText(/would not take one change/)).toBeTruthy();
+    expect(commands.indexOf('plugin:event|listen')).toBeLessThan(commands.indexOf('sync_status'));
+  });
+
+  it('keeps a sync-status event that arrives while the initial read is still in flight', async () => {
+    let listenerId: number | null = null;
+    let finishInitial!: (value: SyncStatus) => void;
+    mockIPC((command, args) => {
+      if (command === 'plugin:event|listen') {
+        listenerId = (args as { handler: number }).handler;
+        return 1;
+      }
+      if (command === 'sync_status') {
+        return new Promise<SyncStatus>((resolve) => {
+          finishInitial = resolve;
+        });
+      }
+    });
+    render(<SyncIndicator />);
+    await waitFor(() => expect(listenerId).not.toBeNull());
+    // Sync finishes and emits 'sync-status' before the stale initial read settles.
+    (window as unknown as { __TAURI_INTERNALS__: { runCallback: (id: number, data: unknown) => void } })
+      .__TAURI_INTERNALS__.runCallback(listenerId!, { event: 'sync-status', id: 1, payload: sync({ syncing: false }) });
+    expect(await screen.findByRole('button', { name: /^Synced / })).toBeTruthy();
+    finishInitial(sync({ syncing: true, lastSynced: null }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(screen.getByRole('button', { name: /^Synced / })).toBeTruthy();
   });
 });

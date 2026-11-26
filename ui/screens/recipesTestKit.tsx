@@ -13,7 +13,7 @@ export const shino: RecipeHead = {
   revisionId: 'revision-1',
   number: 1,
   savedAt: Date.UTC(2026, 9, 1),
-  content: { name: 'Shino', lines: [{ material: 'Nepheline Syenite', amount: '50' }], notes: '' }
+  content: { name: 'Shino', lines: [{ material: 'Nepheline Syenite (typical)', amount: '50' }], notes: '' }
 };
 
 export const spar: MaterialHead = {

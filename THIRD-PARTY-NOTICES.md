@@ -1,6 +1,20 @@
+# Third-Party Notices
+
+Glaze Vault includes `@glazecalc/core` (`lib/core`) and `@glazecalc/catalog` (`lib/catalog`),
+Copyright (c) 2026 Aaron Filson / Candling Development Studio, under the MIT License.
+
+`@glazecalc/catalog` (`lib/catalog/NOTICE`) includes the following third-party work:
+
+## Stull chart regions
+
+The outlines of the regions of Stull's chart (`unfused`, `matte`, `semi-matte`, `underfired` and
+`crazed`, in `lib/catalog/limits.ts`) are Glazy's reading of R. T. Stull's 1912 chart, taken as
+points from `charts/stull-chart-d3.js` in
+https://github.com/derekphilipau/ceramic-chemistry-visualization by Derek Au.
+
 MIT License
 
-Copyright (c) 2017-2026 Aaron Filson / Candling Development Studio
+Copyright (c) 2017 Derek Au
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

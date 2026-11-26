@@ -5,8 +5,8 @@ import { analyse } from '../chemistry';
 import { AnalysisPanel } from './AnalysisPanel';
 
 const PORCELAIN = analyse([
-  { material: 'Kaolin', amount: '50' },
-  { material: 'Potash Feldspar', amount: '25' },
+  { material: 'Kaolin (theoretical)', amount: '50' },
+  { material: 'Potash Feldspar (theoretical)', amount: '25' },
   { material: 'Silica', amount: '25' }
 ]);
 

@@ -4,8 +4,8 @@ import { analyse, type MaterialContent } from './chemistry';
 
 // A porcelain from theoretical materials: kaolin, feldspar and silica, as most begin.
 const PORCELAIN = [
-  { material: 'Kaolin', amount: '50' },
-  { material: 'Potash Feldspar', amount: '25' },
+  { material: 'Kaolin (theoretical)', amount: '50' },
+  { material: 'Potash Feldspar (theoretical)', amount: '25' },
   { material: 'Silica', amount: '25' }
 ];
 
@@ -54,6 +54,7 @@ describe('what a body is made of', () => {
 
   it('knows plastic clays and silica among the standard materials, and that calcined clay is not plastic', () => {
     expect(bodyPart('EPK Kaolin', [])).toBe('plastic');
+    expect(bodyPart('Kaolin (theoretical)', [])).toBe('plastic');
     expect(bodyPart('OM-4 Ball Clay', [])).toBe('plastic');
     expect(bodyPart('Bentonite', [])).toBe('plastic');
     expect(bodyPart('Molochite', [])).toBe('other');

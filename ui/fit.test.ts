@@ -101,7 +101,7 @@ describe('moving a formula into a limit set', () => {
 describe('choosing materials for a fit', () => {
   // Leach 4321 with boron and magnesia it has no material for.
   const target = targetFrom({ ...umfOf(leach), B2O3: 0.3, MgO: 0.15 });
-  const pool = ['Gerstley Borate', 'Ferro Frit 3134', 'Talc', 'Dolomite', 'Silica', 'Nepheline Syenite'];
+  const pool = ['Gerstley Borate', 'Ferro Frit 3134', 'Talc', 'Dolomite', 'Silica', 'Nepheline Syenite (typical)'];
 
   it('brings in what the target needs from the pool, and says what each is for', async () => {
     const job = chooseLines(leach, target, STANDARD_LIBRARY, pool, { extras: 2 });

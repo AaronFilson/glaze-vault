@@ -110,7 +110,7 @@ describe('comparing', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Shino' }));
     fireEvent.change(screen.getByLabelText('Amount 1'), { target: { value: '25' } });
-    fireEvent.change(screen.getByLabelText('Material 1'), { target: { value: 'Nepheline Syenite' } });
+    fireEvent.change(screen.getByLabelText('Material 1'), { target: { value: 'Nepheline Syenite (typical)' } });
     await user.click(screen.getByRole('button', { name: 'Add material' }));
     fireEvent.change(screen.getByLabelText('Material 2'), { target: { value: 'Whiting' } });
     fireEvent.change(screen.getByLabelText('Amount 2'), { target: { value: '25' } });
@@ -118,7 +118,7 @@ describe('comparing', () => {
 
     const batch = screen.getByRole('table', { name: 'Batch, percent of each' });
     const rows = [...batch.querySelectorAll('tbody tr')].map((row) => row.textContent);
-    expect(rows).toEqual(['Nepheline Syenite100.050.0−50.0', 'Whiting—50.0added']);
+    expect(rows).toEqual(['Nepheline Syenite (typical)100.050.0−50.0', 'Whiting—50.0added']);
     expect(screen.getByRole('table', { name: 'Unity formula' }).textContent).toContain('CaO');
     expect((screen.getByLabelText('Recipe', { selector: '#second-recipe' }) as HTMLSelectElement).value).toBe('draft');
     await user.click(screen.getByRole('button', { name: 'Done' }));

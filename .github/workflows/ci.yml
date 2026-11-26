@@ -20,6 +20,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - uses: actions/setup-node@v5
         with:
@@ -45,6 +47,9 @@ jobs:
 
       - name: UI tests
         run: npm test
+
+      - name: Chemistry submodule tests
+        run: npm run test:submodules
 
       - name: Rust formatting
         if: runner.os == 'Linux'
@@ -99,6 +104,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -140,6 +147,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - uses: actions/setup-node@v5
         with:
@@ -312,6 +321,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - uses: actions/setup-node@v5
         with:

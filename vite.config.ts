@@ -2,18 +2,16 @@ import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
-// Glazecalc's chemistry, copied in until it settles (docs/adr/0002-chemistry-copy.md).
-const chemistry = fileURLToPath(new URL('./vendor/glazecalc/lib/chemistry/index.js', import.meta.url));
+// Glazecalc's chemistry core and catalog submodules (docs/adr/0002-chemistry-copy.md).
+const core = fileURLToPath(new URL('./lib/core', import.meta.url));
+const catalog = fileURLToPath(new URL('./lib/catalog', import.meta.url));
 
 // Tests of plain functions that still need a page (`@vitest-environment jsdom`).
 const JSDOM_LOGIC = ['ui/importFormats.test.ts', 'ui/export.test.ts'];
 
 export default defineConfig({
   plugins: [react()],
-  resolve: { alias: { '@glazecalc/chemistry': chemistry } },
-  // The chemistry is CommonJS. A build converts it anyway, but the dev server only converts what
-  // it pre-bundles, and it pre-bundles only node_modules unless told otherwise.
-  optimizeDeps: { include: ['@glazecalc/chemistry'] },
+  resolve: { alias: { '@glazecalc/core': core, '@glazecalc/catalog': catalog } },
   // Tauri expects a fixed port, and prints its own output.
   clearScreen: false,
   server: { port: 1420, strictPort: true },
