@@ -15,7 +15,7 @@ ed25519-dalek = "3.0.0"
 getrandom = "0.4"
 hex = "0.4.3"
 hkdf = "0.13.0"
-hpke = { version = "0.14.1", default-features = false, features = ["alloc", "getrandom", "chacha", "x25519"] }
+hpke = { version = "0.15.1", default-features = false, features = ["alloc", "getrandom", "chacha", "x25519"] }
 rusqlite = { version = "0.40.2", features = ["bundled-sqlcipher-vendored-openssl", "functions", "blob", "backup"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_bytes = "0.11.19"
